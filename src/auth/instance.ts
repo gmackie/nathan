@@ -104,6 +104,7 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
         ...(env.NATHAN_PAIRWISE_SECRET ? { pairwiseSecret: env.NATHAN_PAIRWISE_SECRET } : {})
       }),
       ...(env.ENTERPRISE_SSO === "true" ? [sso({
+        domainVerification: { enabled: true },
         saml: {
           enableInResponseToValidation: true,
           allowIdpInitiated: false,
