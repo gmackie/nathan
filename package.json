@@ -12,11 +12,12 @@
     "plan": "node scripts/nathan.mjs plan",
     "doctor": "node scripts/nathan.mjs doctor",
     "deploy": "node scripts/nathan.mjs deploy",
-    "schema:generate": "npx @better-auth/cli generate --config src/auth/schema-config.ts --output migrations/0002_better_auth.sql --yes",
+    "schema:generate": "auth generate --config src/auth/schema-config.ts --output migrations/0002_better_auth.sql --yes --adapter kysely",
     "test": "node --test tests/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "build:auth": "wrangler deploy --config wrangler.auth.jsonc --dry-run --outdir .nathan/build-auth",
-    "build:gateway": "wrangler deploy --config wrangler.gateway.jsonc --dry-run --outdir .nathan/build-gateway"
+    "build:gateway": "wrangler deploy --config wrangler.gateway.jsonc --dry-run --outdir .nathan/build-gateway",
+    "schema:check": "auth check --config src/auth/schema-config.ts"
   },
   "dependencies": {
     "better-auth": "1.7.12",
@@ -26,9 +27,9 @@
     "jose": "^6.1.0"
   },
   "devDependencies": {
-    "@better-auth/cli": "1.7.12",
-    "@cloudflare/workers-types": "^4.20261001.0",
+    "@cloudflare/workers-types": "^5.20261001.1",
     "typescript": "^5.9.3",
-    "wrangler": "^4.0.0"
+    "wrangler": "^4.0.0",
+    "auth": "1.7.12"
   }
 }
