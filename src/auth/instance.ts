@@ -1,4 +1,5 @@
 import { betterAuth } from "better-auth";
+import {createAuthMiddleware} from "better-auth/api";
 import { admin, jwt, organization, twoFactor } from "better-auth/plugins";
 import { passkey } from "@better-auth/passkey";
 import { oauthProvider } from "@better-auth/oauth-provider";
@@ -30,6 +31,20 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
     // Federated tokens are sensitive; encrypt them in D1 and keep OAuth state server-side.
     account: { encryptOAuthTokens: true, storeStateStrategy: "database" },
     disabledPaths: ["/token"],
+    hooks: {
+      after: createAuthMiddleware(async (ctx) => {
+        // Passkey enrollment never grants admin assurance. Only a newly
+        // verified passkey sign-in with a freshly issued session does.
+        if(ctx.path!=="/passkey/verify-authentication")return;
+        const session=ctx.context.newSession;
+        if(!session?.session?.id || !session.user?.id)return;
+        await env.DB.prepare(
+          "INSERT INTO nathan_admin_assurance(session_id,user_id,method,verified_at) "+
+          "VALUES (?,?,'passkey',unixepoch()) "+
+          "ON CONFLICT(session_id) DO UPDATE SET user_id=excluded.user_id,method='passkey',verified_at=unixepoch()"
+        ).bind(session.session.id,session.user.id).run();
+      })
+    },
     rateLimit: {
       enabled: true,
       storage: "database",
@@ -84,7 +99,7 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
         clientPrivileges: async ({ user }) => {
           if (!user?.email || !user.emailVerified || (user as any).role !== "admin") return false;
           const allowed = env.NATHAN_ADMIN_EMAILS.split(",").map(x=>x.trim().toLowerCase()).filter(Boolean);
-          return allowed.includes(user.email.toLowerCase()) && await mayAdminister(env,user.id);
+          return allowed.includes(user.email.toLowerCase()) && await mayAdminister(env,user.id,session?.id);
         },
         ...(env.NATHAN_PAIRWISE_SECRET ? { pairwiseSecret: env.NATHAN_PAIRWISE_SECRET } : {})
       }),

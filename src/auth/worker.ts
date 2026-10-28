@@ -77,12 +77,12 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
   if (url.pathname === "/studio" && request.method === "GET") {
     const session = await auth.api.getSession({ headers: request.headers });
     if (!isAdmin(session, env)) return reject(403, "Admin session required");
-    if (!await mayAdminister(env,session!.user.id)) return Response.redirect(issuer.origin+"/security?setup=admin",302);
+    if (!await mayAdminister(env,session!.user.id,session!.session.id)) return Response.redirect(issuer.origin+"/security?setup=admin",302);
     return studioPage(session!.user.email);
   }
   if (["/studio/api/clients", "/studio/api/status", "/studio/api/plugins", "/studio/api/audit", "/studio/api/apps", "/studio/api/sso", "/studio/api/users", "/studio/api/realm", "/studio/api/realm/clients", "/studio/api/providers", "/studio/api/scim/connections"].includes(url.pathname) && request.method === "GET") {
     const session = await auth.api.getSession({ headers: request.headers });
-    if (!isAdmin(session, env) || !await mayAdminister(env,session!.user.id)) return reject(403, "Admin enrollment incomplete");
+    if (!isAdmin(session, env) || !await mayAdminister(env,session!.user.id,session!.session.id)) return reject(403, "Admin enrollment incomplete");
     if (url.pathname === "/studio/api/status") {
       return Response.json({
         issuer: issuer.origin + "/api/auth",
@@ -133,7 +133,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     if (request.headers.get("Content-Type")?.split(";")[0] !== "application/json")
       return reject(415,"JSON required");
     const session = await auth.api.getSession({headers:request.headers});
-    if (!isAdminUser(session?.user,env) || !await mayAdminister(env,session!.user.id)) return reject(403,"Admin enrollment incomplete");
+    if (!isAdminUser(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id)) return reject(403,"Admin enrollment incomplete");
     const raw=await request.text();
     if(raw.length>16384)return reject(413,"Request too large");
     let body:any;
@@ -161,7 +161,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")
       return reject(415,"JSON required");
     const session=await auth.api.getSession({headers:request.headers});
-    if(!isAdminUser(session?.user,env) || !await mayAdminister(env,session!.user.id))return reject(403,"Admin enrollment incomplete");
+    if(!isAdminUser(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id))return reject(403,"Admin enrollment incomplete");
     const raw=await request.text();
     if(raw.length>8192)return reject(413,"Registration too large");
     let input:any;
@@ -183,7 +183,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")
       return reject(415,"JSON required");
     const session=await auth.api.getSession({headers:request.headers});
-    if(!isAdminUser(session?.user,env) || !await mayAdminister(env,session!.user.id))return reject(403,"Admin enrollment incomplete");
+    if(!isAdminUser(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id))return reject(403,"Admin enrollment incomplete");
     const raw=await request.text();
     if(raw.length>16384)return reject(413,"Provider input too large");
     let input:any;try{input=JSON.parse(raw)}catch{return reject(400,"Invalid JSON")}
@@ -204,7 +204,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")
       return reject(415,"JSON required");
     const session=await auth.api.getSession({headers:request.headers});
-    if(!isAdminUser(session?.user,env) || !await mayAdminister(env,session!.user.id))
+    if(!isAdminUser(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id))
       return reject(403,"Verified administrator with completed enrollment required");
     const raw=await request.text();
     if(raw.length>16384)return reject(413,"SCIM configuration too large");
@@ -225,7 +225,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     if (request.headers.get("Origin") !== issuer.origin) return reject(403, "Cross-origin request denied");
     if (request.headers.get("Content-Type")?.split(";")[0] !== "application/json") return reject(415, "JSON required");
     const session = await auth.api.getSession({ headers: request.headers });
-    if (!isAdmin(session, env) || !await mayAdminister(env,session!.user.id)) return reject(403, "Admin enrollment incomplete");
+    if (!isAdmin(session, env) || !await mayAdminister(env,session!.user.id,session!.session.id)) return reject(403, "Admin enrollment incomplete");
     const raw = await request.text();
     if (raw.length > 4096) return reject(413, "Request too large");
     let body: any;
@@ -256,7 +256,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
         request.headers.get("Sec-Fetch-Site") === "cross-site") return reject(403,"Cross-origin request denied");
     if (request.headers.get("Content-Type")?.split(";")[0] !== "application/json") return reject(415,"JSON required");
     const session=await auth.api.getSession({headers:request.headers});
-    if (!isAdminUser(session?.user,env) || !await mayAdminister(env,session!.user.id)) return reject(403,"Admin enrollment incomplete");
+    if (!isAdminUser(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id)) return reject(403,"Admin enrollment incomplete");
     const raw=await request.text();
     if(raw.length>8192)return reject(413,"Request too large");
     try{

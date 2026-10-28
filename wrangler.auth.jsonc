@@ -28,7 +28,8 @@
     "NATHAN_MCP_WRITE_ENABLED": "false",
     "NATHAN_REALM_APEX": "",
     "ENABLE_PASSWORD": "false",
-    "ENTERPRISE_SSO": "false"
+    "ENTERPRISE_SSO": "false",
+    "NATHAN_ADMIN_STEPUP_REQUIRED": "true"
   },
   "routes": [
     {

@@ -189,6 +189,7 @@ async function uploadWorker(
     {type:"plain_text",name:"ENABLE_PASSWORD",text:"false"},
     {type:"plain_text",name:"NATHAN_SECURITY_PROFILE",text:job.profile},
     {type:"plain_text",name:"NATHAN_BOOTSTRAP_REQUIRED",text:"true"},
+    {type:"plain_text",name:"NATHAN_ADMIN_STEPUP_REQUIRED",text:job.profile==="business"?"true":"false"},
     {type:"plain_text",name:"ENTERPRISE_SSO",text:job.enterprise_sso===1?"true":"false"}
   ];
   if(provider){

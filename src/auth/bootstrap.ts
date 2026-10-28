@@ -55,11 +55,19 @@ export async function completeBootstrap(env:AuthEnv,userId:string) {
     note:"Initial admin setup is complete. These enrollment checks alone do not establish current-session MFA."};
 }
 /** For any administrator, enrollment is required before privileged UI and MCP. */
-export async function mayAdminister(env:AuthEnv,userId:string) {
+export async function mayAdminister(env:AuthEnv,userId:string,sessionId?:string) {
   if(env.NATHAN_BOOTSTRAP_REQUIRED!=="true")return true; // Legacy manual installations
   const b=await row(env);
   if(!b||b.state!=="complete")return false;
   const auth=await enrollment(env,userId);
-  return env.NATHAN_SECURITY_PROFILE==="standard"
+  const enrolled=env.NATHAN_SECURITY_PROFILE==="standard"
     ?(auth.passkeys>0||auth.totpVerified):(auth.passkeys>0&&auth.totpVerified);
+  if(!enrolled)return false;
+  if(env.NATHAN_ADMIN_STEPUP_REQUIRED!=="true")return true;
+  if(!sessionId || sessionId.length>256)return false;
+  const stepup=await env.DB.prepare(
+    "SELECT session_id FROM nathan_admin_assurance WHERE session_id=? AND user_id=? "+
+    "AND method='passkey' AND verified_at>=unixepoch()-900 LIMIT 1"
+  ).bind(sessionId,userId).first();
+  return Boolean(stepup);
 }

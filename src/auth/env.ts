@@ -7,6 +7,7 @@ export interface AuthEnv {
   NATHAN_CONFIG_KEY?: string;
   NATHAN_SECURITY_PROFILE?: "standard"|"business"|"high";
   NATHAN_BOOTSTRAP_REQUIRED?: string;
+  NATHAN_ADMIN_STEPUP_REQUIRED?: string;
   NATHAN_ISSUER: string;
   NATHAN_REALM_APEX?: string;
   NATHAN_ADMIN_EMAILS: string;

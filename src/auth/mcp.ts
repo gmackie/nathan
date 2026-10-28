@@ -59,7 +59,7 @@ async function authenticatedPrincipal(request:Request,env:AuthEnv,auth:any) {
     .bind(payload.sub).first<{id:string,email:string,emailVerified:number,role:string,banned:number}>();
   if(!account || account.banned===1 || !isAdminUser({
     id:account.id,email:account.email,emailVerified:account.emailVerified===1,role:account.role
-  },env) || !await mayAdminister(env,account.id))return null;
+  },env) || !await mayAdminister(env,account.id,typeof payload.sid==="string"?payload.sid:undefined))return null;
   return {actor:account.id,scopes,sessionId:typeof payload.sid==="string"?payload.sid:null};
 }
 async function checkWritePrivilege(env:AuthEnv,principal:{actor:string;scopes:string[];sessionId:string|null}) {
