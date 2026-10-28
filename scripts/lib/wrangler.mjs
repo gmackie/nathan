@@ -32,6 +32,8 @@ export async function createGeneratedConfig(cfg, databaseId, gateway = null) {
   const templateName = gateway ? "wrangler.gateway.jsonc" : "wrangler.auth.jsonc";
   const wrangler = JSON.parse(stripJsonc(await readFile(resolve(templateName), "utf8")));
   wrangler.account_id = cfg.accountId;
+  wrangler.main = resolve(wrangler.main);
+  for (const database of wrangler.d1_databases || []) database.migrations_dir = resolve(database.migrations_dir);
   if (!gateway) {
     wrangler.name = cfg.name + "-auth";
     wrangler.routes = [{ pattern: cfg.hostname, custom_domain: true }];
