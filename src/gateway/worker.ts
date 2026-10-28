@@ -59,11 +59,14 @@ async function completeLogin(url: URL, request: Request, env: GatewayEnv): Promi
     const id = await verifyIdToken(env, meta, token.id_token, flow.nonce);
     const handle = randomId();
     const hash = await sha256(handle);
-    const ttl = Math.max(300, Math.min(8 * 60 * 60, Number(env.SESSION_TTL_SECONDS || "28800")));
+    const requestedTtl = Number(env.SESSION_TTL_SECONDS || "28800");
+    if (!Number.isSafeInteger(requestedTtl) || requestedTtl < 300 || requestedTtl > 28800)
+      throw new Error("Invalid gateway session lifetime");
+    const ttl = requestedTtl;
     const expiresAt = Math.floor(Date.now() / 1000) + ttl;
     await env.SESSIONS.prepare(
       "INSERT INTO nathan_gateway_sessions(id_hash, subject, email, issuer, client_id, acr, auth_time, sid, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    ).bind(hash, id.sub, typeof id.email === "string" ? id.email : null, meta.issuer, env.OIDC_CLIENT_ID,
+    ).bind(hash, id.sub, id.email_verified === true && typeof id.email === "string" ? id.email : null, meta.issuer, env.OIDC_CLIENT_ID,
       typeof id.acr === "string" ? id.acr : null, typeof id.auth_time === "number" ? id.auth_time : null, typeof id.sid === "string" ? id.sid : null, expiresAt).run();
     const response = Response.redirect(origin(env) + flow.returnTo, 303);
     response.headers.append("Set-Cookie", makeCookie(SESSION_COOKIE, handle, { maxAge: ttl }));
@@ -104,7 +107,12 @@ async function upstream(request: Request, env: GatewayEnv, session: StoredSessio
   headers.set("X-Nathan-Application", env.APPLICATION_ID);
   const proxied = new Request(request, { headers });
   // The upstream Worker must have no public routes, workers.dev hostname or preview URL.
-  return env.UPSTREAM.fetch(proxied);
+  const upstreamResponse=await env.UPSTREAM.fetch(proxied);
+  const response=new Response(upstreamResponse.body,upstreamResponse);
+  response.headers.set("Cache-Control","private, no-store");
+  response.headers.set("Referrer-Policy","no-referrer");
+  response.headers.set("X-Content-Type-Options","nosniff");
+  return response;
 }
 export default {
   async fetch(request: Request, env: GatewayEnv): Promise<Response> {
