@@ -1,0 +1,366 @@
+{
+  "schemaVersion": 1,
+  "disclaimer": "Proposed Nathan trust classes; package names are illustrative until tested and approved.",
+  "plugins": [
+    {
+      "id": "passkey",
+      "name": "Passkeys",
+      "tier": "verified",
+      "packageName": "@better-auth/passkey",
+      "activation": "compiled",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "two-factor",
+      "name": "TOTP and recovery",
+      "tier": "verified",
+      "packageName": "better-auth/plugins",
+      "activation": "compiled",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "oauth-provider",
+      "name": "OIDC Provider",
+      "tier": "verified",
+      "packageName": "@better-auth/oauth-provider",
+      "activation": "compiled",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "sso",
+      "name": "Enterprise SSO",
+      "tier": "verified",
+      "packageName": "@better-auth/sso",
+      "activation": "compiled",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "organization",
+      "name": "Organizations",
+      "tier": "verified",
+      "packageName": "better-auth/plugins",
+      "activation": "compiled",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "admin",
+      "name": "Administration",
+      "tier": "verified",
+      "packageName": "better-auth/plugins",
+      "activation": "compiled",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "jwt",
+      "name": "JWT signing",
+      "tier": "verified",
+      "packageName": "better-auth/plugins",
+      "activation": "compiled",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "api-key",
+      "name": "API keys",
+      "tier": "verified",
+      "packageName": "better-auth/plugins",
+      "activation": "compiled",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "magic-link",
+      "name": "Magic link",
+      "tier": "verified",
+      "packageName": "better-auth/plugins",
+      "activation": "compiled",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "captcha",
+      "name": "CAPTCHA",
+      "tier": "verified",
+      "packageName": "better-auth/plugins",
+      "activation": "compiled",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "scim",
+      "name": "SCIM provisioning",
+      "tier": "verified",
+      "packageName": "better-auth/plugins",
+      "activation": "compiled",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "hibp",
+      "name": "Breached password check",
+      "tier": "verified",
+      "packageName": "better-auth/plugins",
+      "activation": "compiled",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "cloudflare",
+      "name": "Cloudflare integration",
+      "tier": "community",
+      "packageName": "better-auth-cloudflare",
+      "activation": "review-required",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "expo-passkey",
+      "name": "Expo passkeys",
+      "tier": "community",
+      "packageName": "expo-better-auth-passkey",
+      "activation": "review-required",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "ldap",
+      "name": "LDAP credentials",
+      "tier": "community",
+      "packageName": "better-auth-credentials-plugin",
+      "activation": "review-required",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "opaque",
+      "name": "OPAQUE protocol",
+      "tier": "community",
+      "packageName": "better-auth-opaque",
+      "activation": "review-required",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "firebase",
+      "name": "Firebase login",
+      "tier": "community",
+      "packageName": "better-auth-firebase-auth",
+      "activation": "review-required",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "audit",
+      "name": "Audit logs",
+      "tier": "community",
+      "packageName": "better-auth-audit-logs",
+      "activation": "review-required",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "devtools",
+      "name": "Auth devtools",
+      "tier": "community",
+      "packageName": "better-auth-devtools",
+      "activation": "review-required",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "dbsc",
+      "name": "Device-bound sessions",
+      "tier": "community",
+      "packageName": "@dbsc-toolkit/better-auth",
+      "activation": "review-required",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "email-challenge",
+      "name": "Email challenge",
+      "tier": "community",
+      "packageName": "better-auth-email-challenge",
+      "activation": "review-required",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "nostr",
+      "name": "Nostr login",
+      "tier": "community",
+      "packageName": "better-auth-nostr",
+      "activation": "review-required",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "zoho",
+      "name": "Zoho OAuth",
+      "tier": "community",
+      "packageName": "better-auth-zoho",
+      "activation": "review-required",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "invite",
+      "name": "Invitations",
+      "tier": "community",
+      "packageName": "better-invite",
+      "activation": "review-required",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "hris",
+      "name": "HRIS sync",
+      "tier": "custom",
+      "packageName": "private",
+      "activation": "isolated-rpc-preferred",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "claims",
+      "name": "Claims mapping",
+      "tier": "custom",
+      "packageName": "private",
+      "activation": "isolated-rpc-preferred",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "risk",
+      "name": "Conditional risk policies",
+      "tier": "custom",
+      "packageName": "private",
+      "activation": "isolated-rpc-preferred",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "approval",
+      "name": "Manager approval enrollment",
+      "tier": "custom",
+      "packageName": "private",
+      "activation": "isolated-rpc-preferred",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "hardware-mfa",
+      "name": "Hardware authenticator requirements",
+      "tier": "custom",
+      "packageName": "private",
+      "activation": "isolated-rpc-preferred",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "external-policy",
+      "name": "External authorization",
+      "tier": "custom",
+      "packageName": "private",
+      "activation": "isolated-rpc-preferred",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "proofing",
+      "name": "Identity proofing",
+      "tier": "custom",
+      "packageName": "private",
+      "activation": "isolated-rpc-preferred",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "legacy",
+      "name": "Legacy directory bridge",
+      "tier": "custom",
+      "packageName": "private",
+      "activation": "isolated-rpc-preferred",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "branding",
+      "name": "Tenant branding",
+      "tier": "custom",
+      "packageName": "private",
+      "activation": "isolated-rpc-preferred",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "siem",
+      "name": "Security event export",
+      "tier": "custom",
+      "packageName": "private",
+      "activation": "isolated-rpc-preferred",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "device",
+      "name": "Device certificate enrollment",
+      "tier": "custom",
+      "packageName": "private",
+      "activation": "isolated-rpc-preferred",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
+      "id": "agent",
+      "name": "AI agent delegation",
+      "tier": "custom",
+      "packageName": "private",
+      "activation": "isolated-rpc-preferred",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    }
+  ]
+}
