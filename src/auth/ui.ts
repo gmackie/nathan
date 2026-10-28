@@ -5,9 +5,9 @@ function page(title: string, body: string, script = ""): Response {
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${htmlEscape(title)} · Nathan</title><style nonce="${nonce}">
   :root{color-scheme:dark}*{box-sizing:border-box}body{font:16px system-ui;background:#10121a;color:#f2f3fa;margin:0;min-height:100vh;display:grid;place-items:center}
   main{width:min(480px,94vw);padding:32px;background:#1b1e2a;border:1px solid #35394b;border-radius:16px}
-  h1{font-size:26px;margin:4px 0 12px}p{color:#b6bfce;line-height:1.5}button,input,select{font:inherit}
+  h1{font-size:26px;margin:4px 0 12px}p{color:#b6bfce;line-height:1.5}button,input,select,textarea{font:inherit}
   button{background:#ef9028;color:#171717;border:0;border-radius:8px;padding:13px 16px;cursor:pointer;margin:6px 4px 6px 0}
-  button.secondary{background:#363d52;color:#fff}input,select{background:#10121a;color:#fff;border:1px solid #434b60;border-radius:6px;padding:12px;width:100%;margin:5px 0 12px}input[type=checkbox]{width:auto}pre{white-space:pre-wrap;overflow-wrap:anywhere}
+  button.secondary{background:#363d52;color:#fff}input,select,textarea{background:#10121a;color:#fff;border:1px solid #434b60;border-radius:6px;padding:12px;width:100%;margin:5px 0 12px}input[type=checkbox]{width:auto}pre{white-space:pre-wrap;overflow-wrap:anywhere}
   body:has(#studio-root){display:block}body:has(#studio-root) main{width:min(1040px,96vw);margin:22px auto}#studio-root section{border:1px solid #35394b;padding:20px;border-radius:12px;margin:12px 0}#studio-root section>h2{margin-top:0}#studio-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:15px 0}#studio-tabs button{padding:9px 12px}#studio-tabs button[aria-selected=true]{background:#f49a26}#studio-root input,#studio-root select{max-width:650px}small{color:#a8b3c7}a{color:#f5aa62}</style></head><body><main><small>NATHAN 🌭</small><h1>${htmlEscape(title)}</h1>${body}</main><script nonce="${nonce}">${script}</script></body></html>`;
   return new Response(html, {
     headers: {
@@ -138,6 +138,10 @@ export function studioPage(userEmail: string): Response {
   <button id="realm-register">Register this hostname</button>
   <pre id="realm-registration"></pre>
   <button class="secondary" id="realm-clients-refresh">List registered domain clients</button><pre id="realm-clients"></pre>
+  <h3>Bulk onboard root and subdomains</h3>
+  <p>Paste up to 20 reviewed hostnames from <code>nathan domains discover</code> or the Cloudflare installer. Every client is created disabled and requires explicit activation. Use the same client type and callback path for this batch.</p>
+  <label>Approved hostnames (one per line)<textarea id="realm-bulk-hosts" rows="6" placeholder="example.com&#10;www.example.com&#10;app.example.com" spellcheck="false"></textarea></label>
+  <button id="realm-bulk-register">Register reviewed hostnames</button><pre id="realm-bulk-result"></pre>
   <h2>Protected applications</h2><p>Service-binding policies start disabled. Save a policy, then explicitly enable it.</p>
   <label>Application ID<input id="app-id" placeholder="operations"></label>
   <label>Hostname<input id="app-host" placeholder="operations.example.com"></label>
@@ -225,6 +229,23 @@ export function studioPage(userEmail: string): Response {
         document.getElementById('realm-clients-refresh').click();
       }catch(e){output.textContent=e.message}
     };
+
+    document.getElementById('realm-bulk-register').onclick=async()=>{
+      const output=document.getElementById('realm-bulk-result');
+      const hostnames=document.getElementById('realm-bulk-hosts').value;
+      if(!confirm('Register the reviewed hostnames as disabled clients? Save the one-time secrets securely.'))return;
+      try{
+        const data=await postJson('/studio/api/realm/clients/batch',{
+          hostnames,kind:document.getElementById('realm-kind').value,
+          callbackPath:document.getElementById('realm-callback').value,
+          publicClient:document.getElementById('realm-public').checked,
+          confirm:'REGISTER DOMAIN CLIENTS'
+        });
+        output.textContent=JSON.stringify(data,null,2);
+        document.getElementById('realm-clients-refresh').click();
+      }catch(e){output.textContent=e.message}
+    };
+
     document.getElementById('realm-clients-refresh').onclick=async()=>{
       const output=document.getElementById('realm-clients');
       try{output.textContent=JSON.stringify(await j('/studio/api/realm/clients'),null,2)}

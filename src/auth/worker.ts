@@ -3,7 +3,7 @@ import { verifyOAuthQueryParams } from "@better-auth/oauth-provider";
 import { createAuth } from "./instance";
 import { signInPage, consentPage, studioPage } from "./ui";
 import { securityPage } from "./security-ui";
-import { loadVerifiedRealm, listRealmClients,registerRealmClient,updateRealmClientStatus } from "./domain-realm";
+import { loadVerifiedRealm, listRealmClients,registerRealmClient,registerRealmClientsBatch,updateRealmClientStatus } from "./domain-realm";
 import type { AuthEnv } from "./env";
 import pluginCatalog from "../../plugins/catalog.json";
 import { handleMcp, protectedResourceMetadata } from "./mcp";
@@ -125,7 +125,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
   }
 
 
-  if(url.pathname==="/studio/api/realm/clients" && request.method==="POST"){
+  if(["/studio/api/realm/clients","/studio/api/realm/clients/batch"].includes(url.pathname) && request.method==="POST"){
     if(request.headers.get("Origin")!==issuer.origin ||
        request.headers.get("Sec-Fetch-Site")==="cross-site")return reject(403,"Cross-origin request denied");
     if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")
@@ -137,7 +137,9 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     let input:any;
     try{input=JSON.parse(raw)}catch{return reject(400,"Invalid JSON");}
     try{
-      const client=await registerRealmClient(auth,env,request.headers,input,session!.user.id);
+      const client=url.pathname.endsWith("/batch")
+        ? await registerRealmClientsBatch(auth,env,request.headers,input,session!.user.id)
+        : await registerRealmClient(auth,env,request.headers,input,session!.user.id);
       return Response.json(client,{headers:{"Cache-Control":"no-store"}});
     }catch{
       return reject(409,"Registration denied or incomplete. Check the exact hostname, existing realm clients and security audit before retrying.");
