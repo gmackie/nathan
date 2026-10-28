@@ -35,6 +35,6 @@ export const auth = betterAuth({
       allowDynamicClientRegistration: false
     }),
     // Generate a superset schema even when SSO is disabled for a deployment.
-    sso({ saml: { enableInResponseToValidation: true, allowIdpInitiated: false, requireTimestamps: true } })
+    sso({ domainVerification: { enabled: true }, saml: { enableInResponseToValidation: true, allowIdpInitiated: false, requireTimestamps: true } })
   ]
 });
