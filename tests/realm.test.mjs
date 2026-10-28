@@ -65,5 +65,5 @@ test("batch onboarding only accepts explicit, exact owned hostnames",()=>{
   assert.throws(()=>parseRealmHostSelection("*.example.com","example.com","login.example.com"));
   assert.throws(()=>parseRealmHostSelection("example.com.evil.net","example.com","login.example.com"));
   assert.throws(()=>parseRealmHostSelection("login.example.com","example.com","login.example.com"));
-  assert.throws(()=>parseRealmHostSelection("x.example.com\n".repeat(30),"example.com","login.example.com",{max:1}));
+  assert.throws(()=>parseRealmHostSelection("a.example.com\nb.example.com","example.com","login.example.com",{max:1}));
 });
