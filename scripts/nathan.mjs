@@ -61,6 +61,11 @@ async function planOrDoctor(live) {
 }
 async function provision() {
   const cfg = await loadConfig(file);
+  // A Worker without the matching Better Auth schema cannot serve logins.
+  let schema;
+  try { schema = await readFile("migrations/0002_better_auth.sql", "utf8"); }
+  catch { throw Error("Generated Better Auth migration missing. Run npm run schema:generate; review migrations/0002_better_auth.sql."); }
+  if (schema.trim().length < 150) throw Error("Better Auth SQL migration is empty or unexpectedly small");
   if (!cfg.accountId) throw Error("accountId required for deploy");
   if (!apply) throw Error("Explicit --apply required. First run 'npm run plan'.");
   const client = new CloudflareClient(process.env.CLOUDFLARE_API_TOKEN,cfg.accountId);
@@ -77,19 +82,23 @@ async function provision() {
   const dbId = database.uuid || database.id;
   if (!/^[a-f0-9-]{36}$/.test(dbId)) throw Error("Cloudflare did not return a valid D1 database UUID");
   const configPath = await createGeneratedConfig(cfg,dbId);
-  console.log("Applying D1 migrations. Generate Better Auth schema first with npm run schema:generate.");
+  const liveConfig = JSON.parse(await readFile(configPath,"utf8"));
+  console.log("Applying reviewed D1 migrations before publishing the identity hostname.");
   await runCli("npx",["wrangler","d1","migrations","apply",name,"--remote","--config",configPath]);
   if (!snapshot.existingAuthWorker) {
-    const secret = await secretPrompt("Existing or newly generated BETTER_AUTH_SECRET (blank to generate)");
+    // Bootstrap without an ingress route. Only expose the hostname after its secret is installed.
+    const stagingPath = ".nathan/generated/" + liveConfig.name + ".staging.json";
+    const stagingConfig = { ...liveConfig, routes:[], workers_dev:false, preview_urls:false };
+    await writeFile(stagingPath,JSON.stringify(stagingConfig,null,2)+"\n",{mode:0o600});
+    await runCli("npx",["wrangler","deploy","--config",stagingPath,"--dry-run"]);
+    await runCli("npx",["wrangler","deploy","--config",stagingPath]);
+    const secret = await secretPrompt("BETTER_AUTH_SECRET (blank to generate securely)");
     const value = secret || randomBytes(48).toString("base64url");
-    // Secrets must be added immediately after the initial private publish. No public hostname is enabled until after readiness.
-    await runCli("npx",["wrangler","deploy","--config",configPath,"--dry-run"]);
-    await runCli("npx",["wrangler","deploy","--config",configPath]);
-    await runCli("npx",["wrangler","secret","put","BETTER_AUTH_SECRET","--config",configPath],{input:value});
-  } else {
-    await runCli("npx",["wrangler","deploy","--config",configPath]);
+    await runCli("npx",["wrangler","secret","put","BETTER_AUTH_SECRET","--config",stagingPath],{input:value});
   }
-  console.log("Worker deployed. Configure at least one social identity provider and verify OIDC discovery before using it.");
+  // Existing installations retain their current secret, avoiding accidental session invalidation.
+  await runCli("npx",["wrangler","deploy","--config",configPath]);
+  console.log("Identity Worker published. Configure a trusted login provider and verify OIDC discovery.");
 }
 (async () => {
   if (command === "init") return init();
