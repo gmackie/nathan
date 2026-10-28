@@ -28,14 +28,14 @@ jobs:
           retention-days: 7
       - name: Generate Better Auth SQL schema
         run: npm run schema:generate
-      - name: Verify committed Better Auth schema is in sync
-        run: git diff --exit-code -- migrations/0002_better_auth.sql
       - name: Archive generated identity schema
         uses: actions/upload-artifact@v4
         with:
           name: nathan-generated-auth-schema
           path: migrations/0002_better_auth.sql
           retention-days: 7
+      - name: Verify committed Better Auth schema is in sync
+        run: git diff --exit-code -- migrations/0002_better_auth.sql
       - name: Unit tests
         run: npm test
       - name: Static types

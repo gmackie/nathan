@@ -16,6 +16,13 @@ export const auth = betterAuth({
   basePath: "/api/auth",
   secret: "SCHEMA_GENERATOR_ONLY_NOT_A_DEPLOYMENT_SECRET_123456789",
   emailAndPassword: { enabled: true, requireEmailVerification: true },
+  rateLimit: {
+    enabled: true, storage: "database", window: 60, max: 100,
+    customRules: {
+      "/sign-in/email": { window: 60, max: 5 },
+      "/oauth2/token": { window: 60, max: 30 }
+    }
+  },
   plugins: [
     admin(),
     organization(),

@@ -25,6 +25,16 @@ export function createAuth(env: AuthEnv) {
     basePath: "/api/auth",
     secret: env.BETTER_AUTH_SECRET,
     database: env.DB,
+    rateLimit: {
+      enabled: true,
+      storage: "database",
+      window: 60,
+      max: 100,
+      customRules: {
+        "/sign-in/email": { window: 60, max: 5 },
+        "/oauth2/token": { window: 60, max: 30 }
+      }
+    },
     trustedOrigins: [issuer.origin],
     socialProviders,
     emailAndPassword: {
@@ -38,6 +48,7 @@ export function createAuth(env: AuthEnv) {
         sendAuthEmail(env, user.email, "Verify your Nathan email", url)
     },
     advanced: {
+      ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] },
       database: { joins: false }
     },
     plugins: [
