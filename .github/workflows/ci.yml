@@ -16,10 +16,20 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: package.json
+      - name: Verify the original naming illustration
+        run: echo 'ee83ade5d1023fca1892d0a7c0d86d7348a47b3077106d7f16b97d578f3a9920  assets/naming-origin.png' | sha256sum -c -
       - name: Install dependencies
         run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Archive resolved dependency lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: nathan-dependency-lockfile
+          path: package-lock.json
+          retention-days: 7
       - name: Generate Better Auth SQL schema
         run: npm run schema:generate
+      - name: Verify committed Better Auth schema is in sync
+        run: git diff --exit-code -- migrations/0002_better_auth.sql
       - name: Archive generated identity schema
         uses: actions/upload-artifact@v4
         with:
