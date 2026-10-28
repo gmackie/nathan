@@ -3,6 +3,7 @@ import type { InstallerTokens } from "./oauth";
 import { cloudflareRequest, cloudflareWrite } from "./cloudflare";
 import { loadRelease, releaseFile, type NathanRelease, type ReleaseFile } from "./release";
 import { validateInstallPlan, validateHostname } from "./validation.mjs";
+import { realmIssuerHostname } from "../shared/realm.mjs";
 
 const STAGES=["database","schema","upload","domain","activate","verify","bootstrap","complete"] as const;
 type Stage=typeof STAGES[number];
@@ -10,7 +11,7 @@ type Identity={id:string;email:string};
 type InstallJob={
   id:string;owner_user_id:string;owner_email:string;account_id:string;zone_id:string;
   hostname:string;worker_name:string;admin_email:string;profile:"standard"|"business";
-  enterprise_sso:number;release_id:string;stage:Stage;database_id:string|null;error:string|null;
+  enterprise_sso:number;realm_apex:string|null;release_id:string;stage:Stage;database_id:string|null;error:string|null;
   created_at:number;updated_at:number
 };
 type ApiSession={digest:string;tokens:InstallerTokens};
@@ -42,7 +43,7 @@ function next(stage:Stage):Stage {
 }
 function describe(job:InstallJob){
   return {id:job.id,stage:job.stage,status:job.stage==="complete"?"complete":"in_progress",
-    worker:job.worker_name,hostname:job.hostname,adminEmail:job.admin_email,release:job.release_id,enterpriseSso:job.enterprise_sso===1,
+    worker:job.worker_name,hostname:job.hostname,adminEmail:job.admin_email,release:job.release_id,enterpriseSso:job.enterprise_sso===1,realmApex:job.realm_apex||null,
     url:"https://"+job.hostname,error:job.error,
     steps:STAGES.filter(x=>x!=="complete").map((stage,index)=>({
       stage,status:index<STAGES.indexOf(job.stage)?"done":index===STAGES.indexOf(job.stage)?"next":"pending"
@@ -111,17 +112,17 @@ export async function createInstall(env:InstallerEnv,session:ApiSession,input:an
   ).bind(plan.accountId,plan.name).first<InstallJob>();
   if(existing){
     if(existing.owner_user_id!==user.id||existing.hostname!==plan.hostname||
-       existing.admin_email!==user.email)throw Error("Installation name is reserved by a different job");
+       existing.admin_email!==user.email||existing.realm_apex!==(plan.realmApex||null))throw Error("Installation name is reserved or domain realm differs");
     if(existing.release_id!==release.release)throw Error("Installed release differs; resume with original installer version");
     return describe(existing);
   }
   await nameIsFree(api,plan.accountId,plan.name,plan.name+"-db",plan.hostname,zone.id);
   const id=crypto.randomUUID();
   await env.INSTALLER_DB.prepare(
-    "INSERT INTO nathan_install_jobs(id,owner_user_id,owner_email,account_id,zone_id,hostname,worker_name,admin_email,profile,enterprise_sso,release_id) "+
-    "VALUES (?,?,?,?,?,?,?,?,?,?,?)"
+    "INSERT INTO nathan_install_jobs(id,owner_user_id,owner_email,account_id,zone_id,hostname,worker_name,admin_email,profile,enterprise_sso,realm_apex,release_id) "+
+    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
   ).bind(id,user.id,user.email,plan.accountId,zone.id,plan.hostname,plan.name,plan.adminEmail,
-    plan.securityProfile,plan.enterpriseSSO?1:0,release.release).run();
+    plan.securityProfile,plan.enterpriseSSO?1:0,plan.realmApex||null,release.release).run();
   const created=await fetchJob(env,id,user.id);
   if(!created)throw Error("Installation job was not persisted");
   return describe(created);
@@ -141,7 +142,7 @@ async function ensureMigrations(env:InstallerEnv,write:Write,release:NathanRelea
   await query(write,job,
     "CREATE TABLE IF NOT EXISTS nathan_release_migrations(name TEXT PRIMARY KEY,sha256 TEXT NOT NULL,applied_at INTEGER NOT NULL DEFAULT (unixepoch()))");
   const migrations=release.files.filter(f=>f.type==="migration").sort((a,b)=>a.name.localeCompare(b.name));
-  if(migrations.length<4)throw Error("Release is missing required identity migrations");
+  if(migrations.length<5)throw Error("Release is missing required domain and identity migrations");
   for(const item of migrations){
     const prev=await query(write,job,"SELECT sha256 FROM nathan_release_migrations WHERE name=?",[item.name]);
     if(prev.length){
@@ -176,6 +177,7 @@ async function uploadWorker(
   const bindings:any[]=[
     {type:"d1",name:"DB",id:job.database_id},
     {type:"plain_text",name:"NATHAN_ISSUER",text:"https://"+job.hostname},
+    {type:"plain_text",name:"NATHAN_REALM_APEX",text:job.realm_apex||""},
     {type:"plain_text",name:"NATHAN_ADMIN_EMAILS",text:job.admin_email},
     {type:"plain_text",name:"NATHAN_INSTALL_ACTIVE",text:active?"true":"false"},
     {type:"plain_text",name:"NATHAN_MCP_WRITE_ENABLED",text:"false"},
@@ -236,6 +238,19 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
       updatedDbId=db.uuid;job.database_id=db.uuid;
     }else if(job.stage==="schema"){
       await ensureMigrations(env,write,release,job);
+      if(job.realm_apex){
+        if(job.hostname!==realmIssuerHostname(job.realm_apex))
+          throw Error("Domain-wide SSO issuer does not match verified base domain");
+        await query(write,job,
+          "INSERT OR IGNORE INTO nathan_domain_realms(apex,issuer_hostname,account_id,zone_id,registered_by) VALUES (?,?,?,?,?)",
+          [job.realm_apex,job.hostname,job.account_id,job.zone_id,"cloudflare:"+user.id]);
+        const realms=await query(write,job,
+          "SELECT issuer_hostname,account_id,zone_id FROM nathan_domain_realms WHERE apex=? LIMIT 1",
+          [job.realm_apex]);
+        if(realms.length!==1||realms[0].issuer_hostname!==job.hostname||
+           realms[0].account_id!==job.account_id||realms[0].zone_id!==job.zone_id)
+          throw Error("Existing domain realm does not match approved account, zone and issuer");
+      }
     }else if(job.stage==="upload"){
       const scripts=await api<Array<{id:string;tags?:string[]}>>("/accounts/"+job.account_id+"/workers/scripts");
       const workerName=job.worker_name;

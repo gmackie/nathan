@@ -5,6 +5,7 @@ import { oauthAuthorizeUrl, oauthExchange } from "./oauth";
 import { beginOAuthState, consumeOAuthState, createInstallerSession, installerSession, deleteInstallerSession, pruneInstallerState } from "./storage";
 import { cloudflareRequest } from "./cloudflare";
 import { installerPage } from "./ui";
+import { validateDomainName,discoverRealmHostCandidates,realmIssuerHostname } from "../shared/realm.mjs";
 import { createInstall, installStatus, advanceInstall } from "./deploy";
 import type { InstallerEnv } from "./env";
 
@@ -98,6 +99,39 @@ async function dashboard(request:Request,env:InstallerEnv){
     const workers=await api<Array<{id:string}>>("/accounts/"+accountId+"/workers/scripts");
     return Response.json({workers:workers.map(w=>w.id)});
   }
+  if(path==="/api/realm/discover"&&request.method==="GET"){
+    let accountId:string,apex:string;
+    try{
+      accountId=validateAccountId(url.searchParams.get("account"));
+      apex=validateDomainName(url.searchParams.get("apex"));
+    }catch{return error(400,"Valid account and base domain are required");}
+    const zones=await api<Array<{id:string;name:string;status:string}>>("/zones?account.id="+accountId+"&per_page=100");
+    if(!Array.isArray(zones))return error(503,"Zone inventory unavailable");
+    const zone=zones.filter(z=>z.status==="active"&&(apex===z.name||apex.endsWith("."+z.name)))
+      .sort((a,b)=>b.name.length-a.name.length)[0];
+    if(!zone)return error(403,"The requested domain does not belong to an accessible active Cloudflare zone");
+    const records:Array<{name:string;type:string;proxied?:boolean}>=[];
+    for(let page=1;page<=100;page++){
+      const pageRecords=await api<Array<{name:string;type:string;proxied?:boolean}>>(
+        "/zones/"+zone.id+"/dns_records?per_page=100&page="+page);
+      if(!Array.isArray(pageRecords))return error(503,"Unable to enumerate DNS records");
+      records.push(...pageRecords);
+      if(pageRecords.length<100)break;
+      if(page===100)return error(413,"Zone inventory exceeds safe discovery limit");
+    }
+    const workerDomains=await api<Array<{hostname:string;service?:string;zone_id?:string}>>(
+      "/accounts/"+accountId+"/workers/domains");
+    if(!Array.isArray(workerDomains))return error(503,"Unable to enumerate Worker custom domains");
+    const candidates=discoverRealmHostCandidates({
+      apex,issuerHostname:realmIssuerHostname(apex),
+      dnsRecords:records,workerDomains:workerDomains.filter(d=>!d.zone_id||d.zone_id===zone.id)
+    });
+    return Response.json({
+      apex,issuer:"https://"+realmIssuerHostname(apex)+"/api/auth",zone:zone.name,
+      root:apex,subdomains:"*."+apex,candidates,status:"review-only",
+      warning:"Candidates are not automatically registered or protected. Approve each exact hostname as an OIDC client in Nathan Studio."
+    },{headers:{"Cache-Control":"no-store"}});
+  }
   if(path==="/api/plan"&&request.method==="POST"){
     const bodyText=await request.text();
     if(bodyText.length>8192)return error(413,"Request too large");
@@ -118,11 +152,13 @@ async function dashboard(request:Request,env:InstallerEnv){
       status:"preview-only",
       publishAvailable:available,
       accountId:plan.accountId,
-      zone:zone.name,hostname:plan.hostname,securityProfile:plan.securityProfile,
+      zone:zone.name,hostname:plan.hostname,securityProfile:plan.securityProfile,realmApex:plan.realmApex,
       resources:[
         {kind:"worker",name:plan.name,action:worker?"CONFLICT: Worker already exists":"create"},
         {kind:"d1",name:plan.name+"-db",action:database?"CONFLICT: D1 name in use":"create"},
-        {kind:"custom-domain",name:plan.hostname,action:dns.length||domain?"CONFLICT: hostname in use":"create"}
+        {kind:"custom-domain",name:plan.hostname,action:dns.length||domain?"CONFLICT: hostname in use":"create"},
+        ...(plan.realmApex?[{kind:"oidc-realm",name:plan.realmApex,issuer:"https://"+plan.hostname+"/api/auth",action:"create",
+          coverage:[plan.realmApex,"*."+plan.realmApex],clientRegistration:"approved-only"}]:[])
       ],
       warning:available?"No changes made. Review this plan and select Start deployment to continue.":"No changes made. Resolve all resource conflicts before starting deployment."
     },{headers:{"Cache-Control":"no-store"}});

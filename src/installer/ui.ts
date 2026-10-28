@@ -33,7 +33,11 @@ kbd{color:#ffe3ae}code{color:#e5d4b7}footer{margin:25px 0;color:#8493a8}
 <label>Active DNS zone<select id="zones"><option value="">Choose an account first</option></select></label>
 </section>
 <section><h2>2. Choose installation details</h2>
-<label>Identity hostname<input id="hostname" placeholder="auth.example.com" autocomplete="off" required></label>
+<label>Identity hostname<input id="hostname" placeholder="login.example.com" autocomplete="off" required></label>
+<label><input type="checkbox" id="realm-enabled" checked> Use this identity provider for the root domain and all authorized subdomains</label>
+<label>SSO domain (root and subdomains)<input id="realm-apex" placeholder="example.com" autocomplete="off"></label>
+<p class="muted">One central session at <code>login.example.com</code>, separate OIDC clients for <code>example.com</code> and each subdomain. Nathan never uses wildcard callback URLs or shares login cookies with subdomains.</p>
+<button class="secondary" id="discover-hosts">Discover existing subdomains</button><pre id="discovered-hosts" aria-live="polite"></pre>
 <label>Worker name<input id="worker" value="nathan-auth" pattern="[a-z0-9-]+" required></label>
 <label>Administrator email<input id="admin-email" type="email" placeholder="you@example.com"></label>
 <p class="muted">For secure first-time bootstrap, this must match the email on your Cloudflare OAuth identity.</p>
@@ -100,7 +104,12 @@ function validPlan(){
   return {accountId:$('accounts').value,hostname:$('hostname').value.trim().toLowerCase(),
     name:$('worker').value.trim().toLowerCase(),adminEmail:$('admin-email').value.trim().toLowerCase(),
     securityProfile:$('profile').value,enterpriseSSO:$('enterprise').checked,
+    realmEnabled:$('realm-enabled').checked,realmApex:$('realm-enabled').checked?$('realm-apex').value.trim().toLowerCase():undefined,
     mfaPolicy:$('mfa').value==='optional'?'optional':'required'};
+}
+function updateRealmApex(){
+  const host=$('hostname').value.trim().toLowerCase();
+  if(host.startsWith('login.'))$('realm-apex').value=host.slice(6);
 }
 function updateGuide(){
   const provider=$('provider').value,host=$('hostname').value.trim().toLowerCase();
@@ -108,7 +117,7 @@ function updateGuide(){
   $('provider-console').href=link.url;$('provider-instructions').textContent=link.desc;
   $('provider-callback').textContent=host?'https://'+host+'/api/auth/callback/'+provider:'Choose an identity hostname first.';
 }
-$('hostname').oninput=updateGuide;$('provider').onchange=updateGuide;
+$('hostname').oninput=()=>{updateRealmApex();updateGuide()};$('provider').onchange=updateGuide;
 $('copy-callback').onclick=()=>navigator.clipboard.writeText($('provider-callback').textContent);
 $('accounts').onchange=async()=>{
   const account=$('accounts').value;if(!account)return;
@@ -118,10 +127,10 @@ $('accounts').onchange=async()=>{
   }catch(e){$('errors').textContent=e.message}
 };
 $('zones').onchange=()=>{
-  if($('zones').value){$('hostname').value='auth.'+$('zones').selectedOptions[0].textContent;updateGuide()}
+  if($('zones').value){$('hostname').value='login.'+$('zones').selectedOptions[0].textContent;updateRealmApex();updateGuide()}
 };
 async function load(){
-  updateGuide();
+  updateRealmApex();updateGuide();
   try{
     const s=await api('/api/session');currentUser=s.user;
     $('session').textContent='Signed in as '+s.user.email;
@@ -176,6 +185,16 @@ async function advance(id){
   }catch(e){$('errors').textContent=e.message}
   finally{advancing=false;$('resume').disabled=false}
 }
+$('discover-hosts').onclick=async()=>{
+  const out=$('discovered-hosts');out.textContent='Reading proxied DNS and Worker custom domains...';
+  try{
+    const account=$('accounts').value,apex=$('realm-apex').value.trim().toLowerCase();
+    const data=await api('/api/realm/discover?account='+encodeURIComponent(account)+'&apex='+encodeURIComponent(apex));
+    out.textContent=data.candidates.map(x=>x.hostname+' → '+x.oidcRedirectUri+' ['+x.sources.join(', ')+']').join('\n')||
+      'No proxied HTTP hostnames found. The root can still be added explicitly later.';
+    out.textContent+='\n\nReview and register approved hosts in Identity Studio after deployment.';
+  }catch(e){out.textContent=e.message}
+};
 $('plan').onclick=async()=>{
   $('errors').textContent='';$('result').textContent='Checking account and DNS...';
   try{const plan=await send('/api/plan',validPlan());$('result').textContent=JSON.stringify(plan,null,2)}
