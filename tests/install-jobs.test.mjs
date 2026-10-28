@@ -24,7 +24,7 @@ function insert(db,other={}){
 test("resumable install starts at database stage",()=>{
   const db=create();insert(db);
   const row=db.prepare("SELECT stage,enterprise_sso,locked_until FROM nathan_install_jobs").get();
-  assert.deepEqual(row,{stage:"database",enterprise_sso:1,locked_until:0});
+  assert.deepEqual({...row},{stage:"database",enterprise_sso:1,locked_until:0});
   db.close();
 });
 test("two jobs cannot claim same worker in one account",()=>{
