@@ -243,7 +243,8 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
         api<Array<{id:string;name:string;type:string}>>("/zones/"+job.zone_id+"/dns_records?name="+encodeURIComponent(job.hostname)),
         api<Array<{hostname:string;service:string}>>("/accounts/"+job.account_id+"/workers/domains")
       ]);
-      const attached=domains.find(d=>d.hostname===job.hostname);
+      const targetHostname=job.hostname;
+      const attached=domains.find(d=>d.hostname===targetHostname);
       if(attached?.service===job.worker_name){ /* previous step attached, safe to resume */ }
       else {
         if(dns.length||attached)throw Error("Hostname has conflicting DNS or Worker routing; cannot replace it");
