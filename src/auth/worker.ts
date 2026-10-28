@@ -14,7 +14,7 @@ import type { AuthEnv } from "./env";
 import pluginCatalog from "../../plugins/catalog.json";
 import { handleMcp, protectedResourceMetadata } from "./mcp";
 import { isAdminUser, listApplications, listSso, upsertApplication,
-  setApplicationEnabled, registerEnterpriseOidc, createOAuthClient, listUsers } from "./admin-service";
+  setApplicationEnabled, registerEnterpriseOidc, requestEnterpriseVerification, verifyEnterpriseDomain, createOAuthClient, listUsers } from "./admin-service";
 
 function reject(status: number, reason: string) {
   return Response.json({ error: reason }, { status, headers: { "Cache-Control": "no-store" } });
@@ -131,7 +131,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     return Response.json({clients:clients.results.map(c => ({...c,redirectUris:JSON.parse(c.redirectUris || "[]")}))},{headers:{"Cache-Control":"no-store"}});
   }
 
-  if (["/studio/api/apps","/studio/api/apps/status","/studio/api/sso/oidc"].includes(url.pathname) && request.method === "POST") {
+  if (["/studio/api/apps","/studio/api/apps/status","/studio/api/sso/oidc","/studio/api/sso/token","/studio/api/sso/verify"].includes(url.pathname) && request.method === "POST") {
     if (request.headers.get("Origin") !== issuer.origin ||
         request.headers.get("Sec-Fetch-Site") === "cross-site") return reject(403,"Cross-origin request denied");
     if (request.headers.get("Content-Type")?.split(";")[0] !== "application/json")
@@ -151,7 +151,11 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
           return reject(400,"Explicit confirmation required");
         return Response.json(await setApplicationEnabled(env,body.id,body.enabled,session!.user.id),{headers:{"Cache-Control":"no-store"}});
       }
-      const value=await registerEnterpriseOidc(auth,env,request.headers,body,session!.user.id);
+      const value=url.pathname==="/studio/api/sso/token"
+        ?await requestEnterpriseVerification(auth,env,request.headers,body,session!.user.id)
+        :url.pathname==="/studio/api/sso/verify"
+          ?await verifyEnterpriseDomain(auth,env,request.headers,body,session!.user.id)
+          :await registerEnterpriseOidc(auth,env,request.headers,body,session!.user.id);
       return Response.json(value,{headers:{"Cache-Control":"no-store"}});
     }catch {
       return reject(400,"Operation denied or rejected by identity provider");
