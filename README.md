@@ -43,8 +43,9 @@ One identity provider can serve apps on Cloudflare or elsewhere. Applications ca
 | JWT verification SDK for protected APIs | **Initial implementation** |
 | Cloudflare account/zone/Worker/DNS discovery | **Initial CLI implementation** |
 | Local wizard, dry-run plan, guarded deployment flow | **Initial CLI implementation** |
-| Fully hosted one-click Coworkers-style installer | **Not implemented** |
-| Generated/validated Better Auth database migration | **Not committed; required before deploy** |
+| Hosted Cloudflare OAuth installer | **Login/discovery/preview implemented; publish disabled** |
+| Generated Better Auth + rate-limit migration | **Committed; CI regenerates and verifies** |
+| Node tests + three Worker CI bundles | **Passing in GitHub Actions** |
 | End-to-end protocol/security audit and live deployment | **Not completed** |
 
 No active deployment is claimed.
@@ -57,14 +58,14 @@ Requires **Node.js 22+**. Start by cloning this repository and using the preview
 git clone https://github.com/gmackie/nathan.git
 cd nathan
 git switch feat/bootstrap-blueprint
-npm install
+npm ci
 cp nathan.config.example.json nathan.config.json
 npm test
 npm run plan
 npm run doctor
 ```
 
-The repo is under active development: dependency installation, TypeScript builds, and full Worker integration have not yet been certified. The Node-only unit suite has 14 passing tests as of the latest local verification.
+GitHub Actions installs the pinned lockfile, regenerates and validates the Better Auth schema, runs unit/migration tests, and dry-run bundles the IdP, gateway, and installer Workers. These build checks do not replace Cloudflare staging or end-to-end protocol/security tests.
 
 ```sh
 # Read-only account and DNS discovery when configured
@@ -73,12 +74,21 @@ CLOUDFLARE_API_TOKEN=... npm run plan
 # Interactive setup (local manifest, no infrastructure changes)
 npm run init
 
-# Production rollout intentionally requires additional prerequisites:
+# Display exact Google OAuth instructions and callback URL
+node scripts/nathan.mjs providers guide google
+
+# Identity Worker rollout: staging only until security gates pass
 npm run schema:generate
 node scripts/nathan.mjs deploy --apply
+
+# Promote an existing verified allowlisted admin
+node scripts/nathan.mjs admin promote --apply
+
+# Check and protect a private Worker upstream
+node scripts/nathan.mjs protect dashboard
 ```
 
-**Do not deploy Nathan in production at this stage.** The deployment script refuses to proceed without a reviewed Better Auth migration; it also requires explicit consent and Cloudflare account verification. See [deployment instructions](docs/deploy.md).
+**Do not deploy Nathan in production at this stage.** The deployment script refuses to proceed without the committed Better Auth migration and blocks unverified high-assurance profiles; it also requires explicit consent and Cloudflare account verification. See [deployment instructions](docs/deploy.md).
 
 The intended stable command will eventually be `npx nathan init` with a browser wizard, Cloudflare OAuth, provider-specific instructions and resumable provisioning.
 
@@ -86,6 +96,9 @@ The intended stable command will eventually be `npx nathan init` with a browser 
 
 - [Architecture and trust boundaries](docs/architecture.md)
 - [Deploy and DNS setup](docs/deploy.md)
+- [Hosted installer preview and Cloudflare OAuth](docs/installer.md)
+- [Threat model and operational assumptions](docs/threat-model.md)
+- [Backups, rotation, and incident response](docs/operations.md)
 - [OAuth/OIDC client integration](docs/oidc.md)
 - [Plugin architecture and tiers](docs/plugins.md)
 - [Security design and operational gates](docs/security.md)

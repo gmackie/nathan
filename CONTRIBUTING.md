@@ -4,7 +4,7 @@ Nathan is intended to be an MIT-licensed, customer-owned Cloudflare blueprint. P
 
 ## Local development
 
-Node 22+; copy \`nathan.config.example.json\` to \`nathan.config.json\`; run \`npm install\` and \`npm test\`. You can inspect the proposed infrastructure without Cloudflare credentials using \`npm run plan\`.
+Node 22+; copy `nathan.config.example.json` to `nathan.config.json`; run `npm install` and `npm test`. You can inspect the proposed infrastructure without Cloudflare credentials using `npm run plan`.
 
 Do not put credentials in commits. Do not use test tokens with production IdPs. Never enable public application routes until the origin-bypass threat model has been checked.
 
