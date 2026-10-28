@@ -14,7 +14,7 @@ test("Nathan and Better Auth migrations apply to SQLite without foreign-key erro
   db.exec(migration("migrations/0002_better_auth.sql"));
   db.exec(migration("migrations/0003_security_audit.sql"));
   const names = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r=>r.name);
-  for(const required of ["user","session","oauthClient","jwks","twoFactor","passkey","ssoProvider","nathan_applications","nathan_security_audit"]) {
+  for(const required of ["user","session","oauthClient","jwks","twoFactor","passkey","ssoProvider","nathan_applications","nathan_security_audit","rateLimit"]) {
     assert.ok(names.includes(required), "Missing "+required);
   }
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
