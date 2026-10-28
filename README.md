@@ -30,7 +30,7 @@ flowchart TB
   External["Non-Worker applications"] <-->|"Standard OIDC"| IdP
 ```
 
-One identity provider can serve apps on Cloudflare or elsewhere. Applications can consume Nathan via native Worker bindings, OIDC, or an HTTP gateway. A gateway is **not** proof of security unless every other origin route and preview is closed.
+**One identity provider at \`login.example.com\` can provide SSO for the apex \`example.com\` and every approved subdomain** (including nested subdomains), as well as external applications. Each relying application keeps its own exact callback and host-only session; a user can move across apps via Nathan's existing login session without sharing a risky \`.example.com\` cookie. Applications can consume Nathan via Worker bindings, standard OIDC, or an HTTP gateway. A gateway is **not** proof of security unless every other origin route and preview is closed.
 
 ## What's implemented in the development branch?
 
@@ -51,6 +51,30 @@ One identity provider can serve apps on Cloudflare or elsewhere. Applications ca
 | End-to-end protocol/security audit and live deployment | **Not completed** |
 
 No active deployment is claimed.
+
+## One login for your entire domain
+
+Run Nathan at \`login.<DOMAIN>\` and configure the root and any approved subdomains as relying parties. For example:
+
+| Application | Registered OIDC callback |
+| --- | --- |
+| \`example.com\` | \`https://example.com/auth/callback\` |
+| \`www.example.com\` | \`https://www.example.com/auth/callback\` |
+| \`app.example.com\` | \`https://app.example.com/auth/callback\` |
+| \`admin.example.com\` (gateway) | \`https://admin.example.com/__nathan/callback\` |
+
+\`\`\`sh
+node scripts/nathan.mjs domains overview
+node scripts/nathan.mjs domains discover
+node scripts/nathan.mjs domains callback example.com
+node scripts/nathan.mjs domains callback admin.example.com gateway
+\`\`\`
+
+The Cloudflare wizard discovers existing DNS/Worker custom-domain hostnames. After deploying the IdP, Identity Studio supports individual and **reviewed bulk registration** of root/subdomain OIDC clients, with clients disabled until explicitly enabled. Root and subdomains can authenticate through the same issuer; automatic protection still requires each application to integrate OIDC or be placed behind an isolated Nathan gateway.
+
+Nathan never enables wildcard redirect URIs, parent-domain login cookies, or blanket wildcard Worker Routes on an existing domain.
+
+See the [domain-wide SSO guide](docs/domain-wide-sso.md).
 
 ## Run the guided setup
 
@@ -125,6 +149,7 @@ The intended stable command will eventually be `npx nathan init` with a browser 
 - [Admin MCP setup and tool contracts](docs/mcp.md)
 - [Threat model and operational assumptions](docs/threat-model.md)
 - [Backups, rotation, and incident response](docs/operations.md)
+- [Domain-wide SSO for root and approved subdomains](docs/domain-wide-sso.md)
 - [OAuth/OIDC client integration](docs/oidc.md)
 - [Plugin architecture and tiers](docs/plugins.md)
 - [Security design and operational gates](docs/security.md)

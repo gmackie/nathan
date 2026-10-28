@@ -29,6 +29,18 @@
 - [ ] Attempt to continue another Cloudflare user's job; expect rejection.
 - [ ] Interrupt each stage, retry, and verify no unrelated resources are overwritten or silently adopted.
 
+## Domain-wide SSO acceptance
+
+- [ ] Install the IdP at `login.example.com` and verify its realm row identifies the exact Cloudflare account, active zone and issuer host.
+- [ ] Discover proxied HTTP DNS and Worker Custom Domains. Verify TXT/MX-only, wildcard DNS, `login.example.com` itself and lookalike domains never become suggested clients.
+- [ ] Register `example.com`, `www.example.com` and `app.example.com` through Identity Studio. Confirm each new OAuth client is initially **disabled** with a distinct exact HTTPS callback.
+- [ ] Complete the first root login, then visit subdomain apps and verify the same IdP login is reused without sharing `.example.com` cookies.
+- [ ] Verify an application cannot use another app's OIDC ID Token or callback.
+- [ ] Verify an unregistered subdomain cannot mint OAuth tokens merely because its hostname matches the apex.
+- [ ] Test registration of nested subdomains and reject lookalikes, invalid callbacks, issuer-host registration, and duplicate/partially completed registrations.
+- [ ] Verify a new subdomain can be explicitly onboarded without changing the original IdP's DNS or provider credentials.
+- [ ] Verify domain-wide setup never installs wildcard Worker Routes or changes existing apex/subdomain DNS without explicit operator approval.
+
 ## OIDC/RP acceptance
 
 - [ ] Verify authorize code + S256 PKCE, exact redirect URI and consent flow with a confidential Worker gateway client.

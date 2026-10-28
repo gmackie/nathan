@@ -13,3 +13,7 @@ Client secrets are displayed once. Callback URIs must be exact, HTTPS except exp
 **Assurance limitation:** Better Auth's OAuth Provider currently advertises ACR `0` by default. Nathan must not invent an AAL2 claim because a TOTP or passkey plugin was enabled. High-assurance gateway requests fail closed until real assurance claims are verified.
 
 **Logout:** Gateway code verifies signed OIDC back-channel Logout Tokens and deletes sessions by `sid` or subject. Client registration must enable `backchannel_logout_uri` for the gateway to receive them.
+
+## Domain-wide relying parties
+
+Use one issuer `https://login.example.com/api/auth` for `example.com` and all approved subdomains. Each client must register its own **exact HTTPS callback**, and its authorization is not inherited from the domain or from another RP. See [domain-wide-sso.md](domain-wide-sso.md) and the Identity Studio realm tab. Never use wildcard redirect URLs or a shared `.example.com` session cookie.

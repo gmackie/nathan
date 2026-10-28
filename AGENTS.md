@@ -43,3 +43,11 @@ Regenerate Better Auth schema only when plugin types/versions change; compare th
 ## Release policy
 
 Do not merge a PR as production-ready before staging OIDC flows, self-hosted installation and gateway bypass tests; use draft PRs until deployment verification and independent security review are complete.
+
+## Domain-wide SSO rules
+
+- New domains use one issuer `login.<apex>`, with an optional verified `realm.apex` and a Cloudflare account/zone ownership record.
+- The apex and subdomains become OIDC **clients only by explicit admin registration**, disabled by default. Never auto-authorize based on suffix alone or wildcard redirect URIs.
+- Do not set Better Auth cross-subdomain cookies. OIDC provides SSO without sharing cookie domains.
+- Cloudflare Custom Domains are exact-hostname only; a wildcard Worker Route is an independent, potentially disruptive ingress change and must never be provisioned implicitly for domain-wide SSO.
+- Protect non-OIDC apps through a verified private upstream gateway; DNS discovery is not proof of origin isolation.

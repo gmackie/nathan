@@ -34,7 +34,7 @@ The installer encryption secret is generated locally, never committed. Back it u
 Once hosted, visitors:
 1. Sign in to Cloudflare through OAuth + PKCE.
 2. Select an account and Cloudflare-managed active DNS zone.
-3. Choose IdP Worker name and hostname; enter the Cloudflare identity email for first admin bootstrap.
+3. Choose the IdP Worker and `login.<domain>` hostname; enable domain-wide SSO for the root and approved subdomains. The wizard verifies the managed Cloudflare zone and previews candidate HTTP DNS records and Worker Custom Domains. Enter the Cloudflare identity email for first admin bootstrap.
 4. Follow Google/GitHub OAuth setup instructions. The wizard generates the exact callback URL.
 5. Enter provider client ID and masked secret; optionally enable enterprise SSO.
 6. Choose MFA options; **enforced MFA modes are blocked until full assurance validation**.
@@ -74,3 +74,7 @@ On failures, do not delete D1 databases automatically. Inspect the provisioned i
 ## Production gates
 
 Staging must verify Cloudflare OAuth permissions, D1 API migration transactions, Worker multipart uploads, \`keep_bindings\` preservation, private staging, custom domain TLS, IdP OIDC discovery, Google/GitHub callbacks, SSO/MFA enrollment, session revocation, audit logs and recovery. Passing a build does **not** establish IAM assurance. Follow [roadmap](roadmap.md) and [security requirements](security.md).
+
+## Domain-wide identity rather than wildcard proxy
+
+The issuer remains `https://login.<domain>/api/auth`; the root and each approved subdomain gets its own OIDC client, exact callback and host-only application session. No `.domain` login cookies and no wildcard redirect registration. The installer does not overwrite existing apex/subdomain routes or add a wildcard Worker Route. See [domain-wide-sso.md](domain-wide-sso.md).

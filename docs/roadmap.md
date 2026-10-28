@@ -17,9 +17,13 @@
 - [x] MCP 2026-07-28 read tools and opt-in audited write tools, resource-bound OAuth + current-admin checks.
 - [x] Installer release bundling, hash verification, private upload, migrations, domain/activation and bootstrap workflow.
 - [x] CLI `npm run wizard` and self-hosted installer bootstrap `npm run setup:installer`.
+- [x] Verified `login.<domain>` OIDC realm covering the root and approved subdomains, with strict exact redirects and host-only IdP cookies.
+- [x] Cloudflare proxied-DNS/Worker hostname discovery, safe CLI callback generation, read-only wildcard-route preview.
+- [x] Identity Studio one-at-a-time and reviewed batch realm OIDC client registration, disabled by default, plus read-only MCP realm tools.
 
 ## Required before first actual production-ready release
 
+- [ ] Verify root → nested-subdomain → root SSO against real Cloudflare Workers and non-Workers, including strict per-client audience isolation.
 - [ ] Verify the complete OAuth/OIDC flow with real Cloudflare D1 and Workers.
 - [ ] Test passkey enrollment, TOTP, SSO account linking, account recovery and administrator bootstrap.
 - [ ] Complete the fail-closed provisioning sequence and all gateway deployment workflows.
@@ -39,3 +43,8 @@
 - SCIM ingress/egress and verified enterprise SAML/OIDC provisioning.
 - Authentik-style policy and flow designer.
 - RADIUS/LDAP/SSH/non-HTTP outposts via native edge agents.
+
+## Future optional whole-zone ingress
+
+- [ ] Design an explicitly opt-in, fail-closed `example.com/*` + `*.example.com/*` gateway with a verified upstream map and a login-host exclusion. Domain-wide OIDC alone does not intercept or secure HTTP traffic.
+- [ ] Support high-scale tenant subdomains through an explicitly authorized canonical callback app plus cryptographically bound tenant return state rather than wildcard redirects.
