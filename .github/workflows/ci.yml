@@ -19,7 +19,7 @@ jobs:
       - name: Verify the original naming illustration
         run: echo 'ee83ade5d1023fca1892d0a7c0d86d7348a47b3077106d7f16b97d578f3a9920  assets/naming-origin.png' | sha256sum -c -
       - name: Install dependencies
-        run: npm install --ignore-scripts --no-audit --no-fund
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Archive resolved dependency lockfile
         uses: actions/upload-artifact@v4
         with:
