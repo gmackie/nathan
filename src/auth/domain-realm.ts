@@ -1,5 +1,5 @@
 import type { AuthEnv } from "./env";
-import {assertRealmClientHost,realmCallback,realmIssuerHostname,validateDomainName} from "../shared/realm.mjs";
+import {assertRealmClientHost,realmCallback,realmIssuerHostname,validateDomainName,parseRealmHostSelection} from "../shared/realm.mjs";
 import {audit} from "./admin-service";
 
 export type VerifiedRealm={
@@ -123,4 +123,32 @@ export async function updateRealmClientStatus(env:AuthEnv,clientId:string,disabl
   await env.DB.prepare(
     "UPDATE nathan_realm_clients SET status=?,updated_at=unixepoch() WHERE oauth_client_id=?"
   ).bind(disabled?"disabled":"registered",clientId).run();
+}
+
+/** Batch register only a user-approved finite inventory. Never retry a failed
+ * registration automatically: the provider may have created the client before
+ * the realm link was persisted. All new clients start disabled.
+ */
+export async function registerRealmClientsBatch(auth:any,env:AuthEnv,headers:Headers,input:any,actor:string) {
+  const realm=await loadVerifiedRealm(env);
+  if(!realm)throw Error("Verified domain realm required");
+  if(input?.confirm!=="REGISTER DOMAIN CLIENTS")throw Error("Explicit registration confirmation required");
+  const hosts=parseRealmHostSelection(input.hostnames,realm.apex,realm.issuerHostname,{max:20});
+  // Validate every requested application before starting any write.
+  const configs=hosts.map(hostname=>validateRealmRegistration({
+    hostname,kind:input.kind||"web",callbackPath:input.callbackPath,
+    publicClient:input.publicClient===true
+  },realm));
+  const results:Array<{hostname:string,created:boolean,client?:unknown,error?:string}>=[];
+  for(const item of configs){
+    try{
+      const registered=await registerRealmClient(auth,env,headers,item,actor);
+      results.push({hostname:item.hostname,created:true,client:registered});
+    }catch{
+      results.push({hostname:item.hostname,created:false,error:
+        "Registration failed or requires reconciliation. Inspect domain clients and audit log before retrying."});
+    }
+  }
+  return {realm:realm.apex,requested:configs.length,created:results.filter(r=>r.created).length,results,
+    warning:"Save any one-time confidential client secrets immediately. No application was routed or protected by this operation."};
 }
