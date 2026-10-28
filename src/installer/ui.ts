@@ -1,5 +1,5 @@
 export function installerPage(nonce:string):string{
-  return \`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Nathan • Deploy to Cloudflare</title><style nonce="\${nonce}">
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Nathan • Deploy to Cloudflare</title><style nonce="${nonce}">
   :root{font-family:system-ui,sans-serif;color-scheme:dark}body{background:#11131b;color:#eef2fa;max-width:850px;margin:5vh auto;padding:0 22px}header{display:flex;align-items:center;justify-content:space-between}
   main{background:#1b202e;border:1px solid #384153;border-radius:14px;padding:24px}h1{font-size:32px}h2{margin-top:28px}p,small{color:#bac3d4;line-height:1.5}
   button{background:#f49c34;color:#0d1420;border:0;border-radius:8px;padding:12px 18px;font-weight:600;cursor:pointer}button.secondary{background:#384153;color:#fff}
@@ -19,7 +19,7 @@ export function installerPage(nonce:string):string{
   <pre id="result" aria-live="polite"></pre>
   <h2>Next steps</h2>
   <p>Until hosted publishing is verified, use the <a href="https://github.com/gmackie/nathan/blob/main/docs/deploy.md">Nathan CLI deployment guide</a> and the secure provider setup wizard.</p>
-  </main><script nonce="\${nonce}">
+  </main><script nonce="${nonce}">
     const $=id=>document.getElementById(id);
     async function json(path,options){
       const response=await fetch(path,{credentials:'same-origin',...options});
@@ -63,5 +63,5 @@ export function installerPage(nonce:string):string{
       location.assign('/');
     };
     void load();
-  </script></body></html>\`;
+  </script></body></html>`;
 }
