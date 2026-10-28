@@ -10,7 +10,7 @@ type Identity={id:string;email:string};
 type InstallJob={
   id:string;owner_user_id:string;owner_email:string;account_id:string;zone_id:string;
   hostname:string;worker_name:string;admin_email:string;profile:"standard"|"business";
-  release_id:string;stage:Stage;database_id:string|null;error:string|null;
+  enterprise_sso:number;release_id:string;stage:Stage;database_id:string|null;error:string|null;
   created_at:number;updated_at:number
 };
 type ApiSession={digest:string;tokens:InstallerTokens};
@@ -42,7 +42,7 @@ function next(stage:Stage):Stage {
 }
 function describe(job:InstallJob){
   return {id:job.id,stage:job.stage,status:job.stage==="complete"?"complete":"in_progress",
-    worker:job.worker_name,hostname:job.hostname,adminEmail:job.admin_email,release:job.release_id,
+    worker:job.worker_name,hostname:job.hostname,adminEmail:job.admin_email,release:job.release_id,enterpriseSso:job.enterprise_sso===1,
     url:"https://"+job.hostname,error:job.error,
     steps:STAGES.filter(x=>x!=="complete").map((stage,index)=>({
       stage,status:index<STAGES.indexOf(job.stage)?"done":index===STAGES.indexOf(job.stage)?"next":"pending"
@@ -87,7 +87,10 @@ function parsePlan(input:any){
   const adminEmail=String(input.adminEmail||"").trim().toLowerCase();
   if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(adminEmail)||adminEmail.length>254)
     throw Error("A verified administrator email is required");
-  return {...plan,adminEmail};
+  if(input.enterpriseSSO!==undefined&&typeof input.enterpriseSSO!=="boolean")throw Error("Invalid enterprise SSO setting");
+  if(input.mfaPolicy && input.mfaPolicy!=="optional")
+    throw Error("Enforced MFA is not yet verified for federated logins; choose optional until AAL enforcement is available");
+  return {...plan,adminEmail,enterpriseSSO:Boolean(input.enterpriseSSO)};
 }
 async function fetchJob(env:InstallerEnv,id:string,owner:string):Promise<InstallJob|null> {
   if(!/^[a-f0-9-]{36}$/.test(id))return null;
@@ -115,10 +118,10 @@ export async function createInstall(env:InstallerEnv,session:ApiSession,input:an
   await nameIsFree(api,plan.accountId,plan.name,plan.name+"-db",plan.hostname,zone.id);
   const id=crypto.randomUUID();
   await env.INSTALLER_DB.prepare(
-    "INSERT INTO nathan_install_jobs(id,owner_user_id,owner_email,account_id,zone_id,hostname,worker_name,admin_email,profile,release_id) "+
-    "VALUES (?,?,?,?,?,?,?,?,?,?)"
+    "INSERT INTO nathan_install_jobs(id,owner_user_id,owner_email,account_id,zone_id,hostname,worker_name,admin_email,profile,enterprise_sso,release_id) "+
+    "VALUES (?,?,?,?,?,?,?,?,?,?,?)"
   ).bind(id,user.id,user.email,plan.accountId,zone.id,plan.hostname,plan.name,plan.adminEmail,
-    plan.securityProfile,release.release).run();
+    plan.securityProfile,plan.enterpriseSSO?1:0,release.release).run();
   const created=await fetchJob(env,id,user.id);
   if(!created)throw Error("Installation job was not persisted");
   return describe(created);
@@ -177,7 +180,7 @@ async function uploadWorker(
     {type:"plain_text",name:"NATHAN_INSTALL_ACTIVE",text:active?"true":"false"},
     {type:"plain_text",name:"NATHAN_MCP_WRITE_ENABLED",text:"false"},
     {type:"plain_text",name:"ENABLE_PASSWORD",text:"false"},
-    {type:"plain_text",name:"ENTERPRISE_SSO",text:"false"}
+    {type:"plain_text",name:"ENTERPRISE_SSO",text:job.enterprise_sso===1?"true":"false"}
   ];
   if(provider){
     bindings.push(
