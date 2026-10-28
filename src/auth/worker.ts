@@ -38,7 +38,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     const providers = [];
     if (env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) providers.push("google");
     if (env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET) providers.push("github");
-    return signInPage(providers, env.ENABLE_PASSWORD === "true");
+    return signInPage(providers, env.ENABLE_PASSWORD === "true", env.ENTERPRISE_SSO === "true");
   }
   if (url.pathname === "/consent" && request.method === "GET") {
     const { secret } = await auth.$context;
