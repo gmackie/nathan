@@ -142,7 +142,12 @@ export async function registerRealmClientsBatch(auth:any,env:AuthEnv,headers:Hea
   const results:Array<{hostname:string,created:boolean,client?:unknown,error?:string}>=[];
   for(const item of configs){
     try{
-      const registered=await registerRealmClient(auth,env,headers,item,actor);
+      // Preserve the exact reviewed callback path when passing through the
+      // one-at-a-time registration validator (which otherwise uses its default).
+      const registered=await registerRealmClient(auth,env,headers,{
+        hostname:item.hostname,kind:item.kind,clientName:item.clientName,
+        callbackPath:input.callbackPath,publicClient:item.publicClient
+      },actor);
       results.push({hostname:item.hostname,created:true,client:registered});
     }catch{
       results.push({hostname:item.hostname,created:false,error:

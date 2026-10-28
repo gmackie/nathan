@@ -135,6 +135,8 @@ export async function setOAuthClientDisabledWithMcp(env:AuthEnv,clientId:string,
   const result=await env.DB.prepare('UPDATE "oauthClient" SET "disabled"=? WHERE "clientId"=?')
     .bind(disabled?1:0,clientId).run();
   if(!result.meta?.changes)throw Error("Unknown OAuth client");
+  await env.DB.prepare("UPDATE nathan_realm_clients SET status=?,updated_at=unixepoch() WHERE oauth_client_id=?")
+    .bind(disabled?"disabled":"registered",clientId).run();
   await audit(env,actor,disabled?"oauth_client_disable":"oauth_client_enable",clientId,"succeeded");
   return {clientId,disabled,note:"Existing bearer access tokens may remain valid until expiration; revoke tokens separately if required."};
 }

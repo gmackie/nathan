@@ -28,6 +28,7 @@ test("never allows central issuer itself to register as a relying-party client",
 test("no wildcards, encoded traversal or open redirect callbacks",()=>{
   assert.equal(realmCallback("example.com","example.com","login.example.com"),"https://example.com/auth/callback");
   assert.equal(realmCallback("app.example.com","example.com","login.example.com","gateway"),"https://app.example.com/__nathan/callback");
+  assert.equal(realmCallback("app.example.com","example.com","login.example.com","worker","/oauth/callback"),"https://app.example.com/oauth/callback");
   for(const bad of ["//evil.org","https://evil.org","/cb?redirect=x","/cb#fragment","/cb*","/a/../b","/%2e%2e","/a\\b"]) {
     assert.throws(()=>validateCallbackPath(bad));
   }
