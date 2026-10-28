@@ -5,8 +5,9 @@ import { oauthProvider } from "@better-auth/oauth-provider";
 import { sso } from "@better-auth/sso";
 import { sendAuthEmail } from "./email";
 import type { AuthEnv } from "./env";
+import type { SocialCredentials } from "./provider-store";
 
-export function createAuth(env: AuthEnv) {
+export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredentials) {
   const issuer = new URL(env.NATHAN_ISSUER);
   if (issuer.protocol !== "https:" && issuer.hostname !== "localhost")
     throw new Error("Nathan requires an HTTPS identity hostname");
@@ -39,7 +40,7 @@ export function createAuth(env: AuthEnv) {
       }
     },
     trustedOrigins: [issuer.origin],
-    socialProviders,
+    socialProviders: resolvedSocialProviders ?? socialProviders,
     emailAndPassword: {
       enabled: env.ENABLE_PASSWORD === "true",
       requireEmailVerification: true,

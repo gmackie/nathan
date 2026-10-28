@@ -1,6 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { verifyOAuthQueryParams } from "@better-auth/oauth-provider";
 import { createAuth } from "./instance";
+import { loadSocialCredentials, providerStatus, upsertSocialProvider, setSocialProviderEnabled } from "./provider-store";
 import { signInPage, consentPage, studioPage } from "./ui";
 import { securityPage } from "./security-ui";
 import { loadVerifiedRealm, listRealmClients,registerRealmClient,registerRealmClientsBatch,updateRealmClientStatus } from "./domain-realm";
@@ -29,7 +30,8 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
       url.pathname === "/.well-known/oauth-protected-resource/mcp") {
     return protectedResourceMetadata(env);
   }
-  const auth = createAuth(env);
+  const socialProviders=await loadSocialCredentials(env);
+  const auth = createAuth(env,socialProviders);
   if (url.pathname === "/mcp") return handleMcp(request,env,auth);
   if (url.pathname.startsWith("/api/auth/") || url.pathname.startsWith("/.well-known/")) {
     return auth.handler(request);
@@ -37,8 +39,8 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
   if (url.pathname === "/") return Response.redirect(issuer.origin + "/sign-in", 302);
   if (url.pathname === "/sign-in" && request.method === "GET") {
     const providers = [];
-    if (env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) providers.push("google");
-    if (env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET) providers.push("github");
+    if (socialProviders.google) providers.push("google");
+    if (socialProviders.github) providers.push("github");
     return signInPage(providers, env.ENABLE_PASSWORD === "true", env.ENTERPRISE_SSO === "true");
   }
   if (url.pathname === "/consent" && request.method === "GET") {
@@ -56,16 +58,19 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     if (!isAdmin(session, env)) return reject(403, "Admin session required");
     return studioPage(session!.user.email);
   }
-  if (["/studio/api/clients", "/studio/api/status", "/studio/api/plugins", "/studio/api/audit", "/studio/api/apps", "/studio/api/sso", "/studio/api/users", "/studio/api/realm", "/studio/api/realm/clients"].includes(url.pathname) && request.method === "GET") {
+  if (["/studio/api/clients", "/studio/api/status", "/studio/api/plugins", "/studio/api/audit", "/studio/api/apps", "/studio/api/sso", "/studio/api/users", "/studio/api/realm", "/studio/api/realm/clients", "/studio/api/providers"].includes(url.pathname) && request.method === "GET") {
     const session = await auth.api.getSession({ headers: request.headers });
     if (!isAdmin(session, env)) return reject(403, "Admin session required");
     if (url.pathname === "/studio/api/status") {
       return Response.json({
         issuer: issuer.origin + "/api/auth",
-        providers: {google: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET), github: Boolean(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET)},
+        providers: Object.fromEntries((await providerStatus(env)).map(p=>[p.id,p.enabled])),
         features: {oidcProvider: true, passkeys: true, totp: true, enterpriseSso: env.ENTERPRISE_SSO === "true", password: env.ENABLE_PASSWORD === "true"},
         note: "Authentication assurance level enforcement and guided plugin installation are not yet available"
       }, {headers: {"Cache-Control":"no-store"}});
+    }
+    if (url.pathname === "/studio/api/providers") {
+      return Response.json({providers:await providerStatus(env)}, {headers:{"Cache-Control":"no-store"}});
     }
     if (url.pathname === "/studio/api/realm") {
       try{return Response.json({realm:await loadVerifiedRealm(env)},{headers:{"Cache-Control":"no-store"}})}
@@ -146,6 +151,27 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     }
   }
 
+
+  if(["/studio/api/providers","/studio/api/providers/status"].includes(url.pathname) && request.method==="POST"){
+    if(request.headers.get("Origin")!==issuer.origin ||
+       request.headers.get("Sec-Fetch-Site")==="cross-site")return reject(403,"Cross-origin request denied");
+    if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")
+      return reject(415,"JSON required");
+    const session=await auth.api.getSession({headers:request.headers});
+    if(!isAdminUser(session?.user,env))return reject(403,"Verified administrator required");
+    const raw=await request.text();
+    if(raw.length>16384)return reject(413,"Provider input too large");
+    let input:any;try{input=JSON.parse(raw)}catch{return reject(400,"Invalid JSON")}
+    try{
+      const updated=url.pathname.endsWith("/status")
+        ? await setSocialProviderEnabled(env,input,session!.user.id)
+        : await upsertSocialProvider(env,input,session!.user.id);
+      return Response.json(updated,{headers:{"Cache-Control":"no-store"}});
+    }catch{
+      return reject(409,"Provider update denied. Check configuration encryption key and remaining login/recovery methods.");
+    }
+  }
+
   if (url.pathname === "/studio/api/clients/status" && request.method === "POST") {
     if (request.headers.get("Origin") !== issuer.origin) return reject(403, "Cross-origin request denied");
     if (request.headers.get("Content-Type")?.split(";")[0] !== "application/json") return reject(415, "JSON required");
@@ -205,7 +231,7 @@ export default {
 export class NathanVerifier extends WorkerEntrypoint<AuthEnv> {
   async getPrincipal(cookie: string): Promise<{ sub: string; email: string; role: string } | null> {
     if (typeof cookie !== "string" || cookie.length > 8192) return null;
-    const auth = createAuth(this.env);
+    const auth = createAuth(this.env, await loadSocialCredentials(this.env));
     const session = await auth.api.getSession({ headers: new Headers({ Cookie: cookie }) });
     if (!session?.user?.id) return null;
     return { sub: session.user.id, email: session.user.email, role: (session.user as any).role ?? "user" };

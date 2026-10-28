@@ -152,6 +152,7 @@ async function provision(forceApply=false) {
     const secret = await secretPrompt("BETTER_AUTH_SECRET (blank to generate securely)");
     const value = secret || randomBytes(48).toString("base64url");
     await runCli("npx",["wrangler","secret","put","BETTER_AUTH_SECRET","--config",stagingPath],{input:value});
+    await runCli("npx",["wrangler","secret","put","NATHAN_CONFIG_KEY","--config",stagingPath],{input:randomBytes(32).toString("base64url")});
   }
   // Existing installations retain their current secret, avoiding accidental session invalidation.
   await runCli("npx",["wrangler","deploy","--config",configPath]);
