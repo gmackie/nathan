@@ -105,23 +105,26 @@ async function dashboard(request:Request,env:InstallerEnv){
     const zones=await api<Array<{id:string;name:string;status:string}>>("/zones?account.id="+plan.accountId+"&per_page=100");
     const zone=zones.filter(z=>z.status==="active"&&(plan.hostname===z.name||plan.hostname.endsWith("."+z.name))).sort((a,b)=>b.name.length-a.name.length)[0];
     if(!zone)return error(400,"Identity hostname is not in an accessible active Cloudflare zone");
-    const [workers,databases,dns]=await Promise.all([
+    const [workers,databases,dns,domains]=await Promise.all([
       api<Array<{id:string}>>("/accounts/"+plan.accountId+"/workers/scripts"),
       api<Array<{uuid:string;name:string}>>("/accounts/"+plan.accountId+"/d1/database"),
-      api<Array<{id:string;type:string;name:string}>>("/zones/"+zone.id+"/dns_records?name="+encodeURIComponent(plan.hostname))
+      api<Array<{id:string;type:string;name:string}>>("/zones/"+zone.id+"/dns_records?name="+encodeURIComponent(plan.hostname)),
+      api<Array<{hostname:string;service:string}>>("/accounts/"+plan.accountId+"/workers/domains")
     ]);
     const worker=workers.find(w=>w.id===plan.name),database=databases.find(d=>d.name===plan.name+"-db");
+    const domain=domains.find(d=>d.hostname===plan.hostname);
+    const available=!worker&&!database&&!dns.length&&!domain;
     return Response.json({
       status:"preview-only",
-      publishAvailable:false,
+      publishAvailable:available,
       accountId:plan.accountId,
       zone:zone.name,hostname:plan.hostname,securityProfile:plan.securityProfile,
       resources:[
-        {kind:"worker",name:plan.name,action:worker?"update (requires review)":"create"},
-        {kind:"d1",name:plan.name+"-db",action:database?"reuse":"create"},
-        {kind:"custom-domain",name:plan.hostname,action:dns.length?"CONFLICT: review DNS first":"create"}
+        {kind:"worker",name:plan.name,action:worker?"CONFLICT: Worker already exists":"create"},
+        {kind:"d1",name:plan.name+"-db",action:database?"CONFLICT: D1 name in use":"create"},
+        {kind:"custom-domain",name:plan.hostname,action:dns.length||domain?"CONFLICT: hostname in use":"create"}
       ],
-      warning:"No changes made. Hosted upload, schema migrations and credential installation are not yet enabled."
+      warning:available?"No changes made. Review this plan and select Start deployment to continue.":"No changes made. Resolve all resource conflicts before starting deployment."
     },{headers:{"Cache-Control":"no-store"}});
   }
 
