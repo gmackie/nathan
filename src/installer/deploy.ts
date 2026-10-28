@@ -238,7 +238,8 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
       await ensureMigrations(env,write,release,job);
     }else if(job.stage==="upload"){
       const scripts=await api<Array<{id:string;tags?:string[]}>>("/accounts/"+job.account_id+"/workers/scripts");
-      const existing=scripts.find(s=>s.id===job.worker_name);
+      const workerName=job.worker_name;
+      const existing=scripts.find(s=>s.id===workerName);
       if(existing && (!Array.isArray(existing.tags)||!existing.tags.includes("nathan")))
         throw Error("Worker name was claimed by an unrelated deployment after planning; refusing to overwrite it");
       await uploadWorker(env,write,release,job,false,validateProvider(input));
