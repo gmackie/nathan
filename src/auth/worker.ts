@@ -87,6 +87,6 @@ export class NathanVerifier extends WorkerEntrypoint<AuthEnv> {
       .bind(input.applicationId).first<{ roles: string; enabled: number }>();
     if (!row || row.enabled !== 1) return false;
     const required: unknown = JSON.parse(row.roles);
-    return Array.isArray(required) && required.every(role => role === principal.role);
+    return Array.isArray(required) && required.every(r => typeof r === "string") && (required.length === 0 || required.includes(principal.role));
   }
 }
