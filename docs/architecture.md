@@ -1,44 +1,42 @@
 # Nathan architecture
 
-Nathan's primary product is developer experience. It must offer a guided, resumable path from an existing application to a verified protected application.
+Nathan aims to provide a one-setup customer-owned identity provider and application access system using Better Auth and Cloudflare Workers.
 
-## Trust boundaries
-
-```mermaid
+\`\`\`mermaid
 flowchart TB
-  U[Browser or external OIDC client] --> EDGE[Cloudflare TLS + DNS]
-  EDGE --> GW[Nathan gateway / app guard]
-  EDGE --> IDP[Auth Worker: Better Auth + OIDC issuer]
-  GW -->|Scoped service binding| IDP
-  GW -->|Private UPSTREAM service binding| APP[Application Worker]
-  IDP --> DB[(D1: credentials and registration)]
-  IDP <--> EXT[Google / GitHub / enterprise IdPs]
-  ADMIN[Identity Studio] -->|Privileged APIs| IDP
-```
+  B[Browser / CLI / mobile / external OIDC client] --> CF[Cloudflare DNS + TLS]
+  CF --> IDP[Nathan Identity Worker / Better Auth]
+  CF --> GW[Nathan Gateway Worker]
+  GW -->|private service binding| APP[Private upstream Worker]
+  IDP --> D1[(D1 identity + OAuth registry)]
+  GW --> D1G[(Separate D1 gateway sessions)]
+  GW <-->|OIDC authorization-code + PKCE| IDP
+  IDP <-->|OIDC / SAML federation| EXT[Upstream external IdPs]
+  STUDIO[Identity Studio / Admin] --> IDP
+\`\`\`
 
-## Responsibilities
+## Identity Provider
 
-- **Identity Worker:** Better Auth runtime, user identity and sessions, OIDC authorization server, JWKS, token issuance, provider federation and plugin registration.
-- **Registry:** Registered apps and OAuth clients; separate records for upstream IdPs vs downstream relying parties. Use the Better Auth protocol store as source of truth where possible.
-- **Gateway:** Fail-closed OIDC login, callback, application session, per-request authorization. Reject forged identity headers; no upstream bypass.
-- **SDK:** Hono/Workers/Effect middleware, exact issuer and audience verification, typed principal, privileged-action step-up.
-- **CLI and hosted installer:** Account discovery, custom domains, OAuth guides and masked secret input, explicit plan/diff, idempotent reconciliation, rollback/resume.
-- **Identity Studio:** Configuration via validated schemas with explicit compile-time vs runtime settings; privileged operations require re-authentication and audit.
+The identity Worker instantiates Better Auth inside the request using a D1 binding and installs the Better Auth OAuth Provider, JWT, organizations, admin, passkey and TOTP plugins, plus optional enterprise SSO. It exposes standard discovery metadata and OIDC clients independent of application location. Enterprise SAML consumption is distinct from acting as a downstream SAML identity provider.
 
-## Client types
+Admin registration is restricted to verified Better Auth admin users whose email is separately allowlisted in deploy secrets/configuration. No unprotected bootstrap API is exposed.
 
-1. Native Worker protected by a service-binding guard (OIDC client optional).
-2. Worker with dedicated gateway + private upstream service binding (OIDC client).
-3. External web/mobile application using standards-based OIDC.
-4. External legacy HTTP origin through a gateway, provided bypass is prevented.
-5. Non-HTTP protocol outpost via separate edge agent (future).
+## Gateway
 
-## First release boundary
+Browser requests first hit the gateway. It performs OIDC code + PKCE with a nonce and a short-lived AES-GCM-encrypted flow cookie. It validates ID token issuer, audience, nonce, signature and authentication assurance, then issues a random opaque host-only session cookie. Session handles are SHA-256-hashed in a per-gateway D1 database, and every request checks expiration and current session existence. Requests with no valid session receive 401 or an interactive redirect. Incoming identity headers are removed before forwarding to the private upstream Worker.
 
-A deployable Better Auth identity Worker with D1 and a documented manual configuration path must precede automated cloud deployment. The planner in this repository **only reads local files** and currently does not deploy anything.
+**Important:** Gateway ID tokens do not currently prove NIST AAL2. Better Auth's OAuth Provider advertises \`acr: "0"\` by default. If an application requires AAL2, its gateway must fail closed until an assurance-capable upstream implementation is verified.
 
-No production readiness claim until E2E OIDC, MFA, revocation, origin bypass, signing key lifecycle, session recovery and incident response are validated.
+## Native Worker SDK
 
-## Coworkers inspiration
+A Worker can use JWT bearer verification for protected APIs. Tokens must be resource-bound (\`aud\`) and verified using Nathan's JWKS, not trusted based on headers. Service-binding RPC is available for session verification in same-account Workers. Application permissions remain application-specific.
 
-[Coworkers](https://github.com/fayazara/coworkers) separates the deployable Worker release from a Cloudflare OAuth-powered installer, with a resumable workflow. Nathan should adopt that pattern while requesting the narrowest sufficient scopes, protecting installer tokens at rest, and showing every resource modification before applying it.
+## Infrastructure and ownership
+
+Default: identity Worker + D1 + custom auth hostname. Optional gateways: one Worker and one D1 per protected origin. Optional email: Resend API (or future adapter). Resource bindings are customer-owned. Prefer Cloudflare Custom Domains to hand-creating DNS records. External domains require no DNS changes when integrating as OIDC clients.
+
+## Deployment and plugins
+
+The local CLI discovers account and zone resources with Cloudflare's API, validates configuration, computes a read-only plan, and requires explicit confirmation before deployment. The hosted Coworkers-style installer, production reconciler, managed plugin catalog/UI, and external policy engine are roadmap items.
+
+Plugin code executes in the IdP's trust boundary: arbitrary third-party hooks cannot safely be sandboxed merely through a UI manifest.

@@ -5,7 +5,9 @@ node_modules/
 .env
 .env.*
 !.env.example
-.nathan/state.json
+nathan.config.json
+.nathan/
 .wrangler/
 dist/
 coverage/
+*.log
