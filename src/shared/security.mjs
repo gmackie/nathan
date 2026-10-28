@@ -17,6 +17,7 @@ export function parseCookie(header, key) {
   }
   return null;
 }
+/** @param {string} name @param {string} value @param {{ maxAge?: number, deleteCookie?: boolean }} [options] */
 export function makeCookie(name, value, { maxAge, deleteCookie = false } = {}) {
   if (!/^__Host-[A-Za-z0-9_-]+$/.test(name)) throw Error("Only __Host- cookies allowed");
   if (!/^[A-Za-z0-9_-]*$/.test(value)) throw Error("Unsafe cookie value");

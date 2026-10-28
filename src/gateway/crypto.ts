@@ -24,7 +24,9 @@ export async function pkceChallenge(verifier: string) {
 async function key(encoded: string): Promise<CryptoKey> {
   const raw = fromBase64Url(encoded);
   if (raw.byteLength !== 32) throw new Error("SESSION_ENCRYPTION_KEY must be 32 random bytes base64url");
-  return crypto.subtle.importKey("raw", raw, "AES-GCM", false, ["encrypt", "decrypt"]);
+  const bytes = new Uint8Array(new ArrayBuffer(32));
+  bytes.set(raw);
+  return crypto.subtle.importKey("raw", bytes, "AES-GCM", false, ["encrypt", "decrypt"]);
 }
 export async function seal(value: unknown, secret: string): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
