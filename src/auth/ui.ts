@@ -120,7 +120,19 @@ export function studioPage(userEmail: string): Response {
   <label>Client name<input id="name" placeholder="My application"></label>
   <label>Exact HTTPS redirect URI<input id="redirect" placeholder="https://app.example.com/oauth/callback"></label><label>Client type<select id="kind"><option value="external">External web app</option><option value="worker">Cloudflare Worker</option><option value="gateway">Nathan gateway</option><option value="mcp">MCP administrator</option></select></label><label><input type="checkbox" id="public-client"> Public OIDC client (PKCE, no secret)</label>
   <button id="create">Register client</button><p id="status" role="alert"></p><pre id="result"></pre>
-  <p><small>Client secrets are shown once. Store them in a secure manager.</small></p><h2>Registered applications</h2><button class="secondary" id="refresh">Refresh registered clients</button><pre id="clients" aria-live="polite"></pre><h3>Disable or resume OIDC client</h3><label>Client ID<input id="manage-client" placeholder="OIDC client_id"></label><button class="secondary" id="disable-client">Disable</button><button class="secondary" id="enable-client">Re-enable</button><p id="manage-status" role="status"></p><h2>Identity providers and security posture</h2><button class="secondary" id="status-btn">View active capabilities</button><pre id="capabilities"></pre><h2>Available plugins</h2><p>Catalog entries are read-only until their packages and database migrations are reviewed and deployed.</p><select id="plugin-tier"><option value="all">All tiers</option><option value="verified">Verified candidates</option><option value="community">Community</option><option value="custom">Private/custom</option></select><button class="secondary" id="plugins-btn">List integrations</button><pre id="plugins"></pre><h2>Security audit events</h2><button class="secondary" id="audit-btn">Refresh security audit</button><pre id="audit"></pre>
+  <p><small>Client secrets are shown once. Store them in a secure manager.</small></p><h2>Registered applications</h2><button class="secondary" id="refresh">Refresh registered clients</button><pre id="clients" aria-live="polite"></pre><h3>Disable or resume OIDC client</h3><label>Client ID<input id="manage-client" placeholder="OIDC client_id"></label><button class="secondary" id="disable-client">Disable</button><button class="secondary" id="enable-client">Re-enable</button><p id="manage-status" role="status"></p><h2>Social OAuth providers</h2>
+  <p>Add or rotate Google and GitHub credentials without redeploying. Secrets are encrypted inside the customer-owned D1 database and are never returned by the admin API. Keep another tested login method before disabling your last provider.</p>
+  <button class="secondary" id="social-list">Refresh OAuth providers</button><pre id="social-list-result"></pre>
+  <label>Provider<select id="social-provider"><option value="google">Google</option><option value="github">GitHub</option></select></label>
+  <p id="social-guide"></p><a id="social-console" target="_blank" rel="noopener noreferrer" href="https://console.cloud.google.com/auth/clients">Open provider console</a>
+  <p>Authorized redirect URI:</p><pre id="social-callback"></pre><button class="secondary" id="social-copy">Copy callback URL</button>
+  <label>Client ID<input id="social-client-id" placeholder="Paste OAuth client ID" autocomplete="off"></label>
+  <label>Client secret<input id="social-secret" type="password" placeholder="Paste OAuth client secret" autocomplete="new-password"></label>
+  <button id="social-save">Save / rotate encrypted credentials</button>
+  <button class="secondary" id="social-enable">Enable provider</button>
+  <button class="secondary" id="social-disable">Disable provider</button>
+  <p id="social-result" role="status"></p>
+  <h2>Identity providers and security posture</h2><button class="secondary" id="status-btn">View active capabilities</button><pre id="capabilities"></pre><h2>Available plugins</h2><p>Catalog entries are read-only until their packages and database migrations are reviewed and deployed.</p><select id="plugin-tier"><option value="all">All tiers</option><option value="verified">Verified candidates</option><option value="community">Community</option><option value="custom">Private/custom</option></select><button class="secondary" id="plugins-btn">List integrations</button><pre id="plugins"></pre><h2>Security audit events</h2><button class="secondary" id="audit-btn">Refresh security audit</button><pre id="audit"></pre>
   <h2>Users</h2><p>Read-only directory of recent accounts. Passwords, credentials and session values are never returned.</p>
   <button class="secondary" id="users-list">Refresh users</button><pre id="users-results"></pre>
   <h2>Domain-wide SSO</h2>
@@ -165,6 +177,53 @@ export function studioPage(userEmail: string): Response {
       const r=await fetch('/studio/api/clients',{credentials:'same-origin'});const d=await r.json();
       document.getElementById('clients').textContent=r.ok?JSON.stringify(d,null,2):'Unable to load clients';
     };
+
+    const socialInfo={
+      google:{url:'https://console.cloud.google.com/auth/clients',guide:'Create a Google Cloud Web OAuth client, configure the consent screen, and add the exact callback URL.'},
+      github:{url:'https://github.com/settings/developers',guide:'In GitHub Developer Settings create an OAuth App and paste the exact authorization callback URL.'}
+    };
+    function updateSocialGuide(){
+      const id=document.getElementById('social-provider').value;
+      document.getElementById('social-console').href=socialInfo[id].url;
+      document.getElementById('social-guide').textContent=socialInfo[id].guide;
+      document.getElementById('social-callback').textContent=location.origin+'/api/auth/callback/'+id;
+    }
+    document.getElementById('social-provider').onchange=updateSocialGuide;
+    updateSocialGuide();
+    document.getElementById('social-copy').onclick=()=>navigator.clipboard.writeText(
+      document.getElementById('social-callback').textContent);
+    document.getElementById('social-list').onclick=async()=>{
+      const out=document.getElementById('social-list-result');
+      try{out.textContent=JSON.stringify((await j('/studio/api/providers')).providers,null,2)}
+      catch(e){out.textContent=e.message}
+    };
+    document.getElementById('social-save').onclick=async()=>{
+      const out=document.getElementById('social-result');
+      if(!confirm('Store these OAuth credentials in your encrypted Nathan configuration?'))return;
+      try{
+        const value=await postJson('/studio/api/providers',{
+          id:document.getElementById('social-provider').value,
+          clientId:document.getElementById('social-client-id').value,
+          clientSecret:document.getElementById('social-secret').value
+        });
+        document.getElementById('social-secret').value='';
+        out.textContent=JSON.stringify(value);
+        document.getElementById('social-list').click();
+      }catch(e){out.textContent=e.message}
+    };
+    async function setSocial(enabled){
+      const id=document.getElementById('social-provider').value;
+      const conf='CONFIRM '+(enabled?'ENABLE ':'DISABLE ')+id;
+      if(!confirm('Change OAuth provider '+id+' to '+(enabled?'enabled':'disabled')+'?'))return;
+      try{
+        const value=await postJson('/studio/api/providers/status',{id,enabled,confirm:conf});
+        document.getElementById('social-result').textContent=JSON.stringify(value);
+        document.getElementById('social-list').click();
+      }catch(e){document.getElementById('social-result').textContent=e.message}
+    }
+    document.getElementById('social-enable').onclick=()=>setSocial(true);
+    document.getElementById('social-disable').onclick=()=>setSocial(false);
+
     document.getElementById('status-btn').onclick=async()=>{
       const r=await fetch('/studio/api/status',{credentials:'same-origin'});const d=await r.json();
       document.getElementById('capabilities').textContent=r.ok?JSON.stringify(d,null,2):'Unavailable';
