@@ -7,6 +7,7 @@ export const READ_TOOLS = Object.freeze([
   { name: "nathan_realm_status", title: "Domain-wide SSO", description: "Read verified base domain, central issuer and coverage", inputSchema:{type:"object",properties:{},additionalProperties:false}, annotations:{readOnlyHint:true} },
   { name: "nathan_realm_clients_list", title: "Registered domain clients", description: "List approved, exact-host OIDC clients without secrets", inputSchema:{type:"object",properties:{},additionalProperties:false}, annotations:{readOnlyHint:true} },
   { name: "nathan_apps_list", title: "Protected applications", description: "List configured gateways and authorization policies", inputSchema:{type:"object",properties:{},additionalProperties:false},annotations:{readOnlyHint:true} },
+  { name: "nathan_scim_list", title:"SCIM directory connections", description:"List staged directory connections without bearer tokens", inputSchema:{type:"object",properties:{},additionalProperties:false},annotations:{readOnlyHint:true} },
   { name: "nathan_sso_list", title: "Enterprise SSO", description: "List upstream OIDC/SAML registrations with secrets redacted", inputSchema:{type:"object",properties:{},additionalProperties:false},annotations:{readOnlyHint:true} },
   { name: "nathan_audit_recent", title: "Recent security events", description: "List the last 75 security audit events", inputSchema:{type:"object",properties:{},additionalProperties:false},annotations:{readOnlyHint:true} }
 ]);

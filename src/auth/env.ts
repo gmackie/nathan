@@ -1,5 +1,6 @@
 export interface AuthEnv {
   DB: D1Database;
+  SCIM_DIRECTORY?: DurableObjectNamespace;
   NATHAN_INSTALL_ACTIVE?: string;
   NATHAN_MCP_WRITE_ENABLED?: string;
   BETTER_AUTH_SECRET: string;

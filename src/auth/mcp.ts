@@ -1,6 +1,7 @@
 import { createLocalJWKSet, jwtVerify } from "jose";
 import type { AuthEnv } from "./env";
 import {mayAdminister} from "./bootstrap";
+import {listScimConnections} from "./scim/admin";
 import { isAdminUser, listClients, listApplications, listSso, listUsers, recentAudit,
   setApplicationEnabled, setOAuthClientDisabledWithMcp, audit } from "./admin-service";
 import {loadVerifiedRealm,listRealmClients} from "./domain-realm";
@@ -92,6 +93,7 @@ async function executeTool(name:string,args:Record<string,any>,env:AuthEnv,auth:
   if(name==="nathan_realm_clients_list")return await listRealmClients(env);
   if(name==="nathan_apps_list")return {applications:await listApplications(env)};
   if(name==="nathan_sso_list")return {providers:await listSso(env)};
+  if(name==="nathan_scim_list")return {connections:await listScimConnections(env)};
   if(name==="nathan_audit_recent")return {events:await recentAudit(env)};
   if(isWriteTool(name)){
     if(!await checkWritePrivilege(env,principal))throw Error("Write tools require explicit server enablement, nathan:admin scope and a live session");

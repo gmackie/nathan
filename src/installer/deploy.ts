@@ -143,7 +143,7 @@ async function ensureMigrations(env:InstallerEnv,write:Write,release:NathanRelea
   await query(write,job,
     "CREATE TABLE IF NOT EXISTS nathan_release_migrations(name TEXT PRIMARY KEY,sha256 TEXT NOT NULL,applied_at INTEGER NOT NULL DEFAULT (unixepoch()))");
   const migrations=release.files.filter(f=>f.type==="migration").sort((a,b)=>a.name.localeCompare(b.name));
-  if(migrations.length<6)throw Error("Release is missing identity, realm or control-plane migrations");
+  if(migrations.length<7)throw Error("Release is missing required identity, realm, SCIM and control-plane migrations");
   for(const item of migrations){
     const prev=await query(write,job,"SELECT sha256 FROM nathan_release_migrations WHERE name=?",[item.name]);
     if(prev.length){
@@ -172,11 +172,12 @@ function validateProvider(payload:any) {
 }
 async function uploadWorker(
   env:InstallerEnv,write:Write,release:NathanRelease,job:InstallJob,active:boolean,
-  provider?:ReturnType<typeof validateProvider>, configKey?:string
+  provider?:ReturnType<typeof validateProvider>, configKey?:string, firstDeploy=false
 ){
   if(!job.database_id)throw Error("Database ID missing");
   const bindings:any[]=[
     {type:"d1",name:"DB",id:job.database_id},
+    {type:"durable_object_namespace",name:"SCIM_DIRECTORY",class_name:"NathanScimDirectory"},
     {type:"plain_text",name:"NATHAN_ISSUER",text:"https://"+job.hostname},
     {type:"plain_text",name:"NATHAN_REALM_APEX",text:job.realm_apex||""},
     {type:"plain_text",name:"NATHAN_ADMIN_EMAILS",text:job.admin_email},
@@ -201,6 +202,7 @@ async function uploadWorker(
     observability:release.worker.observability,
     bindings,
     tags:["nathan"],
+    ...(firstDeploy?{migrations:{new_tag:"nathan-scim-v1",steps:[{new_sqlite_classes:["NathanScimDirectory"]}]}}:{}),
     ...(provider?{}:{keep_bindings:["secret_text"]}),
     annotations:{"workers/message":"nathan "+release.release+" "+(active?"activate":"private install")}
   };
@@ -269,7 +271,7 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
       // This inactive IdP can be retried safely before the public route exists.
       const configKey=generateConfigKey();
       const cipher=await encryptProviderSecret(initialProvider.name,initialProvider.secret,configKey);
-      const scripts=await api<Array<{id:string;tags?:string[]}>>("/accounts/"+job.account_id+"/workers/scripts");
+      const scripts=await api<Array<{id:string;tags?:string[];migration_tag?:string}>>("/accounts/"+job.account_id+"/workers/scripts");
       const workerName=job.worker_name;
       const existing=scripts.find(s=>s.id===workerName);
       if(existing && (!Array.isArray(existing.tags)||!existing.tags.includes("nathan")))
@@ -279,7 +281,7 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
         "VALUES (?,?,?,1,?) ON CONFLICT(id) DO UPDATE SET client_id=excluded.client_id,"+
         "secret_cipher=excluded.secret_cipher,enabled=1,updated_at=unixepoch(),updated_by=excluded.updated_by",
         [initialProvider.name,initialProvider.id,cipher,"installer:"+user.id]);
-      await uploadWorker(env,write,release,job,false,initialProvider,configKey);
+      await uploadWorker(env,write,release,job,false,initialProvider,configKey,!existing?.migration_tag);
       // An uploaded Worker must never be reachable at workers.dev or preview URLs.
       await write("POST","/accounts/"+job.account_id+"/workers/scripts/"+job.worker_name+"/subdomain",
         {enabled:false,previews_enabled:false});

@@ -3,6 +3,9 @@ import { verifyOAuthQueryParams } from "@better-auth/oauth-provider";
 import { createAuth } from "./instance";
 import { loadSocialCredentials, providerStatus, upsertSocialProvider, setSocialProviderEnabled } from "./provider-store";
 import {bootstrapStatus,completeBootstrap,mayAdminister} from "./bootstrap";
+import {handleScim} from "./scim/gateway";
+import {listScimConnections,createScimConnection,setScimConnectionEnabled,rotateScimToken} from "./scim/admin";
+export {NathanScimDirectory} from "./scim/directory";
 import { signInPage, consentPage, studioPage } from "./ui";
 import { securityPage } from "./security-ui";
 import { loadVerifiedRealm, listRealmClients,registerRealmClient,registerRealmClientsBatch,updateRealmClientStatus } from "./domain-realm";
@@ -31,6 +34,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
       url.pathname === "/.well-known/oauth-protected-resource/mcp") {
     return protectedResourceMetadata(env);
   }
+  if(url.pathname.startsWith("/scim/v2/"))return handleScim(request,env);
   const socialProviders=await loadSocialCredentials(env);
   const auth = createAuth(env,socialProviders);
   if (url.pathname === "/mcp") return handleMcp(request,env,auth);
@@ -76,16 +80,19 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     if (!await mayAdminister(env,session!.user.id)) return Response.redirect(issuer.origin+"/security?setup=admin",302);
     return studioPage(session!.user.email);
   }
-  if (["/studio/api/clients", "/studio/api/status", "/studio/api/plugins", "/studio/api/audit", "/studio/api/apps", "/studio/api/sso", "/studio/api/users", "/studio/api/realm", "/studio/api/realm/clients", "/studio/api/providers"].includes(url.pathname) && request.method === "GET") {
+  if (["/studio/api/clients", "/studio/api/status", "/studio/api/plugins", "/studio/api/audit", "/studio/api/apps", "/studio/api/sso", "/studio/api/users", "/studio/api/realm", "/studio/api/realm/clients", "/studio/api/providers", "/studio/api/scim/connections"].includes(url.pathname) && request.method === "GET") {
     const session = await auth.api.getSession({ headers: request.headers });
     if (!isAdmin(session, env) || !await mayAdminister(env,session!.user.id)) return reject(403, "Admin enrollment incomplete");
     if (url.pathname === "/studio/api/status") {
       return Response.json({
         issuer: issuer.origin + "/api/auth",
         providers: Object.fromEntries((await providerStatus(env)).map(p=>[p.id,p.enabled])),
-        features: {oidcProvider: true, passkeys: true, totp: true, enterpriseSso: env.ENTERPRISE_SSO === "true", password: env.ENABLE_PASSWORD === "true"},
+        features: {oidcProvider: true, passkeys: true, totp: true, enterpriseSso: env.ENTERPRISE_SSO === "true", password: env.ENABLE_PASSWORD === "true", scimDirectory: Boolean(env.SCIM_DIRECTORY)},
         note: "Authentication assurance level enforcement and guided plugin installation are not yet available"
       }, {headers: {"Cache-Control":"no-store"}});
+    }
+    if (url.pathname === "/studio/api/scim/connections") {
+      return Response.json({connections:await listScimConnections(env)},{headers:{"Cache-Control":"no-store"}});
     }
     if (url.pathname === "/studio/api/providers") {
       return Response.json({providers:await providerStatus(env)}, {headers:{"Cache-Control":"no-store"}});
@@ -187,6 +194,30 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
       return Response.json(updated,{headers:{"Cache-Control":"no-store"}});
     }catch{
       return reject(409,"Provider update denied. Check configuration encryption key and remaining login/recovery methods.");
+    }
+  }
+
+
+  if(["/studio/api/scim/connections","/studio/api/scim/status","/studio/api/scim/rotate"].includes(url.pathname)&&request.method==="POST"){
+    if(request.headers.get("Origin")!==issuer.origin ||
+       request.headers.get("Sec-Fetch-Site")==="cross-site")return reject(403,"Cross-origin request denied");
+    if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")
+      return reject(415,"JSON required");
+    const session=await auth.api.getSession({headers:request.headers});
+    if(!isAdminUser(session?.user,env) || !await mayAdminister(env,session!.user.id))
+      return reject(403,"Verified administrator with completed enrollment required");
+    const raw=await request.text();
+    if(raw.length>16384)return reject(413,"SCIM configuration too large");
+    let body:any;try{body=JSON.parse(raw)}catch{return reject(400,"Invalid JSON")}
+    try{
+      const result=url.pathname.endsWith("/status")
+        ?await setScimConnectionEnabled(env,body,session!.user.id)
+        :url.pathname.endsWith("/rotate")
+          ?await rotateScimToken(env,body,session!.user.id)
+          :await createScimConnection(env,body,session!.user.id);
+      return Response.json(result,{headers:{"Cache-Control":"no-store"}});
+    }catch{
+      return reject(409,"SCIM change rejected. Verify connection name, server binding and explicit confirmation.");
     }
   }
 
