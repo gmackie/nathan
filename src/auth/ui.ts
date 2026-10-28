@@ -163,6 +163,21 @@ export function studioPage(userEmail: string): Response {
   <label>Application ID<input id="app-toggle-id"></label>
   <button class="secondary" id="app-enable">Enable</button>
   <button class="secondary" id="app-disable">Disable</button><p id="app-status" role="status"></p>
+  <h2>SCIM directory connections</h2>
+  <p>Nathan can receive SCIM 2.0 directory Users/Groups into a transactional, per-connection Durable Object. This initial <strong>directory-only</strong> mode does not automatically create Better Auth login accounts, revoke sessions or grant roles. Configure and review any lifecycle projection before relying on SCIM for access control.</p>
+  <label>Connection ID<input id="scim-id" placeholder="acme-workforce"></label>
+  <label>Directory email domain<input id="scim-domain" placeholder="acme.example"></label>
+  <label>Organization ID (optional)<input id="scim-org" placeholder="org_..."></label>
+  <button id="scim-create">Create directory connection</button>
+  <p class="hint">The bearer token appears exactly once after creation or rotation. Copy it to a secrets manager and to your directory provider.</p>
+  <pre id="scim-credential-result"></pre>
+  <button class="secondary" id="scim-refresh">Refresh connections</button>
+  <pre id="scim-connections"></pre>
+  <label>Connection ID to manage<input id="scim-manage-id" placeholder="acme-workforce"></label>
+  <button class="secondary" id="scim-enable">Enable connection</button>
+  <button class="secondary" id="scim-disable">Disable connection</button>
+  <button class="secondary" id="scim-rotate">Rotate bearer token</button>
+  <p id="scim-status" role="status"></p>
   <h2>Enterprise SSO</h2><p>Register an upstream corporate OIDC provider. Nathan remains the downstream OIDC issuer.</p>
   <label>Provider ID<input id="sso-id" placeholder="acme-entra"></label>
   <label>Corporate email domain<input id="sso-domain" placeholder="acme.example"></label>
@@ -331,6 +346,47 @@ export function studioPage(userEmail: string): Response {
     }
     document.getElementById('app-enable').onclick=()=>toggleApp(true);
     document.getElementById('app-disable').onclick=()=>toggleApp(false);
+
+    document.getElementById('scim-create').onclick=async()=>{
+      const out=document.getElementById('scim-credential-result');
+      if(!confirm('Create a disabled SCIM connection and issue a one-time bearer credential?'))return;
+      try{
+        const result=await postJson('/studio/api/scim/connections',{
+          id:document.getElementById('scim-id').value,
+          domain:document.getElementById('scim-domain').value,
+          ...(document.getElementById('scim-org').value?
+            {organizationId:document.getElementById('scim-org').value}: {})
+        });
+        out.textContent=JSON.stringify(result,null,2);
+        document.getElementById('scim-manage-id').value=result.id;
+        document.getElementById('scim-refresh').click();
+      }catch(e){out.textContent=e.message}
+    };
+    document.getElementById('scim-refresh').onclick=async()=>{
+      const out=document.getElementById('scim-connections');
+      try{out.textContent=JSON.stringify((await j('/studio/api/scim/connections')).connections,null,2)}
+      catch(e){out.textContent=e.message}
+    };
+    async function manageScim(action){
+      const id=document.getElementById('scim-manage-id').value,
+        out=document.getElementById('scim-status'),
+        result=document.getElementById('scim-credential-result');
+      if(!id)return;
+      const token=action==='rotate'?'CONFIRM ROTATE '+id:
+        'CONFIRM '+(action==='enable'?'ENABLE ':'DISABLE ')+id;
+      if(!confirm('Apply '+action+' to SCIM directory connection '+id+'?'))return;
+      try{
+        const value=await postJson(action==='rotate'?'/studio/api/scim/rotate':'/studio/api/scim/status',
+          {id,...(action==='rotate'?{}:{enabled:action==='enable'}),confirm:token});
+        out.textContent='SCIM connection '+action+' succeeded';
+        if(value.bearerToken)result.textContent=JSON.stringify(value,null,2);
+        document.getElementById('scim-refresh').click();
+      }catch(e){out.textContent=e.message}
+    }
+    document.getElementById('scim-enable').onclick=()=>manageScim('enable');
+    document.getElementById('scim-disable').onclick=()=>manageScim('disable');
+    document.getElementById('scim-rotate').onclick=()=>manageScim('rotate');
+
     document.getElementById('sso-register').onclick=async()=>{
       const out=document.getElementById('sso-status');
       try{const value=await postJson('/studio/api/sso/oidc',{
