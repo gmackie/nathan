@@ -24,7 +24,7 @@ export async function listApplications(env:AuthEnv) {
   return rows.results.map(x=>({...x,roles:JSON.parse(x.roles||"[]")}));
 }
 export async function listSso(env:AuthEnv) {
-  const rows=await env.DB.prepare('SELECT "providerId" AS id, "issuer" AS issuer, "domain" AS domain, "organizationId" AS organizationId, "oidcConfig" IS NOT NULL AS oidc, "samlConfig" IS NOT NULL AS saml FROM "ssoProvider" ORDER BY "providerId" LIMIT 100')
+  const rows=await env.DB.prepare('SELECT "providerId" AS id, "issuer" AS issuer, "domain" AS domain, "organizationId" AS organizationId, "oidcConfig" IS NOT NULL AS oidc, "samlConfig" IS NOT NULL AS saml, "domainVerified" AS domainVerified FROM "ssoProvider" ORDER BY "providerId" LIMIT 100')
     .all();
   return rows.results;
 }
@@ -122,7 +122,15 @@ export async function registerEnterpriseOidc(auth:any,env:AuthEnv,headers:Header
         oidcConfig:{clientId:input.clientId,clientSecret:input.clientSecret,pkce:true}}
     });
     await audit(env,actor,"enterprise_sso_register",input.providerId,"succeeded");
-    return {registered:true,providerId:input.providerId,callback:new URL("/api/auth/sso/callback/"+input.providerId,env.NATHAN_ISSUER).href};
+    const token=typeof (result as any)?.domainVerificationToken==="string"
+      ?(result as any).domainVerificationToken:null;
+    return {registered:true,providerId:input.providerId,
+      callback:new URL("/api/auth/sso/callback/"+input.providerId,env.NATHAN_ISSUER).href,
+      domainVerified:false,
+      verification:{txtHost:"_better-auth-token-"+input.providerId+"."+input.domain,
+        ...(token?{txtValue:token}:{}),note:token
+          ?"Publish this TXT record under the enterprise-owned DNS zone, then verify."
+          :"Request a new domain verification token from Identity Studio."}};
   } catch(e) {
     await audit(env,actor,"enterprise_sso_register",input.providerId,"failed");
     throw e;
@@ -147,4 +155,54 @@ export async function listUsers(env:AuthEnv) {
     'SELECT "id","name","email","emailVerified","role","banned","createdAt" FROM "user" ORDER BY "createdAt" DESC LIMIT 100'
   ).all();
   return rows.results;
+}
+
+function validatedProviderId(value:any):string{
+  if(typeof value!=="string" || !/^[a-z][a-z0-9-]{1,62}$/.test(value))
+    throw Error("Invalid enterprise provider ID");
+  return value;
+}
+export async function requestEnterpriseVerification(auth:any,env:AuthEnv,headers:Headers,input:any,actor:string){
+  const id=validatedProviderId(input?.providerId);
+  if(env.ENTERPRISE_SSO!=="true")throw Error("Enterprise SSO disabled");
+  await audit(env,actor,"enterprise_sso_token_request",id,"attempted");
+  try{
+    const record=await env.DB.prepare(
+      'SELECT "domain" AS domain FROM "ssoProvider" WHERE "providerId"=? LIMIT 1'
+    ).bind(id).first<{domain:string}>();
+    if(!record)throw Error("SSO provider not found");
+    const result=await auth.api.requestDomainVerification({
+      headers,body:{providerId:id}
+    }) as any;
+    const value=typeof result?.domainVerificationToken==="string"
+      ?result.domainVerificationToken:typeof result?.verificationToken==="string"?result.verificationToken:null;
+    await audit(env,actor,"enterprise_sso_token_request",id,"succeeded");
+    return {
+      providerId:id,domain:record.domain,
+      txtHost:"_better-auth-token-"+id+"."+record.domain,
+      ...(value?{txtValue:value}:{}),
+      note:"Add the returned TXT record, allow DNS propagation, and verify. The token is not fabricated by Nathan."
+    };
+  }catch(e){
+    await audit(env,actor,"enterprise_sso_token_request",id,"failed");
+    throw e;
+  }
+}
+export async function verifyEnterpriseDomain(auth:any,env:AuthEnv,headers:Headers,input:any,actor:string){
+  const id=validatedProviderId(input?.providerId);
+  if(env.ENTERPRISE_SSO!=="true")throw Error("Enterprise SSO disabled");
+  await audit(env,actor,"enterprise_sso_domain_verify",id,"attempted");
+  try{
+    await auth.api.verifyDomain({headers,body:{providerId:id}});
+    const record=await env.DB.prepare(
+      'SELECT "domainVerified" AS verified FROM "ssoProvider" WHERE "providerId"=? LIMIT 1'
+    ).bind(id).first<{verified:number}>();
+    if(!record || record.verified!==1)throw Error("Better Auth domain verification did not finish");
+    await audit(env,actor,"enterprise_sso_domain_verify",id,"succeeded");
+    return {providerId:id,verified:true,
+      note:"The enterprise domain is verified by Better Auth. Complete a staging login test before production use."};
+  }catch(e){
+    await audit(env,actor,"enterprise_sso_domain_verify",id,"failed");
+    throw e;
+  }
 }
