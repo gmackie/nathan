@@ -138,3 +138,11 @@ export async function setOAuthClientDisabledWithMcp(env:AuthEnv,clientId:string,
   await audit(env,actor,disabled?"oauth_client_disable":"oauth_client_enable",clientId,"succeeded");
   return {clientId,disabled,note:"Existing bearer access tokens may remain valid until expiration; revoke tokens separately if required."};
 }
+
+/** Read-only administrative user directory. Never expose credentials or sessions. */
+export async function listUsers(env:AuthEnv) {
+  const rows=await env.DB.prepare(
+    'SELECT "id","name","email","emailVerified","role","banned","createdAt" FROM "user" ORDER BY "createdAt" DESC LIMIT 100'
+  ).all();
+  return rows.results;
+}
