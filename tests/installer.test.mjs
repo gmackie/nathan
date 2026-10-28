@@ -28,3 +28,11 @@ test("installer state and sessions have appropriate database columns",()=>{
   assert.ok(columns.includes("consumed_at"));
   db.close();
 });
+
+test("hosted wizard accepts login.<domain> for apex and subdomain coverage",()=>{
+  const input={accountId:"a".repeat(32),hostname:"login.example.com",name:"nathan-auth",realmEnabled:true};
+  assert.equal(validateInstallPlan(input).realmApex,"example.com");
+  assert.throws(()=>validateInstallPlan({...input,realmApex:"other.example.com"}),/Realm/);
+  assert.throws(()=>validateInstallPlan({...input,hostname:"auth.example.com"}),/login/);
+  assert.equal(validateInstallPlan({...input,hostname:"auth.example.com",realmEnabled:false}).realmApex,null);
+});

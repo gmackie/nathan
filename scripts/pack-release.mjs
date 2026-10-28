@@ -47,7 +47,7 @@ for(const mod of modules){
   pieces.push({type:"module",path:"modules/"+mod.name,name:mod.name,sha256:digest(bytes),size:bytes.byteLength,
     contentType:extname(mod.name)===".wasm"?"application/wasm":"application/javascript+module"});
 }
-for(const name of ["0001_nathan_registry.sql","0002_better_auth.sql","0003_security_audit.sql","0004_mcp_limits.sql"]){
+for(const name of ["0001_nathan_registry.sql","0002_better_auth.sql","0003_security_audit.sql","0004_mcp_limits.sql","0005_domain_realm.sql"]){
   const bytes=await readFile(join(root,"migrations",name));
   if(bytes.byteLength>1_000_000)throw Error("Migration too large");
   await copyFile(join(root,"migrations",name),join(out,"migrations",name));

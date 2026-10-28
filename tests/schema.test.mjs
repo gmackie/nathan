@@ -13,8 +13,10 @@ test("Nathan and Better Auth migrations apply to SQLite without foreign-key erro
   db.exec(migration("migrations/0001_nathan_registry.sql"));
   db.exec(migration("migrations/0002_better_auth.sql"));
   db.exec(migration("migrations/0003_security_audit.sql"));
+  db.exec(migration("migrations/0004_mcp_limits.sql"));
+  db.exec(migration("migrations/0005_domain_realm.sql"));
   const names = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r=>r.name);
-  for(const required of ["user","session","oauthClient","jwks","twoFactor","passkey","ssoProvider","nathan_applications","nathan_security_audit","rateLimit"]) {
+  for(const required of ["user","session","oauthClient","jwks","twoFactor","passkey","ssoProvider","nathan_applications","nathan_security_audit","nathan_domain_realms","nathan_realm_clients","rateLimit"]) {
     assert.ok(names.includes(required), "Missing "+required);
   }
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
@@ -31,5 +33,20 @@ test("gateway session migration applies with strict deletion support",()=>{
     .run("test-digest","subject1","https://auth.example.com/api/auth","client1",123);
   db.exec("DELETE FROM nathan_gateway_sessions WHERE expires_at <= unixepoch()");
   assert.equal(db.prepare("SELECT COUNT(*) as count FROM nathan_gateway_sessions").get().count,0);
+  db.close();
+});
+
+test("realm schema prevents duplicate hosts and cross-realm foreign keys",()=>{
+  const db=new DatabaseSync(":memory:");db.exec("PRAGMA foreign_keys=ON");
+  for(const file of ["0001_nathan_registry.sql","0002_better_auth.sql","0003_security_audit.sql","0004_mcp_limits.sql","0005_domain_realm.sql"])
+    db.exec(migration("migrations/"+file));
+  db.prepare("INSERT INTO nathan_domain_realms(apex,issuer_hostname,account_id,zone_id,registered_by) VALUES (?,?,?,?,?)")
+    .run("example.com","login.example.com","a".repeat(32),"b".repeat(32),"test");
+  db.prepare("INSERT INTO nathan_realm_clients(hostname,realm_apex,kind,callback_uri,status,requested_by) VALUES(?,?,?,?,?,?)")
+    .run("example.com","example.com","web","https://example.com/auth/callback","creating","admin");
+  assert.throws(()=>db.prepare("INSERT INTO nathan_realm_clients(hostname,realm_apex,kind,callback_uri,status,requested_by) VALUES(?,?,?,?,?,?)")
+    .run("app.example.com","another.example.com","worker","https://app.example.com/auth/callback","creating","admin"),/FOREIGN KEY/);
+  assert.throws(()=>db.prepare("INSERT INTO nathan_realm_clients(hostname,realm_apex,kind,callback_uri,status,requested_by) VALUES(?,?,?,?,?,?)")
+    .run("example.com","example.com","web","https://example.com/other","creating","admin"),/UNIQUE/);
   db.close();
 });

@@ -6,6 +6,7 @@ const sql=readFileSync("migrations/installer/0002_jobs.sql","utf8");
 function create(){
   const db=new DatabaseSync(":memory:");
   db.exec(sql);
+  db.exec(readFileSync("migrations/installer/0003_realm.sql","utf8"));
   return db;
 }
 const example={
@@ -50,5 +51,12 @@ test("unsupported high-assurance profile is refused at schema",()=>{
     " VALUES (?,?,?,?,?,?,?,?,?,?)");
   assert.throws(()=>db.prepare("INSERT INTO nathan_install_jobs(id,owner_user_id,owner_email,account_id,zone_id,hostname,worker_name,admin_email,profile,release_id)"+
     " VALUES (?,?,?,?,?,?,?,?,?,?)").run("1","u","u@example.com","a","b","h.example.com","w","u@example.com","high","v"),/CHECK/);
+  db.close();
+});
+
+test("installation migration can store canonical root-domain SSO realm",()=>{
+  const db=create();insert(db);
+  db.prepare("UPDATE nathan_install_jobs SET realm_apex=? WHERE id=?").run("example.com",example.id);
+  assert.equal(db.prepare("SELECT realm_apex FROM nathan_install_jobs").get().realm_apex,"example.com");
   db.close();
 });

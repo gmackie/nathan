@@ -18,7 +18,7 @@ for(const file of manifest.files){
   if(hash!==file.sha256||bytes.length!==file.size)throw Error("Release file integrity mismatch: "+file.name);
   total+=bytes.length;
 }
-for(const name of ["0001_nathan_registry.sql","0002_better_auth.sql","0003_security_audit.sql","0004_mcp_limits.sql"]){
+for(const name of ["0001_nathan_registry.sql","0002_better_auth.sql","0003_security_audit.sql","0004_mcp_limits.sql","0005_domain_realm.sql"]){
   if(!manifest.files.some(f=>f.type==="migration"&&f.name===name))
     throw Error("Missing security migration: "+name);
 }

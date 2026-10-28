@@ -15,6 +15,7 @@
     "NATHAN_ADMIN_EMAILS": "",
     "NATHAN_INSTALL_ACTIVE": "true",
     "NATHAN_MCP_WRITE_ENABLED": "false",
+    "NATHAN_REALM_APEX": "",
     "ENABLE_PASSWORD": "false",
     "ENTERPRISE_SSO": "false"
   },

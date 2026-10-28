@@ -1,3 +1,4 @@
+import { realmForLoginHostname,validateDomainName } from "../shared/realm.mjs";
 const SLUG=/^[a-z][a-z0-9-]{0,62}$/;
 const ACCOUNT=/^[a-f0-9]{32}$/;
 export function validateAccountId(input){
@@ -21,7 +22,18 @@ export function validateInstallPlan(input){
   const name=validateWorkerName(input.name);
   if(input.securityProfile && !["standard","business","high"].includes(input.securityProfile))
     throw Error("Invalid security profile");
-  return {accountId,hostname,name,securityProfile:input.securityProfile||"business"};
+  const realmEnabled=input.realmEnabled===true ||
+    (input.realmEnabled===undefined && hostname.startsWith("login."));
+  if(input.realmEnabled!==undefined && typeof input.realmEnabled!=="boolean")
+    throw Error("Invalid realmEnabled flag");
+  let realmApex=null;
+  if(realmEnabled){
+    const derived=realmForLoginHostname(hostname);
+    if(input.realmApex!==undefined && validateDomainName(input.realmApex)!==derived.apex)
+      throw Error("Realm apex must match login.<domain> issuer");
+    realmApex=derived.apex;
+  }
+  return {accountId,hostname,name,securityProfile:input.securityProfile||"business",realmApex};
 }
 export function isAllowedOrigin(origin,expected){
   if(typeof origin!=="string"||typeof expected!=="string")return false;
