@@ -1,6 +1,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { verifyOAuthQueryParams } from "@better-auth/oauth-provider";
 import { createAuth } from "./instance";
+import {isRawManagementEndpoint} from "./management-boundary.mjs";
 import { loadSocialCredentials, providerStatus, upsertSocialProvider, setSocialProviderEnabled } from "./provider-store";
 import {bootstrapStatus,completeBootstrap,mayAdminister} from "./bootstrap";
 import {handleScim} from "./scim/gateway";
@@ -39,6 +40,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
   const auth = createAuth(env,socialProviders);
   if (url.pathname === "/mcp") return handleMcp(request,env,auth);
   if (url.pathname.startsWith("/api/auth/") || url.pathname.startsWith("/.well-known/")) {
+    if(isRawManagementEndpoint(url.pathname))return reject(404,"Management route unavailable; use the protected Identity Studio");
     return auth.handler(request);
   }
   if (url.pathname === "/") return Response.redirect(issuer.origin + "/sign-in", 302);
