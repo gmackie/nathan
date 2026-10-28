@@ -72,7 +72,7 @@ export function studioPage(userEmail: string): Response {
       const r=await fetch('/studio/api/plugins',{credentials:'same-origin'});
       const d=await r.json();if(!r.ok)return;
       const tier=document.getElementById('plugin-tier').value;
-      document.getElementById('plugins').textContent=d.plugins.filter(p=>tier==='all'||p.tier===tier).map(p=>p.name+' ['+p.tier+'] — '+(p.installed?'Enabled':'Needs review/build')).join('\n');
+      document.getElementById('plugins').textContent=d.plugins.filter(p=>tier==='all'||p.tier===tier).map(p=>p.name+' ['+p.tier+'] — '+(p.installed?'Enabled':'Needs review/build')).join(String.fromCharCode(10));
     };
     document.getElementById('audit-btn').onclick=async()=>{
       const r=await fetch('/studio/api/audit',{credentials:'same-origin'});const d=await r.json();
