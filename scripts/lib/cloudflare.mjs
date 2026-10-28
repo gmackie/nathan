@@ -73,6 +73,16 @@ export class CloudflareClient {
     } catch (error) { unknown.push("Unable to enumerate zones: " + error.message); }
     return { public: publicEndpoints, unknown };
   }
+  async queryDatabase(id, sql, params = []) {
+    if (!/^[a-f0-9-]{36}$/.test(id)) throw Error("Invalid D1 database UUID");
+    if (typeof sql !== "string" || sql.length > 5000 || !Array.isArray(params) || params.length > 10)
+      throw Error("Invalid parameterized D1 query");
+    const result = await this.request("/accounts/" + this.accountId + "/d1/database/" + id + "/query",
+      { method:"POST", body:{sql, params} });
+    if (!Array.isArray(result) || result.some(r => r.success !== true))
+      throw Error("Cloudflare D1 query failed");
+    return result.flatMap(r => Array.isArray(r.results) ? r.results : []);
+  }
   async createDatabase(name) {
     if (!this.accountId) throw Error("Account ID required");
     return this.request("/accounts/" + this.accountId + "/d1/database", { method: "POST", body: { name } });
