@@ -25,6 +25,7 @@ export function createAuth(env: AuthEnv) {
     basePath: "/api/auth",
     secret: env.BETTER_AUTH_SECRET,
     database: env.DB,
+    disabledPaths: ["/token"],
     rateLimit: {
       enabled: true,
       storage: "database",
@@ -54,13 +55,19 @@ export function createAuth(env: AuthEnv) {
     plugins: [
       admin(),
       organization(),
-      twoFactor(),
+      twoFactor({ allowPasswordless: true }),
       passkey({ rpID: issuer.hostname, rpName: "Nathan" }),
-      jwt(),
+      jwt({disableSettingJwtHeader:true,jwks:{rotationInterval:30*24*60*60,gracePeriod:30*24*60*60}}),
       oauthProvider({
         loginPage: "/sign-in",
         consentPage: "/consent",
-        scopes: ["openid", "profile", "email", "offline_access"],
+        scopes: ["openid", "profile", "email", "offline_access", "nathan:read", "nathan:admin"],
+        resources: [{
+          identifier: issuer.origin + "/mcp",
+          allowedScopes: ["nathan:read", "nathan:admin"],
+          accessTokenTtl: 300
+        }],
+        scopeExpirations: {"nathan:read":"15m","nathan:admin":"5m"},
         allowDynamicClientRegistration: false,
         allowUnauthenticatedClientRegistration: false,
         // Public dynamic registration is disabled; only verified and allowlisted
