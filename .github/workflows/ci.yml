@@ -44,5 +44,15 @@ jobs:
         run: npm run build:auth
       - name: Gateway Worker bundle (no deployment)
         run: npm run build:gateway
+      - name: Pack pinned IdP release into hosted installer
+        run: npm run pack:release
+      - name: Verify release manifest
+        run: test -s installer/public/release/manifest.json
+      - name: Archive installer release manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: nathan-installer-release-manifest
+          path: installer/public/release/manifest.json
+          retention-days: 7
       - name: Hosted installer Worker bundle (no deployment)
         run: npm run build:installer
