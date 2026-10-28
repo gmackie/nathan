@@ -59,7 +59,7 @@ export function studioPage(userEmail: string): Response {
   <label>Client name<input id="name" placeholder="My application"></label>
   <label>Exact HTTPS redirect URI<input id="redirect" placeholder="https://app.example.com/oauth/callback"></label><label>Client type<select id="kind"><option value="external">External web app</option><option value="worker">Cloudflare Worker</option><option value="gateway">Nathan gateway</option></select></label><label><input type="checkbox" id="public-client"> Public OIDC client (PKCE, no secret)</label>
   <button id="create">Register client</button><p id="status" role="alert"></p><pre id="result"></pre>
-  <p><small>Client secrets are shown once. Store them in a secure manager.</small></p><h2>Existing clients</h2><button class="secondary" id="refresh">Refresh registered clients</button><pre id="clients" aria-live="polite"></pre><h2>Configuration</h2><button class="secondary" id="status-btn">View active capabilities</button><pre id="capabilities"></pre>`, `
+  <p><small>Client secrets are shown once. Store them in a secure manager.</small></p><h2>Registered applications</h2><button class="secondary" id="refresh">Refresh registered clients</button><pre id="clients" aria-live="polite"></pre><h2>Identity providers and security posture</h2><button class="secondary" id="status-btn">View active capabilities</button><pre id="capabilities"></pre><h2>Available plugins</h2><p>Catalog entries are read-only until their packages and database migrations are reviewed and deployed.</p><select id="plugin-tier"><option value="all">All tiers</option><option value="verified">Verified candidates</option><option value="community">Community</option><option value="custom">Private/custom</option></select><button class="secondary" id="plugins-btn">List integrations</button><pre id="plugins"></pre><h2>Security audit events</h2><button class="secondary" id="audit-btn">Refresh security audit</button><pre id="audit"></pre>`, `
     document.getElementById('refresh').onclick=async()=>{
       const r=await fetch('/studio/api/clients',{credentials:'same-origin'});const d=await r.json();
       document.getElementById('clients').textContent=r.ok?JSON.stringify(d,null,2):'Unable to load clients';
@@ -67,6 +67,16 @@ export function studioPage(userEmail: string): Response {
     document.getElementById('status-btn').onclick=async()=>{
       const r=await fetch('/studio/api/status',{credentials:'same-origin'});const d=await r.json();
       document.getElementById('capabilities').textContent=r.ok?JSON.stringify(d,null,2):'Unavailable';
+    };
+    document.getElementById('plugins-btn').onclick=async()=>{
+      const r=await fetch('/studio/api/plugins',{credentials:'same-origin'});
+      const d=await r.json();if(!r.ok)return;
+      const tier=document.getElementById('plugin-tier').value;
+      document.getElementById('plugins').textContent=d.plugins.filter(p=>tier==='all'||p.tier===tier).map(p=>p.name+' ['+p.tier+'] — '+(p.installed?'Enabled':'Needs review/build')).join('\n');
+    };
+    document.getElementById('audit-btn').onclick=async()=>{
+      const r=await fetch('/studio/api/audit',{credentials:'same-origin'});const d=await r.json();
+      document.getElementById('audit').textContent=r.ok?JSON.stringify(d.events,null,2):'Audit unavailable';
     };
     document.getElementById('create').onclick=async()=>{
       const status=document.getElementById('status');status.textContent='Creating...';

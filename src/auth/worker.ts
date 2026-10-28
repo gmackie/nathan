@@ -3,6 +3,7 @@ import { verifyOAuthQueryParams } from "@better-auth/oauth-provider";
 import { createAuth } from "./instance";
 import { signInPage, consentPage, studioPage } from "./ui";
 import type { AuthEnv } from "./env";
+import pluginCatalog from "../../plugins/catalog.json";
 
 function reject(status: number, reason: string) {
   return Response.json({ error: reason }, { status, headers: { "Cache-Control": "no-store" } });
@@ -38,7 +39,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     if (!isAdmin(session, env)) return reject(403, "Admin session required");
     return studioPage(session!.user.email);
   }
-  if ((url.pathname === "/studio/api/clients" || url.pathname === "/studio/api/status") && request.method === "GET") {
+  if (["/studio/api/clients", "/studio/api/status", "/studio/api/plugins", "/studio/api/audit"].includes(url.pathname) && request.method === "GET") {
     const session = await auth.api.getSession({ headers: request.headers });
     if (!isAdmin(session, env)) return reject(403, "Admin session required");
     if (url.pathname === "/studio/api/status") {
@@ -48,6 +49,14 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
         features: {oidcProvider: true, passkeys: true, totp: true, enterpriseSso: env.ENTERPRISE_SSO === "true", password: env.ENABLE_PASSWORD === "true"},
         note: "Authentication assurance level enforcement and guided plugin installation are not yet available"
       }, {headers: {"Cache-Control":"no-store"}});
+    }
+    if (url.pathname === "/studio/api/plugins") {
+      return Response.json(pluginCatalog,{headers:{"Cache-Control":"no-store"}});
+    }
+    if (url.pathname === "/studio/api/audit") {
+      const audit = await env.DB.prepare("SELECT id,actor,action,target,outcome,created_at FROM nathan_security_audit ORDER BY created_at DESC LIMIT 75")
+        .all<{id:string,actor:string,action:string,target:string,outcome:string,created_at:number}>();
+      return Response.json({events:audit.results},{headers:{"Cache-Control":"no-store"}});
     }
     const clients = await env.DB.prepare('SELECT "clientId" AS id, "name" AS name, "redirectUris" AS redirectUris, "disabled" AS disabled, "tokenEndpointAuthMethod" AS authMethod FROM "oauthClient" ORDER BY "createdAt" DESC LIMIT 100')
       .all<{id:string,name:string,redirectUris:string,disabled:number,authMethod:string}>();
@@ -68,7 +77,12 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
       return reject(400, "Client redirect must be HTTPS without credentials or fragment");
     if (!["external","worker","gateway"].includes(body.kind)) return reject(400, "Invalid client type");
     if (body.publicClient && body.kind === "gateway") return reject(400, "A gateway must be a confidential client");
-    const client = await auth.api.adminCreateOAuthClient({
+    const auditId=crypto.randomUUID();
+    await env.DB.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) VALUES (?,?,?,?,?)")
+      .bind(auditId,session!.user.id,"oauth_client_create",body.kind+":"+redirect.origin,"attempted").run();
+    let client;
+    try {
+      client = await auth.api.adminCreateOAuthClient({
       headers: request.headers,
       body: {
         client_name: body.name,
@@ -80,7 +94,14 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
         require_pkce: true,
         skip_consent: false
       }
-    });
+      });
+    } catch (error) {
+      await env.DB.prepare("UPDATE nathan_security_audit SET outcome=? WHERE id=?")
+        .bind("failed",auditId).run();
+      throw error;
+    }
+    await env.DB.prepare("UPDATE nathan_security_audit SET outcome=? WHERE id=?")
+      .bind("succeeded",auditId).run();
     return Response.json(client, { headers: { "Cache-Control": "no-store" } });
   }
   return reject(404, "Not found");

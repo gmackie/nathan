@@ -36,8 +36,8 @@ export async function adminCommand(args, file, apply) {
   }
   if (!(await yesNo("Promote this verified allowlisted user to Nathan admin?"))) throw Error("Cancelled");
   await api.queryDatabase(dbId,
-    'UPDATE "user" SET "role" = ?, "updatedAt" = ? WHERE "id" = ? AND "emailVerified" = 1',
-    ["admin", new Date().toISOString(), rows[0].id]
+    'UPDATE "user" SET "role" = ? WHERE "id" = ? AND "emailVerified" = 1',
+    ["admin", rows[0].id]
   );
   const confirm = await api.queryDatabase(dbId,
     'SELECT "role" FROM "user" WHERE "id" = ? AND "emailVerified" = 1',
