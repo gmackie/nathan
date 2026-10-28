@@ -1,7 +1,7 @@
 import { createLocalJWKSet, jwtVerify } from "jose";
 import type { AuthEnv } from "./env";
 import { isAdminUser, listClients, listApplications, listSso, recentAudit,
-  setApplicationEnabled, updateOAuthClientStatus, audit } from "./admin-service";
+  setApplicationEnabled, setOAuthClientDisabledWithMcp, audit } from "./admin-service";
 import { MCP_VERSION, READ_TOOLS, WRITE_TOOLS, isWriteTool,
   requiredConfirm, decodeMcpRequest, mcpResult, mcpError, textContent } from "../mcp/protocol.mjs";
 
@@ -97,7 +97,7 @@ async function executeTool(name:string,args:Record<string,any>,env:AuthEnv,auth:
     }
     if(name==="nathan_client_set_disabled"){
       if(typeof args.disabled!=="boolean")throw Error("Invalid disabled flag");
-      return updateOAuthClientStatus(auth,env,new Headers(),args,principal.actor);
+      return setOAuthClientDisabledWithMcp(env,args.clientId,args.disabled,principal.actor);
     }
   }
   throw Error("Tool not supported");
