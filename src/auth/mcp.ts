@@ -2,7 +2,7 @@ import { createLocalJWKSet, jwtVerify } from "jose";
 import type { AuthEnv } from "./env";
 import {mayAdminister} from "./bootstrap";
 import {listScimConnections} from "./scim/admin";
-import { isAdminUser, listClients, listApplications, listSso, listUsers, recentAudit,
+import { isAdminPrincipal, listClients, listApplications, listSso, listUsers, recentAudit,
   setApplicationEnabled, setOAuthClientDisabledWithMcp, audit } from "./admin-service";
 import {loadVerifiedRealm,listRealmClients} from "./domain-realm";
 import { MCP_VERSION, READ_TOOLS, WRITE_TOOLS, isWriteTool,
@@ -57,7 +57,7 @@ async function authenticatedPrincipal(request:Request,env:AuthEnv,auth:any) {
   if(!scopes.includes("nathan:read")&&!scopes.includes("nathan:admin"))return null;
   const account=await env.DB.prepare('SELECT "id","email","emailVerified","role","banned" FROM "user" WHERE "id"=? LIMIT 1')
     .bind(payload.sub).first<{id:string,email:string,emailVerified:number,role:string,banned:number}>();
-  if(!account || account.banned===1 || !isAdminUser({
+  if(!account || account.banned===1 || !await isAdminPrincipal({
     id:account.id,email:account.email,emailVerified:account.emailVerified===1,role:account.role
   },env) || !await mayAdminister(env,account.id,typeof payload.sid==="string"?payload.sid:undefined))return null;
   return {actor:account.id,scopes,sessionId:typeof payload.sid==="string"?payload.sid:null};

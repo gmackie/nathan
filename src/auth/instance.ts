@@ -8,6 +8,7 @@ import { sendAuthEmail } from "./email";
 import type { AuthEnv } from "./env";
 import type { SocialCredentials } from "./provider-store";
 import {mayAdminister} from "./bootstrap";
+import {isAdminPrincipal} from "./admin-service";
 
 export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredentials) {
   const issuer = new URL(env.NATHAN_ISSUER);
@@ -97,9 +98,7 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
         // Public dynamic registration is disabled; only verified and allowlisted
         // Nathan admins may use Better Auth's authenticated client CRUD API.
         clientPrivileges: async ({ user, session }) => {
-          if (!user?.email || !user.emailVerified || (user as any).role !== "admin") return false;
-          const allowed = env.NATHAN_ADMIN_EMAILS.split(",").map(x=>x.trim().toLowerCase()).filter(Boolean);
-          return allowed.includes(user.email.toLowerCase()) && await mayAdminister(env,user.id,session?.id);
+          return await isAdminPrincipal(user,env) && await mayAdminister(env,user.id,session?.id);
         },
         ...(env.NATHAN_PAIRWISE_SECRET ? { pairwiseSecret: env.NATHAN_PAIRWISE_SECRET } : {})
       }),

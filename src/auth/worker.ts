@@ -14,16 +14,16 @@ import type { AuthEnv } from "./env";
 import pluginCatalog from "../../plugins/catalog.json";
 import { handleMcp, protectedResourceMetadata } from "./mcp";
 import { isAdminUser, listApplications, listSso, upsertApplication,
-  setApplicationEnabled, registerEnterpriseOidc, requestEnterpriseVerification, verifyEnterpriseDomain, createOAuthClient, listUsers } from "./admin-service";
+  setApplicationEnabled, registerEnterpriseOidc, requestEnterpriseVerification, verifyEnterpriseDomain,
+  createOAuthClient, listUsers, isAdminPrincipal, isBootstrapOwner, listAdminGrants, grantAdmin, revokeAdminGrant } from "./admin-service";
 
 function reject(status: number, reason: string) {
   return Response.json({ error: reason }, { status, headers: { "Cache-Control": "no-store" } });
 }
-function isAdmin(session: any, env: AuthEnv): boolean {
-  const allow = env.NATHAN_ADMIN_EMAILS.split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
-  return Boolean(session?.user?.emailVerified && session.user.role === "admin"
-    && allow.includes(session.user.email?.toLowerCase()));
+async function isAdmin(session:any,env:AuthEnv):Promise<boolean>{
+  return Boolean(session?.user && await isAdminPrincipal(session.user,env));
 }
+
 async function handle(request: Request, env: AuthEnv): Promise<Response> {
   const issuer = new URL(env.NATHAN_ISSUER);
   const url = new URL(request.url);
@@ -72,7 +72,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     if(request.headers.get("Origin")!==issuer.origin || request.headers.get("Sec-Fetch-Site")==="cross-site")
       return reject(403,"Cross-origin request denied");
     const session=await auth.api.getSession({headers:request.headers});
-    if(!isAdminUser(session?.user,env))return reject(403,"Verified initial admin account required");
+    if(!await isBootstrapOwner(session?.user,env))return reject(403,"Verified initial admin account required");
     try{
       return Response.json(await completeBootstrap(env,session!.user.id),{headers:{"Cache-Control":"no-store"}});
     }catch{return reject(409,"Complete verified passkey and TOTP enrollment first");}
@@ -80,13 +80,13 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
 
   if (url.pathname === "/studio" && request.method === "GET") {
     const session = await auth.api.getSession({ headers: request.headers });
-    if (!isAdmin(session, env)) return reject(403, "Admin session required");
+    if (!await isAdmin(session, env)) return reject(403, "Admin session required");
     if (!await mayAdminister(env,session!.user.id,session!.session.id)) return Response.redirect(issuer.origin+"/security?setup=admin",302);
     return studioPage(session!.user.email);
   }
-  if (["/studio/api/clients", "/studio/api/status", "/studio/api/plugins", "/studio/api/audit", "/studio/api/apps", "/studio/api/sso", "/studio/api/users", "/studio/api/realm", "/studio/api/realm/clients", "/studio/api/providers", "/studio/api/scim/connections"].includes(url.pathname) && request.method === "GET") {
+  if (["/studio/api/clients", "/studio/api/status", "/studio/api/plugins", "/studio/api/audit", "/studio/api/apps", "/studio/api/sso", "/studio/api/users", "/studio/api/realm", "/studio/api/realm/clients", "/studio/api/providers", "/studio/api/scim/connections", "/studio/api/admins"].includes(url.pathname) && request.method === "GET") {
     const session = await auth.api.getSession({ headers: request.headers });
-    if (!isAdmin(session, env) || !await mayAdminister(env,session!.user.id,session!.session.id)) return reject(403, "Admin enrollment incomplete");
+    if (!await isAdmin(session, env) || !await mayAdminister(env,session!.user.id,session!.session.id)) return reject(403, "Admin enrollment incomplete");
     if (url.pathname === "/studio/api/status") {
       return Response.json({
         issuer: issuer.origin + "/api/auth",
@@ -94,6 +94,9 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
         features: {oidcProvider: true, passkeys: true, totp: true, enterpriseSso: env.ENTERPRISE_SSO === "true", password: env.ENABLE_PASSWORD === "true", scimDirectory: Boolean(env.SCIM_DIRECTORY)},
         note: "Authentication assurance level enforcement and guided plugin installation are not yet available"
       }, {headers: {"Cache-Control":"no-store"}});
+    }
+    if (url.pathname === "/studio/api/admins") {
+      return Response.json(await listAdminGrants(env),{headers:{"Cache-Control":"no-store"}});
     }
     if (url.pathname === "/studio/api/scim/connections") {
       return Response.json({connections:await listScimConnections(env)},{headers:{"Cache-Control":"no-store"}});
@@ -137,7 +140,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     if (request.headers.get("Content-Type")?.split(";")[0] !== "application/json")
       return reject(415,"JSON required");
     const session = await auth.api.getSession({headers:request.headers});
-    if (!isAdminUser(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id)) return reject(403,"Admin enrollment incomplete");
+    if (!await isAdminPrincipal(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id)) return reject(403,"Admin enrollment incomplete");
     const raw=await request.text();
     if(raw.length>16384)return reject(413,"Request too large");
     let body:any;
@@ -169,7 +172,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")
       return reject(415,"JSON required");
     const session=await auth.api.getSession({headers:request.headers});
-    if(!isAdminUser(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id))return reject(403,"Admin enrollment incomplete");
+    if(!await isAdminPrincipal(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id))return reject(403,"Admin enrollment incomplete");
     const raw=await request.text();
     if(raw.length>8192)return reject(413,"Registration too large");
     let input:any;
@@ -191,7 +194,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")
       return reject(415,"JSON required");
     const session=await auth.api.getSession({headers:request.headers});
-    if(!isAdminUser(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id))return reject(403,"Admin enrollment incomplete");
+    if(!await isAdminPrincipal(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id))return reject(403,"Admin enrollment incomplete");
     const raw=await request.text();
     if(raw.length>16384)return reject(413,"Provider input too large");
     let input:any;try{input=JSON.parse(raw)}catch{return reject(400,"Invalid JSON")}
@@ -212,7 +215,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")
       return reject(415,"JSON required");
     const session=await auth.api.getSession({headers:request.headers});
-    if(!isAdminUser(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id))
+    if(!await isAdminPrincipal(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id))
       return reject(403,"Verified administrator with completed enrollment required");
     const raw=await request.text();
     if(raw.length>16384)return reject(413,"SCIM configuration too large");
@@ -229,11 +232,32 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     }
   }
 
+
+  if(["/studio/api/admins/grant","/studio/api/admins/revoke"].includes(url.pathname)&&request.method==="POST"){
+    if(request.headers.get("Origin")!==issuer.origin ||
+       request.headers.get("Sec-Fetch-Site")==="cross-site")return reject(403,"Cross-origin request denied");
+    if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")
+      return reject(415,"JSON required");
+    const session=await auth.api.getSession({headers:request.headers});
+    if(!await isAdminPrincipal(session?.user,env)||
+       !await mayAdminister(env,session!.user.id,session!.session.id))
+      return reject(403,"Completed admin enrollment and recent passkey authentication required");
+    const raw=await request.text();
+    if(raw.length>4096)return reject(413,"Admin operation too large");
+    let body:any;try{body=JSON.parse(raw)}catch{return reject(400,"Invalid JSON")}
+    try{
+      const value=url.pathname.endsWith("/grant")
+        ?await grantAdmin(env,body,session!.user.id)
+        :await revokeAdminGrant(env,body,session!.user.id);
+      return Response.json(value,{headers:{"Cache-Control":"no-store"}});
+    }catch{return reject(409,"Admin grant/revocation denied; check verified identity, confirmation and recovery policy");}
+  }
+
   if (url.pathname === "/studio/api/clients/status" && request.method === "POST") {
     if (request.headers.get("Origin") !== issuer.origin) return reject(403, "Cross-origin request denied");
     if (request.headers.get("Content-Type")?.split(";")[0] !== "application/json") return reject(415, "JSON required");
     const session = await auth.api.getSession({ headers: request.headers });
-    if (!isAdmin(session, env) || !await mayAdminister(env,session!.user.id,session!.session.id)) return reject(403, "Admin enrollment incomplete");
+    if (!await isAdmin(session, env) || !await mayAdminister(env,session!.user.id,session!.session.id)) return reject(403, "Admin enrollment incomplete");
     const raw = await request.text();
     if (raw.length > 4096) return reject(413, "Request too large");
     let body: any;
@@ -264,7 +288,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
         request.headers.get("Sec-Fetch-Site") === "cross-site") return reject(403,"Cross-origin request denied");
     if (request.headers.get("Content-Type")?.split(";")[0] !== "application/json") return reject(415,"JSON required");
     const session=await auth.api.getSession({headers:request.headers});
-    if (!isAdminUser(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id)) return reject(403,"Admin enrollment incomplete");
+    if (!await isAdminPrincipal(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id)) return reject(403,"Admin enrollment incomplete");
     const raw=await request.text();
     if(raw.length>8192)return reject(413,"Request too large");
     try{
