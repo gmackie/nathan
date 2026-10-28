@@ -5,6 +5,7 @@ import { loadRelease, releaseFile, type NathanRelease, type ReleaseFile } from "
 import { validateInstallPlan, validateHostname } from "./validation.mjs";
 import { realmIssuerHostname } from "../shared/realm.mjs";
 import { generateConfigKey,encryptProviderSecret } from "../auth/config-crypto.mjs";
+import {sha256} from "../gateway/crypto";
 
 const STAGES=["database","schema","upload","domain","activate","verify","bootstrap","complete"] as const;
 type Stage=typeof STAGES[number];
@@ -12,7 +13,7 @@ type Identity={id:string;email:string};
 type InstallJob={
   id:string;owner_user_id:string;owner_email:string;account_id:string;zone_id:string;
   hostname:string;worker_name:string;admin_email:string;profile:"standard"|"business";
-  enterprise_sso:number;realm_apex:string|null;release_id:string;stage:Stage;database_id:string|null;error:string|null;
+  enterprise_sso:number;realm_apex:string|null;scim_requested:number;scim_connection_id:string|null;scim_domain:string|null;release_id:string;stage:Stage;database_id:string|null;error:string|null;
   created_at:number;updated_at:number
 };
 type ApiSession={digest:string;tokens:InstallerTokens};
@@ -45,6 +46,7 @@ function next(stage:Stage):Stage {
 function describe(job:InstallJob){
   return {id:job.id,stage:job.stage,status:job.stage==="complete"?"complete":"in_progress",
     worker:job.worker_name,hostname:job.hostname,adminEmail:job.admin_email,release:job.release_id,enterpriseSso:job.enterprise_sso===1,realmApex:job.realm_apex||null,
+    scimRequested:job.scim_requested===1,scimConnectionId:job.scim_connection_id||null,
     url:"https://"+job.hostname,error:job.error,
     steps:STAGES.filter(x=>x!=="complete").map((stage,index)=>({
       stage,status:index<STAGES.indexOf(job.stage)?"done":index===STAGES.indexOf(job.stage)?"next":"pending"
@@ -113,17 +115,18 @@ export async function createInstall(env:InstallerEnv,session:ApiSession,input:an
   ).bind(plan.accountId,plan.name).first<InstallJob>();
   if(existing){
     if(existing.owner_user_id!==user.id||existing.hostname!==plan.hostname||
-       existing.admin_email!==user.email||existing.realm_apex!==(plan.realmApex||null))throw Error("Installation name is reserved or domain realm differs");
+       existing.admin_email!==user.email||existing.realm_apex!==(plan.realmApex||null)||
+       existing.scim_connection_id!==(plan.scim?.id||null))throw Error("Installation name is reserved or setup options differ");
     if(existing.release_id!==release.release)throw Error("Installed release differs; resume with original installer version");
     return describe(existing);
   }
   await nameIsFree(api,plan.accountId,plan.name,plan.name+"-db",plan.hostname,zone.id);
   const id=crypto.randomUUID();
   await env.INSTALLER_DB.prepare(
-    "INSERT INTO nathan_install_jobs(id,owner_user_id,owner_email,account_id,zone_id,hostname,worker_name,admin_email,profile,enterprise_sso,realm_apex,release_id) "+
-    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)"
+    "INSERT INTO nathan_install_jobs(id,owner_user_id,owner_email,account_id,zone_id,hostname,worker_name,admin_email,profile,enterprise_sso,realm_apex,scim_requested,scim_connection_id,scim_domain,release_id) "+
+    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
   ).bind(id,user.id,user.email,plan.accountId,zone.id,plan.hostname,plan.name,plan.adminEmail,
-    plan.securityProfile,plan.enterpriseSSO?1:0,plan.realmApex||null,release.release).run();
+    plan.securityProfile,plan.enterpriseSSO?1:0,plan.realmApex||null,plan.scim?1:0,plan.scim?.id||null,plan.scim?.domain||null,release.release).run();
   const created=await fetchJob(env,id,user.id);
   if(!created)throw Error("Installation job was not persisted");
   return describe(created);
@@ -228,7 +231,7 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
     "AND locked_until<unixepoch() RETURNING id"
   ).bind(job.id,user.id).first<{id:string}>();
   if(!claim)throw Error("A setup operation is already in progress");
-  let actionRequired:any=null,updatedDbId:string|undefined;
+  let actionRequired:any=null,updatedDbId:string|undefined,oneTimeScim:any=null;
   try{
     // Every step is independently resumable. No secrets are written to installer D1.
     if(job.stage==="database"){
@@ -348,6 +351,25 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
           actionRequired={kind:"security-enrollment",url:"https://"+job.hostname+"/security?setup=admin",
             instruction:"Initial admin identity verified. Enroll a passkey and a TOTP authenticator, save backup codes, then click Complete initial setup on Nathan's security page and resume the wizard."};
         }
+        else if(job.scim_requested===1 && job.scim_connection_id && job.scim_domain){
+          // Optional first connection uses the same D1 credential schema as Identity
+          // Studio. Never store a raw bearer token in the installer job.
+          const previous=await query(write,job,
+            "SELECT id FROM nathan_scim_connections WHERE id=? LIMIT 1",[job.scim_connection_id]);
+          if(previous.length===0){
+            const token="nathscim_"+b64url(32),digest=await sha256(token);
+            await query(write,job,
+              "INSERT INTO nathan_scim_connections(id,domain,mode,enabled,created_by) VALUES(?,?,'directory-only',0,?)",
+              [job.scim_connection_id,job.scim_domain,"installer:"+user.id]);
+            await query(write,job,
+              "INSERT INTO nathan_scim_credentials(id,connection_id,token_hash) VALUES(?,?,?)",
+              [crypto.randomUUID(),job.scim_connection_id,digest]);
+            oneTimeScim={id:job.scim_connection_id,
+              baseUrl:"https://"+job.hostname+"/scim/v2/"+job.scim_connection_id,
+              bearerToken:token,enabled:false,
+              warning:"Copy the one-time SCIM token to a secrets manager. This directory-only connection starts disabled and does not grant users access."};
+          }
+        }
       }}
     if(actionRequired){
       await env.INSTALLER_DB.prepare("UPDATE nathan_install_jobs SET locked_until=0,error=NULL,updated_at=unixepoch() WHERE id=?")
@@ -359,7 +381,7 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
       "UPDATE nathan_install_jobs SET stage=?,database_id=COALESCE(?,database_id),locked_until=0,error=NULL,updated_at=unixepoch() WHERE id=?"
     ).bind(following,updatedDbId||null,job.id).run();
     job=(await fetchJob(env,job.id,user.id))!;
-    return describe(job);
+    return {...describe(job),...(oneTimeScim?{oneTimeScim}:{})};
   }catch(error){
     await env.INSTALLER_DB.prepare("UPDATE nathan_install_jobs SET error=?,locked_until=0,updated_at=unixepoch() WHERE id=?")
       .bind(safeMessage(error),job.id).run();
