@@ -108,3 +108,15 @@ export function discoverRealmHostCandidates({apex,issuerHostname,dnsRecords=[],w
   }
   return [...out.values()].sort((a,b)=>a.hostname===base?-1:b.hostname===base?1:a.hostname.localeCompare(b.hostname));
 }
+
+/**
+ * Parse a user-reviewed list of exact root/subdomain hostnames.
+ * No wildcard registries or implicit authorization are permitted.
+ */
+export function parseRealmHostSelection(input,apex,issuerHostname,{max=20}={}) {
+  if(typeof input!=="string"||input.length>8192)throw Error("Invalid host list");
+  if(!Number.isInteger(max)||max<1||max>50)throw Error("Invalid host selection limit");
+  const hosts=[...new Set(input.split(/[\n,\r\t ]+/).map(x=>x.trim()).filter(Boolean))];
+  if(hosts.length===0||hosts.length>max)throw Error("Select between 1 and "+max+" exact hostnames");
+  return hosts.map(host=>assertRealmClientHost(host,apex,issuerHostname));
+}

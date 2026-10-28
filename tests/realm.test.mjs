@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   realmForLoginHostname,realmIssuerHostname,isHostnameWithinRealm,
   assertRealmClientHost,realmCallback,validateDomainName,validateCallbackPath,
-  discoverRealmHostCandidates,domainWideRoutingPreview
+  discoverRealmHostCandidates,domainWideRoutingPreview,parseRealmHostSelection
 } from "../src/shared/realm.mjs";
 
 test("one login issuer covers root and nested subdomains",()=>{
@@ -57,4 +57,13 @@ test("wildcard routes are documented only, never silently deployed",()=>{
   assert.equal(plan.protectsTrafficAutomatically,false);
   assert.equal(plan.sharedParentDomainCookies,false);
   assert.equal(plan.wildcardRedirects,false);
+});
+
+test("batch onboarding only accepts explicit, exact owned hostnames",()=>{
+  const valid=parseRealmHostSelection("example.com\nwww.example.com,app.example.com\nwww.example.com","example.com","login.example.com");
+  assert.deepEqual(valid,["example.com","www.example.com","app.example.com"]);
+  assert.throws(()=>parseRealmHostSelection("*.example.com","example.com","login.example.com"));
+  assert.throws(()=>parseRealmHostSelection("example.com.evil.net","example.com","login.example.com"));
+  assert.throws(()=>parseRealmHostSelection("login.example.com","example.com","login.example.com"));
+  assert.throws(()=>parseRealmHostSelection("x.example.com\n".repeat(30),"example.com","login.example.com",{max:1}));
 });
