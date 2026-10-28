@@ -4,13 +4,15 @@
   "private": true,
   "type": "module",
   "description": "Deployable Cloudflare-native Better Auth identity provider and access gateway",
-  "engines": { "node": ">=22.13.0" },
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "init": "node scripts/nathan.mjs init",
     "plan": "node scripts/nathan.mjs plan",
     "doctor": "node scripts/nathan.mjs doctor",
     "deploy": "node scripts/nathan.mjs deploy",
-    "schema:generate": "npx @better-auth/cli generate --config src/auth/schema-config.ts",
+    "schema:generate": "npx @better-auth/cli generate --config src/auth/schema-config.ts --output migrations/0002_better_auth.sql --yes",
     "test": "node --test tests/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "build:auth": "wrangler deploy --config wrangler.auth.jsonc --dry-run --outdir .nathan/build-auth",
