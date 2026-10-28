@@ -184,7 +184,11 @@ export function studioPage(userEmail: string): Response {
   <label>Issuer URL<input id="sso-issuer" placeholder="https://login.example.com"></label>
   <label>Client ID<input id="sso-client"></label>
   <label>Client secret<input id="sso-secret" type="password" autocomplete="off"></label>
-  <button id="sso-register">Register provider</button><p id="sso-status" role="status"></p>
+  <button id="sso-register">Register provider</button>
+  <p>Each corporate IdP must prove domain ownership using the Better Auth DNS TXT challenge before users can authenticate with it or link accounts.</p>
+  <button class="secondary" id="sso-token">Request new TXT challenge</button>
+  <button class="secondary" id="sso-verify">Verify DNS ownership</button>
+  <p id="sso-status" role="status"></p><pre id="sso-verification"></pre>
   <button class="secondary" id="sso-list">List enterprise providers</button><pre id="sso-results"></pre>
   <h2>MCP administration</h2><p>OAuth-protected stateless MCP endpoint. Register an MCP OIDC client for resource-bound access.</p>
   <pre id="mcp-help"></pre></div>`, `
@@ -398,6 +402,27 @@ export function studioPage(userEmail: string): Response {
       });document.getElementById('sso-secret').value='';out.textContent=JSON.stringify(value)}
       catch(e){out.textContent=e.message}
     };
+
+    document.getElementById('sso-token').onclick=async()=>{
+      const out=document.getElementById('sso-verification');
+      try{
+        const value=await postJson('/studio/api/sso/token',{
+          providerId:document.getElementById('sso-id').value
+        });
+        out.textContent=JSON.stringify(value,null,2);
+      }catch(e){out.textContent=e.message}
+    };
+    document.getElementById('sso-verify').onclick=async()=>{
+      const out=document.getElementById('sso-verification');
+      try{
+        const value=await postJson('/studio/api/sso/verify',{
+          providerId:document.getElementById('sso-id').value
+        });
+        out.textContent=JSON.stringify(value,null,2);
+        document.getElementById('sso-list').click();
+      }catch(e){out.textContent=e.message}
+    };
+
     document.getElementById('sso-list').onclick=async()=>{
       const out=document.getElementById('sso-results');
       try{out.textContent=JSON.stringify(await j('/studio/api/sso'),null,2)}catch(e){out.textContent=e.message}
