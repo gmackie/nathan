@@ -96,7 +96,7 @@ async function planOrDoctor(live) {
   }
   out(result);
 }
-async function provision() {
+async function provision(forceApply=false) {
   const cfg = await loadConfig(file);
   // A Worker without the matching Better Auth schema cannot serve logins.
   let schema;
@@ -105,7 +105,7 @@ async function provision() {
   if (schema.trim().length < 150) throw Error("Better Auth SQL migration is empty or unexpectedly small");
   if (cfg.securityProfile === "high") throw Error("High-assurance deployment is not supported until validated AAL, FAPI, signing-key and recovery controls pass their release gates");
   if (!cfg.accountId) throw Error("accountId required for deploy");
-  if (!apply) throw Error("Explicit --apply required. First run 'npm run plan'.");
+  if (!apply && !forceApply) throw Error("Explicit --apply required. First run 'npm run plan'.");
   const client = new CloudflareClient(process.env.CLOUDFLARE_API_TOKEN,cfg.accountId);
   const snapshot = await inspectDeployment(client,cfg);
   if (!snapshot.zone || snapshot.zone.status !== "active") throw Error("Auth hostname is not in an active Cloudflare zone");
@@ -138,13 +138,83 @@ async function provision() {
   await runCli("npx",["wrangler","deploy","--config",configPath]);
   console.log("Identity Worker published. Configure a trusted login provider and verify OIDC discovery.");
 }
+
+async function wizard(){
+  console.log("\n🌭 Nathan setup wizard — customer-owned Cloudflare authentication\n");
+  console.log("This workflow builds on the CLI installer. No Cloudflare resources are changed without explicit approval.");
+  await init();
+  let cfg=await loadConfig(file);
+  console.log("\nCloudflare resource plan:");
+  await planOrDoctor(false);
+  if(!process.env.CLOUDFLARE_API_TOKEN){
+    console.log("\nSet CLOUDFLARE_API_TOKEN using your secret manager, then run 'npm run wizard' again.");
+    console.log("The hosted wizard can instead use Cloudflare OAuth without pasting a token.");
+    return;
+  }
+  if(!cfg.accountId)throw Error("Choose an accountId in nathan.config.json before deploying");
+  if(await yesNo("Deploy the Nathan identity Worker and D1 database?")){
+    await provision(true);
+  }else{
+    console.log("Deployment skipped. You can resume by running npm run wizard again.");
+    return;
+  }
+  let provider=await ask("Initial upstream login provider (google/github)","google");
+  if(!["google","github"].includes(provider))throw Error("Select google or github");
+  await providerCommand(["guide",provider],file,false);
+  if(await yesNo("Have you created that OAuth client and want to securely store its credentials?")){
+    await providerCommand(["add",provider],file,true);
+  }else{
+    console.log("Add the provider using 'node scripts/nathan.mjs providers add "+provider+" --apply' before signing in.");
+    return;
+  }
+  if(await yesNo("Add a second provider?")){
+    provider=provider==="google"?"github":"google";
+    await providerCommand(["guide",provider],file,false);
+    if(await yesNo("Store second provider credentials?")){
+      await providerCommand(["add",provider],file,true);
+    }
+  }
+  console.log("\nIdentity URL: https://"+cfg.hostname);
+  console.log("1. Sign in with your configured provider at https://"+cfg.hostname+"/sign-in");
+  console.log("2. Verify your identity account before admin promotion.");
+  if(cfg.adminEmails?.length){
+    if(await yesNo("Have you signed in as the verified admin and want to promote that account?")){
+      await adminCommand(["promote"],file,true);
+    }
+  }
+  console.log("\nIdentity Studio: https://"+cfg.hostname+"/studio");
+  console.log("Self-service passkeys and TOTP: https://"+cfg.hostname+"/security");
+  console.log("Admin MCP endpoint: https://"+cfg.hostname+"/mcp (read-only by default)");
+  console.log("Register external and Worker OIDC clients in Studio. Copy the one-time secret to a secure manager.");
+  cfg=await loadConfig(file);
+  if(cfg.applications.length && await yesNo("Configure an Access-style gateway for an existing private Worker?")){
+    const app=cfg.applications[0];
+    if(!app.hostname){
+      const hostname=await ask("Protected app hostname (must belong to an active Cloudflare zone)","app."+cfg.hostname.split(".").slice(1).join("."));
+      cfg.applications[0]={...app,hostname,protection:"gateway"};
+      const validation=validateConfig(cfg);
+      if(validation.length)throw Error(validation.join("\n"));
+      await writeFile(file,JSON.stringify(cfg,null,2)+"\n",{mode:0o600});
+    }
+    console.log("Register a confidential OIDC client in Identity Studio using exact callback:");
+    await protectCommand([cfg.applications[0].id],file,false);
+    console.log("Make sure the original Worker has no public routes, workers.dev or preview URLs.");
+    if(await yesNo("OIDC client registered and upstream proven private; deploy gateway?")){
+      await protectCommand([cfg.applications[0].id],file,true);
+    }
+  }
+  console.log("\nNathan setup complete. Run 'npm run doctor -- --live' to verify discovery and check the staging login, session and logout flows.");
+  console.log("Do not deploy for regulated or production workloads before the security release gates pass.");
+}
+
 (async () => {
   if (command === "init") return init();
+  if (command === "wizard") return wizard();
   if (command === "plan") return planOrDoctor(false);
   if (command === "doctor") return planOrDoctor(args.includes("--live"));
   if (command === "deploy") return provision();
   if (command === "providers") return providerCommand(args.filter(a=>a!=="--apply"&&!a.endsWith(".json")),file,apply);
   if (command === "protect") return protectCommand(args.filter(a=>a!=="--apply"&&!a.endsWith(".json")),file,apply);
   if (command === "admin") return adminCommand(args.filter(a=>a!=="--apply"&&!a.endsWith(".json")),file,apply);
-  console.log("Nathan CLI\n  init                 guided local config\n  plan                 read-only plan + optional Cloudflare discovery\n  doctor [--live]      validate config and optionally OIDC discovery\n  deploy --apply       provision D1 and deploy Worker (requires Cloudflare token)\n  providers guide      OAuth callback and provider-specific setup\n  providers add --apply    configure provider secrets securely\n  protect <app>        plan a gateway for a private upstream\n  protect <app> --apply   deploy only after public-origin isolation\n  admin promote --apply     elevate a verified allowlisted user\n\nNo password or OAuth client secret is accepted as a CLI flag.");
+  console.log("Nathan CLI\n  wizard               guided end-to-end installer\n  init                 guided local config\n  plan                 read-only plan + optional Cloudflare discovery\n  doctor [--live]      validate config and optionally OIDC discovery\n  deploy --apply       provision D1 and deploy Worker (requires Cloudflare token)\n  providers guide      OAuth callback and provider-specific setup\n  providers add --apply    configure provider secrets securely\n  protect <app>        plan a gateway for a private upstream\n  protect <app> --apply   deploy only after public-origin isolation\n  admin promote --apply     elevate a verified allowlisted user\n\nNo password or OAuth client secret is accepted as a CLI flag.");
 })().catch(e => { console.error("Nathan error:",e.message); process.exitCode=1; });
