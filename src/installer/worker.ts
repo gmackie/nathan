@@ -1,5 +1,5 @@
 import { randomId, sha256 } from "../gateway/crypto";
-import { parseCookie, makeCookie } from "../shared/security.mjs";
+import { parseCookie, makeCookie, constantTimeEqual } from "../shared/security.mjs";
 import { validateAccountId, validateHostname, validateInstallPlan, isAllowedOrigin } from "./validation.mjs";
 import { oauthAuthorizeUrl, oauthExchange } from "./oauth";
 import { beginOAuthState, consumeOAuthState, createInstallerSession, installerSession, deleteInstallerSession, pruneInstallerState } from "./storage";
@@ -51,7 +51,7 @@ async function dashboard(request:Request,env:InstallerEnv){
   if(path==="/api/callback"&&request.method==="GET"){
     const state=url.searchParams.get("state");
     const cookie=parseCookie(request.headers.get("Cookie"),STATE_COOKIE);
-    if(!state||!cookie||state!==cookie)return error(400,"Invalid OAuth state");
+    if(!state||!cookie||!constantTimeEqual(state,cookie))return error(400,"Invalid OAuth state");
     const verifier=await consumeOAuthState(env,state);
     if(!verifier)return error(400,"OAuth state expired or already used");
     const code=url.searchParams.get("code");

@@ -7,7 +7,7 @@ Nathan includes a separate installer Worker that signs in with Cloudflare Dashbo
 ## Deploy the preview installer
 
 1. Create a Cloudflare OAuth client (Account → Manage Account → OAuth clients). Configure authorization code + refresh token with client_secret_basic and PKCE; callback \`https://install.example.com/api/callback\`.
-2. Choose the scopes appropriate to the requested read-only discovery and later provisioning. \`CF_OAUTH_SCOPES\` must match the permissions granted to your OAuth client. **Cloudflare scope identifiers can change; review them with \`cf oauth-scopes list\` and the current Cloudflare OAuth settings.**
+2. Choose the least-privileged scopes for read-only discovery, using current Cloudflare documentation. The example configuration does not request write access. For later provisioning, a separate scoped consent flow and explicit installation approval will be needed. \`CF_OAUTH_SCOPES\` must match the permissions granted to your OAuth client. **Cloudflare scope identifiers can change; review them with \`cf oauth-scopes list\` and the current Cloudflare OAuth settings.**
 3. Provision the installer D1 database and configure its UUID in \`wrangler.installer.jsonc\`. Apply \`migrations/installer/0001_sessions.sql\`.
 4. Set \`CF_OAUTH_CLIENT_SECRET\` and \`INSTALLER_ENCRYPTION_KEY\` through Wrangler Secrets. The encryption key must be exactly 32 random bytes encoded as base64url; keep a secure backup.
 5. Set \`PUBLIC_ORIGIN\` and \`CF_OAUTH_CLIENT_ID\`, then deploy the installer using \`wrangler deploy --config wrangler.installer.jsonc\`.

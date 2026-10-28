@@ -103,6 +103,7 @@ async function provision() {
   try { schema = await readFile("migrations/0002_better_auth.sql", "utf8"); }
   catch { throw Error("Generated Better Auth migration missing. Run npm run schema:generate; review migrations/0002_better_auth.sql."); }
   if (schema.trim().length < 150) throw Error("Better Auth SQL migration is empty or unexpectedly small");
+  if (cfg.securityProfile === "high") throw Error("High-assurance deployment is not supported until validated AAL, FAPI, signing-key and recovery controls pass their release gates");
   if (!cfg.accountId) throw Error("accountId required for deploy");
   if (!apply) throw Error("Explicit --apply required. First run 'npm run plan'.");
   const client = new CloudflareClient(process.env.CLOUDFLARE_API_TOKEN,cfg.accountId);
