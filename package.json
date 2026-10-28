@@ -20,7 +20,10 @@
     "schema:check": "auth check --config src/auth/schema-config.ts",
     "providers": "node scripts/nathan.mjs providers",
     "protect": "node scripts/nathan.mjs protect",
-    "build:installer": "wrangler deploy --config wrangler.installer.jsonc --dry-run --outdir .nathan/build-installer"
+    "build:installer": "wrangler deploy --config wrangler.installer.jsonc --dry-run --outdir .nathan/build-installer",
+    "pack:release": "node scripts/pack-release.mjs",
+    "deploy:installer": "npm run pack:release && wrangler deploy --config wrangler.installer.jsonc",
+    "wizard": "node scripts/nathan.mjs wizard"
   },
   "dependencies": {
     "better-auth": "1.7.14",
