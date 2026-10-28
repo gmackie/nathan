@@ -109,6 +109,18 @@ export async function registerRealmClient(auth:any,env:AuthEnv,headers:Headers,i
       hostname:client.hostname,
       callback_uri:client.callbackUri,
       enabled:false,
+      oidcConfig:{
+        issuer:realm.issuer,
+        discovery:"https://"+realm.issuerHostname+"/.well-known/openid-configuration",
+        clientId:id,
+        redirectUri:client.callbackUri,
+        scopes:["openid","profile","email"],
+        responseType:"code",
+        pkceMethod:"S256",
+        clientAuthentication:client.publicClient?"none":"client_secret_basic",
+        consentRequired:true,
+        sessionCookieDomain:client.hostname
+      },
       note:"Client registered disabled. Configure the relying party, verify its callback, then explicitly enable in Identity Studio."
     };
   }catch(e) {

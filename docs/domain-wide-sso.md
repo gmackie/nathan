@@ -124,3 +124,11 @@ Better Auth references:
 - Verify client registration failures remain reserved for manual reconciliation, rather than retrying blindly and creating duplicate credentials.
 
 Domain-wide SSO does not imply NIST AAL2/AAL3. Required MFA policies remain unavailable until authentication assurance is proven end-to-end across federated sign-in methods.
+
+## High-scale tenant subdomains
+
+A product with thousands of short-lived customer hosts like \`alice.example.com\` and \`bob.example.com\` generally should **not** register thousands of near-identical OAuth redirect URIs. Instead, register one well-defined RP (such as \`app.example.com\`) with the exact callback \`https://app.example.com/auth/callback\`. That app can route the user back to an authorized tenant hostname after the code exchange by carrying tenant context inside the RP's **integrity-protected, short-lived OAuth state**.
+
+The RP must verify that the destination is under an allowlisted tenant record and its own \`example.com\` realm. Never accept an unvalidated \`returnTo\` hostname from query parameters; otherwise the canonical callback becomes an open redirect or token/session exfiltration mechanism.
+
+For low-volume distinct applications, explicit one-client-per-host registration remains the clearer choice. Those models can coexist under the same Nathan issuer.
