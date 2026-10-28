@@ -15,7 +15,7 @@ function isAdmin(session: any, env: AuthEnv): boolean {
 async function handle(request: Request, env: AuthEnv): Promise<Response> {
   const issuer = new URL(env.NATHAN_ISSUER);
   const url = new URL(request.url);
-  if (url.hostname !== issuer.hostname) return reject(421, "Misdirected request");
+  if (url.hostname !== issuer.hostname || url.protocol !== "https:") return reject(421, "Misdirected request");
   if (url.pathname === "/healthz") return Response.json({ ok: true, system: "nathan" });
   const auth = createAuth(env);
   if (url.pathname.startsWith("/api/auth/") || url.pathname.startsWith("/.well-known/")) {
@@ -38,6 +38,21 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     if (!isAdmin(session, env)) return reject(403, "Admin session required");
     return studioPage(session!.user.email);
   }
+  if ((url.pathname === "/studio/api/clients" || url.pathname === "/studio/api/status") && request.method === "GET") {
+    const session = await auth.api.getSession({ headers: request.headers });
+    if (!isAdmin(session, env)) return reject(403, "Admin session required");
+    if (url.pathname === "/studio/api/status") {
+      return Response.json({
+        issuer: issuer.origin + "/api/auth",
+        providers: {google: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET), github: Boolean(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET)},
+        features: {oidcProvider: true, passkeys: true, totp: true, enterpriseSso: env.ENTERPRISE_SSO === "true", password: env.ENABLE_PASSWORD === "true"},
+        note: "Authentication assurance level enforcement and guided plugin installation are not yet available"
+      }, {headers: {"Cache-Control":"no-store"}});
+    }
+    const clients = await env.DB.prepare('SELECT "clientId" AS id, "name" AS name, "redirectUris" AS redirectUris, "disabled" AS disabled, "tokenEndpointAuthMethod" AS authMethod FROM "oauthClient" ORDER BY "createdAt" DESC LIMIT 100')
+      .all<{id:string,name:string,redirectUris:string,disabled:number,authMethod:string}>();
+    return Response.json({clients:clients.results.map(c => ({...c,redirectUris:JSON.parse(c.redirectUris || "[]")}))},{headers:{"Cache-Control":"no-store"}});
+  }
   if (url.pathname === "/studio/api/clients" && request.method === "POST") {
     if (request.headers.get("Origin") !== issuer.origin) return reject(403, "Cross-origin request denied");
     if (request.headers.get("Content-Type")?.split(";")[0] !== "application/json") return reject(415, "JSON required");
@@ -51,12 +66,16 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     try { redirect = new URL(body.redirectUri); } catch { return reject(400, "Invalid redirect URI"); }
     if (redirect.protocol !== "https:" || redirect.username || redirect.password || redirect.hash)
       return reject(400, "Client redirect must be HTTPS without credentials or fragment");
+    if (!["external","worker","gateway"].includes(body.kind)) return reject(400, "Invalid client type");
+    if (body.publicClient && body.kind === "gateway") return reject(400, "A gateway must be a confidential client");
     const client = await auth.api.adminCreateOAuthClient({
       headers: request.headers,
       body: {
         client_name: body.name,
         redirect_uris: [redirect.href],
-        token_endpoint_auth_method: "client_secret_basic",
+        token_endpoint_auth_method: body.publicClient ? "none" : "client_secret_basic",
+        application_type: "web",
+        ...(body.kind === "gateway" ? {backchannel_logout_uri: redirect.origin + "/__nathan/backchannel"} : {}),
         grant_types: ["authorization_code", "refresh_token"],
         require_pkce: true,
         skip_consent: false
