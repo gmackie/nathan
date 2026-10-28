@@ -14,8 +14,7 @@ const out=join(root,"installer/public/release");
 const compiled=join(root,".nathan/build-auth");
 const config=JSON.parse(stripJsonc(await readFile("wrangler.auth.jsonc","utf8")));
 const version=JSON.parse(await readFile("package.json","utf8")).version;
-const run=spawnSync("node",["node_modules/wrangler/bin/wrangler.js",
-  "deploy","--config","wrangler.auth.jsonc","--dry-run","--outdir",".nathan/build-auth"],
+const run=spawnSync("npm",["run","build:auth"],
   {stdio:"inherit"});
 if(run.status!==0)throw Error("Worker dry-run build failed");
 async function walk(path){
