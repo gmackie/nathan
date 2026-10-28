@@ -1,5 +1,6 @@
 import { createLocalJWKSet, jwtVerify } from "jose";
 import type { AuthEnv } from "./env";
+import {mayAdminister} from "./bootstrap";
 import { isAdminUser, listClients, listApplications, listSso, listUsers, recentAudit,
   setApplicationEnabled, setOAuthClientDisabledWithMcp, audit } from "./admin-service";
 import {loadVerifiedRealm,listRealmClients} from "./domain-realm";
@@ -57,7 +58,7 @@ async function authenticatedPrincipal(request:Request,env:AuthEnv,auth:any) {
     .bind(payload.sub).first<{id:string,email:string,emailVerified:number,role:string,banned:number}>();
   if(!account || account.banned===1 || !isAdminUser({
     id:account.id,email:account.email,emailVerified:account.emailVerified===1,role:account.role
-  },env))return null;
+  },env) || !await mayAdminister(env,account.id))return null;
   return {actor:account.id,scopes,sessionId:typeof payload.sid==="string"?payload.sid:null};
 }
 async function checkWritePrivilege(env:AuthEnv,principal:{actor:string;scopes:string[];sessionId:string|null}) {

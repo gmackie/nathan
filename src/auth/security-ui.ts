@@ -9,6 +9,12 @@ export function securityPage(userEmail:string):Response {
   pre{white-space:pre-wrap;overflow-wrap:anywhere;color:#a8ecd1}</style></head>
   <body><nav><a href="/studio">Identity Studio</a> · <a href="/sign-in">Sign in</a></nav><h1>Account security</h1>
   <p>Signed in as <strong>__EMAIL__</strong>.</p>
+  <section id="admin-setup"><h2>Initial administrator onboarding</h2>
+  <p>Only the verified, Cloudflare-authorized initial administrator can complete this step. Enroll your authenticators below, save recovery codes, and return here to confirm setup.</p>
+  <button id="admin-status">Check setup requirements</button><button id="admin-finish">Complete initial setup</button>
+  <pre id="admin-setup-status" role="status"></pre>
+  <p><a href="/studio">Continue to Identity Studio once complete</a></p>
+  </section>
   <section><h2>Authenticator application (TOTP)</h2><p>Enroll and confirm an authenticator app, then store backup codes offline.
   Nathan only asserts MFA assurance after an actual verified authentication ceremony; enabling TOTP alone does not force MFA on social logins.</p>
   <label>Password (if this account uses password login)<input type="password" id="password" autocomplete="current-password"></label>
@@ -34,6 +40,29 @@ export function securityPage(userEmail:string):Response {
     let s='';for(const b of new Uint8Array(value))s+=String.fromCharCode(b);
     return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
   }
+
+  async function bootstrapStatus(){
+    const resp=await fetch('/security/api/bootstrap',{credentials:'same-origin'});
+    if(!resp.ok)throw Error('Cannot load administrator setup requirements');
+    const status=await resp.json();
+    document.getElementById('admin-setup-status').textContent=JSON.stringify(status,null,2);
+    document.getElementById('admin-setup').hidden=!status.isInitialAdmin;
+    return status;
+  }
+  document.getElementById('admin-status').onclick=async()=>{
+    try{await bootstrapStatus()}catch(e){document.getElementById('admin-setup-status').textContent=e.message}
+  };
+  document.getElementById('admin-finish').onclick=async()=>{
+    if(!confirm('I securely saved my recovery codes and tested my passkey/TOTP enrollment. Complete admin setup?'))return;
+    try{
+      const response=await fetch('/security/api/bootstrap/complete',{method:'POST',credentials:'same-origin',
+        headers:{Origin:location.origin}});
+      const body=await response.json();if(!response.ok)throw Error(body.error||'Enrollment is incomplete');
+      document.getElementById('admin-setup-status').textContent=JSON.stringify(body,null,2);
+    }catch(e){document.getElementById('admin-setup-status').textContent=e.message}
+  };
+  void bootstrapStatus().catch(()=>{document.getElementById('admin-setup').hidden=true});
+
   const totpStatus=document.getElementById('totp-status');
   document.getElementById('totp-start').onclick=async()=>{
     try {

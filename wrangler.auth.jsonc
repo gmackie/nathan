@@ -13,6 +13,8 @@
   "vars": {
     "NATHAN_ISSUER": "https://auth.example.com",
     "NATHAN_ADMIN_EMAILS": "",
+    "NATHAN_SECURITY_PROFILE": "business",
+    "NATHAN_BOOTSTRAP_REQUIRED": "true",
     "NATHAN_INSTALL_ACTIVE": "true",
     "NATHAN_MCP_WRITE_ENABLED": "false",
     "NATHAN_REALM_APEX": "",

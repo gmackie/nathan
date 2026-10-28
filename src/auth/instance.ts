@@ -6,6 +6,7 @@ import { sso } from "@better-auth/sso";
 import { sendAuthEmail } from "./email";
 import type { AuthEnv } from "./env";
 import type { SocialCredentials } from "./provider-store";
+import {mayAdminister} from "./bootstrap";
 
 export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredentials) {
   const issuer = new URL(env.NATHAN_ISSUER);
@@ -83,7 +84,7 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
         clientPrivileges: async ({ user }) => {
           if (!user?.email || !user.emailVerified || (user as any).role !== "admin") return false;
           const allowed = env.NATHAN_ADMIN_EMAILS.split(",").map(x=>x.trim().toLowerCase()).filter(Boolean);
-          return allowed.includes(user.email.toLowerCase());
+          return allowed.includes(user.email.toLowerCase()) && await mayAdminister(env,user.id);
         },
         ...(env.NATHAN_PAIRWISE_SECRET ? { pairwiseSecret: env.NATHAN_PAIRWISE_SECRET } : {})
       }),

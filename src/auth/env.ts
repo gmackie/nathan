@@ -4,6 +4,8 @@ export interface AuthEnv {
   NATHAN_MCP_WRITE_ENABLED?: string;
   BETTER_AUTH_SECRET: string;
   NATHAN_CONFIG_KEY?: string;
+  NATHAN_SECURITY_PROFILE?: "standard"|"business"|"high";
+  NATHAN_BOOTSTRAP_REQUIRED?: string;
   NATHAN_ISSUER: string;
   NATHAN_REALM_APEX?: string;
   NATHAN_ADMIN_EMAILS: string;
