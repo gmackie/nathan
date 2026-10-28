@@ -59,7 +59,7 @@ export function studioPage(userEmail: string): Response {
   <label>Client name<input id="name" placeholder="My application"></label>
   <label>Exact HTTPS redirect URI<input id="redirect" placeholder="https://app.example.com/oauth/callback"></label><label>Client type<select id="kind"><option value="external">External web app</option><option value="worker">Cloudflare Worker</option><option value="gateway">Nathan gateway</option></select></label><label><input type="checkbox" id="public-client"> Public OIDC client (PKCE, no secret)</label>
   <button id="create">Register client</button><p id="status" role="alert"></p><pre id="result"></pre>
-  <p><small>Client secrets are shown once. Store them in a secure manager.</small></p><h2>Registered applications</h2><button class="secondary" id="refresh">Refresh registered clients</button><pre id="clients" aria-live="polite"></pre><h2>Identity providers and security posture</h2><button class="secondary" id="status-btn">View active capabilities</button><pre id="capabilities"></pre><h2>Available plugins</h2><p>Catalog entries are read-only until their packages and database migrations are reviewed and deployed.</p><select id="plugin-tier"><option value="all">All tiers</option><option value="verified">Verified candidates</option><option value="community">Community</option><option value="custom">Private/custom</option></select><button class="secondary" id="plugins-btn">List integrations</button><pre id="plugins"></pre><h2>Security audit events</h2><button class="secondary" id="audit-btn">Refresh security audit</button><pre id="audit"></pre>`, `
+  <p><small>Client secrets are shown once. Store them in a secure manager.</small></p><h2>Registered applications</h2><button class="secondary" id="refresh">Refresh registered clients</button><pre id="clients" aria-live="polite"></pre><h3>Disable or resume OIDC client</h3><label>Client ID<input id="manage-client" placeholder="OIDC client_id"></label><button class="secondary" id="disable-client">Disable</button><button class="secondary" id="enable-client">Re-enable</button><p id="manage-status" role="status"></p><h2>Identity providers and security posture</h2><button class="secondary" id="status-btn">View active capabilities</button><pre id="capabilities"></pre><h2>Available plugins</h2><p>Catalog entries are read-only until their packages and database migrations are reviewed and deployed.</p><select id="plugin-tier"><option value="all">All tiers</option><option value="verified">Verified candidates</option><option value="community">Community</option><option value="custom">Private/custom</option></select><button class="secondary" id="plugins-btn">List integrations</button><pre id="plugins"></pre><h2>Security audit events</h2><button class="secondary" id="audit-btn">Refresh security audit</button><pre id="audit"></pre>`, `
     document.getElementById('refresh').onclick=async()=>{
       const r=await fetch('/studio/api/clients',{credentials:'same-origin'});const d=await r.json();
       document.getElementById('clients').textContent=r.ok?JSON.stringify(d,null,2):'Unable to load clients';
@@ -68,6 +68,17 @@ export function studioPage(userEmail: string): Response {
       const r=await fetch('/studio/api/status',{credentials:'same-origin'});const d=await r.json();
       document.getElementById('capabilities').textContent=r.ok?JSON.stringify(d,null,2):'Unavailable';
     };
+    async function setClientDisabled(disabled){
+      const el=document.getElementById('manage-status');el.textContent='Updating...';
+      try {
+        const r=await fetch('/studio/api/clients/status',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({clientId:document.getElementById('manage-client').value,disabled})});
+        const d=await r.json(); if(!r.ok)throw Error(d.error||'Update failed');
+        el.textContent=disabled?'Client disabled':'Client re-enabled';
+        document.getElementById('refresh').click();
+      }catch(e){el.textContent=e.message}
+    }
+    document.getElementById('disable-client').onclick=()=>setClientDisabled(true);
+    document.getElementById('enable-client').onclick=()=>setClientDisabled(false);
     document.getElementById('plugins-btn').onclick=async()=>{
       const r=await fetch('/studio/api/plugins',{credentials:'same-origin'});
       const d=await r.json();if(!r.ok)return;

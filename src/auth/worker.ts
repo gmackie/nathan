@@ -62,6 +62,35 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
       .all<{id:string,name:string,redirectUris:string,disabled:number,authMethod:string}>();
     return Response.json({clients:clients.results.map(c => ({...c,redirectUris:JSON.parse(c.redirectUris || "[]")}))},{headers:{"Cache-Control":"no-store"}});
   }
+  if (url.pathname === "/studio/api/clients/status" && request.method === "POST") {
+    if (request.headers.get("Origin") !== issuer.origin) return reject(403, "Cross-origin request denied");
+    if (request.headers.get("Content-Type")?.split(";")[0] !== "application/json") return reject(415, "JSON required");
+    const session = await auth.api.getSession({ headers: request.headers });
+    if (!isAdmin(session, env)) return reject(403, "Admin session required");
+    const raw = await request.text();
+    if (raw.length > 4096) return reject(413, "Request too large");
+    let body: any;
+    try { body = JSON.parse(raw); } catch { return reject(400, "Invalid JSON"); }
+    if (typeof body.clientId !== "string" || !/^[A-Za-z0-9._-]{1,200}$/.test(body.clientId) || typeof body.disabled !== "boolean")
+      return reject(400, "Invalid client status update");
+    const auditId = crypto.randomUUID();
+    const action = body.disabled ? "oauth_client_disable" : "oauth_client_enable";
+    await env.DB.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) VALUES (?,?,?,?,?)")
+      .bind(auditId,session!.user.id,action,body.clientId,"attempted").run();
+    try {
+      await auth.api.adminUpdateOAuthClient({
+        headers: request.headers,
+        body: { client_id: body.clientId, update: { disabled: body.disabled } }
+      });
+      await env.DB.prepare("UPDATE nathan_security_audit SET outcome=? WHERE id=?")
+        .bind("succeeded",auditId).run();
+      return Response.json({updated:true,clientId:body.clientId,disabled:body.disabled},{headers:{"Cache-Control":"no-store"}});
+    } catch (error) {
+      await env.DB.prepare("UPDATE nathan_security_audit SET outcome=? WHERE id=?")
+        .bind("failed",auditId).run();
+      return reject(400,"Client update failed or not authorized");
+    }
+  }
   if (url.pathname === "/studio/api/clients" && request.method === "POST") {
     if (request.headers.get("Origin") !== issuer.origin) return reject(403, "Cross-origin request denied");
     if (request.headers.get("Content-Type")?.split(";")[0] !== "application/json") return reject(415, "JSON required");
