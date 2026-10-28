@@ -12,6 +12,8 @@ export function securityPage(userEmail:string):Response {
   <section id="admin-setup"><h2>Initial administrator onboarding</h2>
   <p>Only the verified, Cloudflare-authorized initial administrator can complete this step. Enroll your authenticators below, save recovery codes, and return here to confirm setup.</p>
   <button id="admin-status">Check setup requirements</button><button id="admin-finish">Complete initial setup</button>
+  <button id="admin-stepup">Reauthenticate with passkey for administration</button>
+  <p>For business-profile installations, signing in through a social/enterprise provider is not enough to administer Nathan. After enrolling a passkey, use a fresh passkey authentication ceremony to unlock sensitive operations for 15 minutes.</p>
   <pre id="admin-setup-status" role="status"></pre>
   <p><a href="/studio">Continue to Identity Studio once complete</a></p>
   </section>
@@ -100,6 +102,31 @@ export function securityPage(userEmail:string):Response {
       output.textContent='Passkey successfully enrolled.';
     }catch(e){output.textContent=e.message}
   };
+
+  document.getElementById('admin-stepup').onclick=async()=>{
+    const out=document.getElementById('admin-setup-status');
+    try{
+      if(!window.PublicKeyCredential)throw Error('WebAuthn is not available in this browser');
+      const options=unwrap(await api('/passkey/generate-authenticate-options'));
+      const publicKey=options.publicKey||options;
+      publicKey.challenge=decode(publicKey.challenge);
+      if(publicKey.allowCredentials)publicKey.allowCredentials=
+        publicKey.allowCredentials.map(c=>({...c,id:decode(c.id)}));
+      const credential=await navigator.credentials.get({publicKey});
+      if(!credential)throw Error('Passkey sign-in was cancelled');
+      const response={id:credential.id,rawId:encode(credential.rawId),type:'public-key',
+        response:{
+          clientDataJSON:encode(credential.response.clientDataJSON),
+          authenticatorData:encode(credential.response.authenticatorData),
+          signature:encode(credential.response.signature),
+          userHandle:credential.response.userHandle?encode(credential.response.userHandle):undefined
+        },clientExtensionResults:credential.getClientExtensionResults()};
+      await api('/passkey/verify-authentication','POST',{response});
+      out.textContent='Fresh passkey authentication completed. Redirecting to Identity Studio.';
+      location.assign('/studio');
+    }catch(e){out.textContent=e.message}
+  };
+
   document.getElementById('passkey-list').onclick=async()=>{
     try{
       const response=await api('/passkey/list-user-passkeys');
