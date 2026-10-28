@@ -44,3 +44,5 @@ jobs:
         run: npm run build:auth
       - name: Gateway Worker bundle (no deployment)
         run: npm run build:gateway
+      - name: Hosted installer Worker bundle (no deployment)
+        run: npm run build:installer

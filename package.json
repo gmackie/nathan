@@ -19,7 +19,8 @@
     "build:gateway": "wrangler deploy --config wrangler.gateway.jsonc --dry-run --outdir .nathan/build-gateway",
     "schema:check": "auth check --config src/auth/schema-config.ts",
     "providers": "node scripts/nathan.mjs providers",
-    "protect": "node scripts/nathan.mjs protect"
+    "protect": "node scripts/nathan.mjs protect",
+    "build:installer": "wrangler deploy --config wrangler.installer.jsonc --dry-run --outdir .nathan/build-installer"
   },
   "dependencies": {
     "better-auth": "1.7.14",
