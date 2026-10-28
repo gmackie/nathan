@@ -5,6 +5,8 @@ import { loadConfig, validateConfig, buildPlan } from "./lib/config.mjs";
 import { CloudflareClient, inspectDeployment } from "./lib/cloudflare.mjs";
 import { ask, yesNo, secretPrompt } from "./lib/prompts.mjs";
 import { discoverWrangler, runCli, createGeneratedConfig } from "./lib/wrangler.mjs";
+import { providerCommand } from "./lib/provider-wizard.mjs";
+import { protectCommand } from "./lib/protect-wizard.mjs";
 
 const [command = "help", ...args] = process.argv.slice(2);
 const file = args.find(x => x.endsWith(".json")) || "nathan.config.json";
@@ -105,5 +107,7 @@ async function provision() {
   if (command === "plan") return planOrDoctor(false);
   if (command === "doctor") return planOrDoctor(args.includes("--live"));
   if (command === "deploy") return provision();
-  console.log("Nathan CLI\n  init                 guided local config\n  plan                 read-only plan + optional Cloudflare discovery\n  doctor [--live]      validate config and optionally OIDC discovery\n  deploy --apply       provision D1 and deploy Worker (requires Cloudflare token)\n\nNo password or OAuth client secret is accepted as a CLI flag.");
+  if (command === "providers") return providerCommand(args.filter(a=>a!=="--apply"&&!a.endsWith(".json")),file,apply);
+  if (command === "protect") return protectCommand(args.filter(a=>a!=="--apply"&&!a.endsWith(".json")),file,apply);
+  console.log("Nathan CLI\n  init                 guided local config\n  plan                 read-only plan + optional Cloudflare discovery\n  doctor [--live]      validate config and optionally OIDC discovery\n  deploy --apply       provision D1 and deploy Worker (requires Cloudflare token)\n  providers guide      OAuth callback and provider-specific setup\n  providers add --apply    configure provider secrets securely\n  protect <app>        plan a gateway for a private upstream\n  protect <app> --apply   deploy only after public-origin isolation\n\nNo password or OAuth client secret is accepted as a CLI flag.");
 })().catch(e => { console.error("Nathan error:",e.message); process.exitCode=1; });
