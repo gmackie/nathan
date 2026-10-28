@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import type {AuthEnv} from "../env";
 import {DIRECTORY_SCHEMA} from "./schema.mjs";
 import {SCIM_USER,SCIM_GROUP,SCIM_LIST,SCIM_PATCH,validateScimUser,validateScimGroup,parseFilter,pagination} from "./validation.mjs";
 
@@ -18,9 +19,9 @@ const instant=(value:number)=>new Date(value).toISOString();
 function checkedVersion(ifMatch:string|null,revision:number){
   if(ifMatch && ifMatch!==version(revision))throw new Error("SCIM ETag no longer matches the current resource");
 }
-export class NathanScimDirectory extends DurableObject {
+export class NathanScimDirectory extends DurableObject<AuthEnv> {
   readonly sql:SqlStorage;
-  constructor(ctx:DurableObjectState,env:unknown){
+  constructor(ctx:DurableObjectState,env:AuthEnv){
     super(ctx,env);
     this.sql=ctx.storage.sql;
     this.sql.exec("PRAGMA foreign_keys=ON");
