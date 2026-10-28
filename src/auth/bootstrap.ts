@@ -1,5 +1,6 @@
 import type { AuthEnv } from "./env";
 import { audit } from "./admin-service";
+import {effectiveAdminPolicy} from "./security-policy";
 
 type BootstrapRow={
   cloudflare_user_id:string;admin_email:string;admin_user_id:string|null;
@@ -30,7 +31,8 @@ export async function bootstrapStatus(env:AuthEnv,userId:string):Promise<AdminEn
     requirements:{passkey:true,totp:true},
     warning:"Admin bootstrap has not been initialized; use the Cloudflare-authorized wizard or recovery CLI."};
   const methods=await enrollment(env,userId);
-  const business=env.NATHAN_SECURITY_PROFILE!=="standard";
+  const policy=await effectiveAdminPolicy(env);
+  const business=policy.requireBothAuthenticators;
   const ready=business?(methods.passkeys>0 && methods.totpVerified)
     :(methods.passkeys>0 || methods.totpVerified);
   return {configured:true,state:b.state,isInitialAdmin:b.admin_user_id===userId,
@@ -60,10 +62,11 @@ export async function mayAdminister(env:AuthEnv,userId:string,sessionId?:string)
   const b=await row(env);
   if(!b||b.state!=="complete")return false;
   const auth=await enrollment(env,userId);
-  const enrolled=env.NATHAN_SECURITY_PROFILE==="standard"
-    ?(auth.passkeys>0||auth.totpVerified):(auth.passkeys>0&&auth.totpVerified);
+  const policy=await effectiveAdminPolicy(env);
+  const enrolled=policy.requireBothAuthenticators
+    ?(auth.passkeys>0&&auth.totpVerified):(auth.passkeys>0||auth.totpVerified);
   if(!enrolled)return false;
-  if(env.NATHAN_ADMIN_STEPUP_REQUIRED!=="true")return true;
+  if(!policy.requireRecentPasskey)return true;
   if(!sessionId || sessionId.length>256)return false;
   const stepup=await env.DB.prepare(
     "SELECT session_id FROM nathan_admin_assurance WHERE session_id=? AND user_id=? "+
