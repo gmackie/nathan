@@ -3,6 +3,7 @@ export const MCP_VERSION = "2026-07-28";
 export const READ_TOOLS = Object.freeze([
   { name: "nathan_status", title: "Nathan status", description: "Read issuer capabilities and configured providers", inputSchema: { type:"object", properties:{}, additionalProperties:false }, annotations:{readOnlyHint:true} },
   { name: "nathan_clients_list", title: "OIDC clients", description: "List OIDC clients without secrets", inputSchema: {type:"object",properties:{},additionalProperties:false},annotations:{readOnlyHint:true} },
+  { name: "nathan_users_list", title:"Users", description:"Read recent identity accounts without credentials", inputSchema:{type:"object",properties:{},additionalProperties:false}, annotations:{readOnlyHint:true} },
   { name: "nathan_apps_list", title: "Protected applications", description: "List configured gateways and authorization policies", inputSchema:{type:"object",properties:{},additionalProperties:false},annotations:{readOnlyHint:true} },
   { name: "nathan_sso_list", title: "Enterprise SSO", description: "List upstream OIDC/SAML registrations with secrets redacted", inputSchema:{type:"object",properties:{},additionalProperties:false},annotations:{readOnlyHint:true} },
   { name: "nathan_audit_recent", title: "Recent security events", description: "List the last 75 security audit events", inputSchema:{type:"object",properties:{},additionalProperties:false},annotations:{readOnlyHint:true} }
