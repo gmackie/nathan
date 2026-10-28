@@ -5,6 +5,7 @@ import { oauthAuthorizeUrl, oauthExchange } from "./oauth";
 import { beginOAuthState, consumeOAuthState, createInstallerSession, installerSession, deleteInstallerSession, pruneInstallerState } from "./storage";
 import { cloudflareRequest } from "./cloudflare";
 import { installerPage } from "./ui";
+import { createInstall, installStatus, advanceInstall } from "./deploy";
 import type { InstallerEnv } from "./env";
 
 const STATE_COOKIE="__Host-nathan-installer-state";
@@ -80,7 +81,7 @@ async function dashboard(request:Request,env:InstallerEnv){
   }
   const api=<T>(path:string)=>cloudflareRequest<T>(env,session.digest,session.tokens,path);
   if(path==="/api/session"&&request.method==="GET"){
-    const user=await api<{email:string}>("/user");
+    const user=await api<{id:string;email:string}>("/user");
     return Response.json({user:{email:user.email},expiresAt:session.expiresAt});
   }
   if(path==="/api/accounts"&&request.method==="GET"){
@@ -123,7 +124,39 @@ async function dashboard(request:Request,env:InstallerEnv){
       warning:"No changes made. Hosted upload, schema migrations and credential installation are not yet enabled."
     },{headers:{"Cache-Control":"no-store"}});
   }
-  if(path==="/api/apply"&&request.method==="POST")return error(501,"The hosted installer publish path is not yet verified; use the local CLI");
+
+  if(path==="/api/install/start"&&request.method==="POST"){
+    const raw=await request.text();
+    if(raw.length>8192)return error(413,"Installation plan too large");
+    try{
+      const body=JSON.parse(raw);
+      const result=await createInstall(env,session,body);
+      return Response.json({job:result},{headers:{"Cache-Control":"no-store"}});
+    }catch(e){
+      return error(400,e instanceof Error?e.message:"Unable to start installation");
+    }
+  }
+  if(path==="/api/install/status"&&request.method==="GET"){
+    const id=url.searchParams.get("id")||"";
+    try{return Response.json({job:await installStatus(env,session,id)},{headers:{"Cache-Control":"no-store"}})}
+    catch{return error(404,"Installation unavailable or not owned by this session")}
+  }
+  if(path==="/api/install/advance"&&request.method==="POST"){
+    const raw=await request.text();
+    if(raw.length>8192)return error(413,"Step input too large");
+    try{
+      const body=JSON.parse(raw);
+      if(typeof body?.id!=="string")return error(400,"Installation ID required");
+      const job=await advanceInstall(env,session,body.id,body.credentials||{});
+      return Response.json({job},{headers:{"Cache-Control":"no-store"}});
+    }catch(e){
+      // No secrets are included in ordinary errors; the installer stores only a sanitized reason.
+      const reason=e instanceof Error?e.message:"Installer step failed";
+      return error(409,reason.replace(/(secret|token|password)[=:]\S+/gi,"$1=[REDACTED]").slice(0,500));
+    }
+  }
+  if(path==="/api/apply"&&request.method==="POST")
+    return error(410,"Use /api/install/start and /api/install/advance with the current installer release");
   return error(404,"Not found");
 }
 
