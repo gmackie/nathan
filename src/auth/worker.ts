@@ -3,6 +3,7 @@ import { verifyOAuthQueryParams } from "@better-auth/oauth-provider";
 import { createAuth } from "./instance";
 import { signInPage, consentPage, studioPage } from "./ui";
 import { securityPage } from "./security-ui";
+import { loadVerifiedRealm, listRealmClients,registerRealmClient,updateRealmClientStatus } from "./domain-realm";
 import type { AuthEnv } from "./env";
 import pluginCatalog from "../../plugins/catalog.json";
 import { handleMcp, protectedResourceMetadata } from "./mcp";
@@ -55,7 +56,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     if (!isAdmin(session, env)) return reject(403, "Admin session required");
     return studioPage(session!.user.email);
   }
-  if (["/studio/api/clients", "/studio/api/status", "/studio/api/plugins", "/studio/api/audit", "/studio/api/apps", "/studio/api/sso", "/studio/api/users"].includes(url.pathname) && request.method === "GET") {
+  if (["/studio/api/clients", "/studio/api/status", "/studio/api/plugins", "/studio/api/audit", "/studio/api/apps", "/studio/api/sso", "/studio/api/users", "/studio/api/realm", "/studio/api/realm/clients"].includes(url.pathname) && request.method === "GET") {
     const session = await auth.api.getSession({ headers: request.headers });
     if (!isAdmin(session, env)) return reject(403, "Admin session required");
     if (url.pathname === "/studio/api/status") {
@@ -65,6 +66,14 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
         features: {oidcProvider: true, passkeys: true, totp: true, enterpriseSso: env.ENTERPRISE_SSO === "true", password: env.ENABLE_PASSWORD === "true"},
         note: "Authentication assurance level enforcement and guided plugin installation are not yet available"
       }, {headers: {"Cache-Control":"no-store"}});
+    }
+    if (url.pathname === "/studio/api/realm") {
+      try{return Response.json({realm:await loadVerifiedRealm(env)},{headers:{"Cache-Control":"no-store"}})}
+      catch{return reject(503,"Domain realm configuration is incomplete or unverified")}
+    }
+    if (url.pathname === "/studio/api/realm/clients") {
+      try{return Response.json(await listRealmClients(env),{headers:{"Cache-Control":"no-store"}})}
+      catch{return reject(503,"Cannot load domain realm clients")}
     }
     if (url.pathname === "/studio/api/users") {
       return Response.json({users:await listUsers(env)},{headers:{"Cache-Control":"no-store"}});
@@ -115,6 +124,26 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     }
   }
 
+
+  if(url.pathname==="/studio/api/realm/clients" && request.method==="POST"){
+    if(request.headers.get("Origin")!==issuer.origin ||
+       request.headers.get("Sec-Fetch-Site")==="cross-site")return reject(403,"Cross-origin request denied");
+    if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")
+      return reject(415,"JSON required");
+    const session=await auth.api.getSession({headers:request.headers});
+    if(!isAdminUser(session?.user,env))return reject(403,"Verified administrator required");
+    const raw=await request.text();
+    if(raw.length>8192)return reject(413,"Registration too large");
+    let input:any;
+    try{input=JSON.parse(raw)}catch{return reject(400,"Invalid JSON");}
+    try{
+      const client=await registerRealmClient(auth,env,request.headers,input,session!.user.id);
+      return Response.json(client,{headers:{"Cache-Control":"no-store"}});
+    }catch{
+      return reject(409,"Registration denied or incomplete. Check the exact hostname, existing realm clients and security audit before retrying.");
+    }
+  }
+
   if (url.pathname === "/studio/api/clients/status" && request.method === "POST") {
     if (request.headers.get("Origin") !== issuer.origin) return reject(403, "Cross-origin request denied");
     if (request.headers.get("Content-Type")?.split(";")[0] !== "application/json") return reject(415, "JSON required");
@@ -135,6 +164,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
         headers: request.headers,
         body: { client_id: body.clientId, update: { disabled: body.disabled } }
       });
+      await updateRealmClientStatus(env,body.clientId,body.disabled);
       await env.DB.prepare("UPDATE nathan_security_audit SET outcome=? WHERE id=?")
         .bind("succeeded",auditId).run();
       return Response.json({updated:true,clientId:body.clientId,disabled:body.disabled},{headers:{"Cache-Control":"no-store"}});

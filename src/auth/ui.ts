@@ -123,6 +123,21 @@ export function studioPage(userEmail: string): Response {
   <p><small>Client secrets are shown once. Store them in a secure manager.</small></p><h2>Registered applications</h2><button class="secondary" id="refresh">Refresh registered clients</button><pre id="clients" aria-live="polite"></pre><h3>Disable or resume OIDC client</h3><label>Client ID<input id="manage-client" placeholder="OIDC client_id"></label><button class="secondary" id="disable-client">Disable</button><button class="secondary" id="enable-client">Re-enable</button><p id="manage-status" role="status"></p><h2>Identity providers and security posture</h2><button class="secondary" id="status-btn">View active capabilities</button><pre id="capabilities"></pre><h2>Available plugins</h2><p>Catalog entries are read-only until their packages and database migrations are reviewed and deployed.</p><select id="plugin-tier"><option value="all">All tiers</option><option value="verified">Verified candidates</option><option value="community">Community</option><option value="custom">Private/custom</option></select><button class="secondary" id="plugins-btn">List integrations</button><pre id="plugins"></pre><h2>Security audit events</h2><button class="secondary" id="audit-btn">Refresh security audit</button><pre id="audit"></pre>
   <h2>Users</h2><p>Read-only directory of recent accounts. Passwords, credentials and session values are never returned.</p>
   <button class="secondary" id="users-list">Refresh users</button><pre id="users-results"></pre>
+  <h2>Domain-wide SSO</h2>
+  <p>One issuer at <strong>login.&lt;domain&gt;</strong> serves the root and every approved subdomain. Each client gets an exact callback URL and its own session. No wildcard redirects or shared parent-domain login cookies.</p>
+  <button class="secondary" id="realm-overview">Show verified realm</button><pre id="realm-details"></pre>
+  <label>Root or subdomain hostname<input id="realm-host" placeholder="example.com or app.example.com" autocomplete="off"></label>
+  <label>Application type<select id="realm-kind">
+    <option value="web">Root or web application</option>
+    <option value="worker">Cloudflare Worker with OIDC integration</option>
+    <option value="gateway">Nathan gateway for a private Worker</option>
+    <option value="external">External application</option></select></label>
+  <label>Exact application callback path<input id="realm-callback" placeholder="/auth/callback" value="/auth/callback"></label>
+  <label><input type="checkbox" id="realm-public"> Public OIDC client (PKCE, no secret)</label>
+  <p>New clients start <strong>disabled</strong>. Configure the application first, then explicitly enable its client in Registered applications.</p>
+  <button id="realm-register">Register this hostname</button>
+  <pre id="realm-registration"></pre>
+  <button class="secondary" id="realm-clients-refresh">List registered domain clients</button><pre id="realm-clients"></pre>
   <h2>Protected applications</h2><p>Service-binding policies start disabled. Save a policy, then explicitly enable it.</p>
   <label>Application ID<input id="app-id" placeholder="operations"></label>
   <label>Hostname<input id="app-host" placeholder="operations.example.com"></label>
@@ -183,6 +198,39 @@ export function studioPage(userEmail: string): Response {
       const out=document.getElementById('users-results');
       try{out.textContent=JSON.stringify(await j('/studio/api/users'),null,2)}catch(e){out.textContent=e.message}
     };
+
+    document.getElementById('realm-overview').onclick=async()=>{
+      const output=document.getElementById('realm-details');
+      try{
+        const response=await j('/studio/api/realm');
+        output.textContent=JSON.stringify(response,null,2);
+        if(response.realm?.apex)document.getElementById('realm-host').value=response.realm.apex;
+      }catch(e){output.textContent=e.message}
+    };
+    document.getElementById('realm-kind').onchange=()=>{
+      document.getElementById('realm-callback').value=
+        document.getElementById('realm-kind').value==='gateway'?'/__nathan/callback':'/auth/callback';
+    };
+    document.getElementById('realm-register').onclick=async()=>{
+      const output=document.getElementById('realm-registration');
+      if(!confirm('Register this exact hostname as a new, initially disabled OIDC client?'))return;
+      try{
+        const value=await postJson('/studio/api/realm/clients',{
+          hostname:document.getElementById('realm-host').value.trim().toLowerCase(),
+          kind:document.getElementById('realm-kind').value,
+          callbackPath:document.getElementById('realm-callback').value,
+          publicClient:document.getElementById('realm-public').checked
+        });
+        output.textContent=JSON.stringify(value,null,2);
+        document.getElementById('realm-clients-refresh').click();
+      }catch(e){output.textContent=e.message}
+    };
+    document.getElementById('realm-clients-refresh').onclick=async()=>{
+      const output=document.getElementById('realm-clients');
+      try{output.textContent=JSON.stringify(await j('/studio/api/realm/clients'),null,2)}
+      catch(e){output.textContent=e.message}
+    };
+
     document.getElementById('app-save').onclick=async()=>{
       const out=document.getElementById('app-create-result');
       try{out.textContent=JSON.stringify(await postJson('/studio/api/apps',{
