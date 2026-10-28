@@ -128,3 +128,13 @@ export async function registerEnterpriseOidc(auth:any,env:AuthEnv,headers:Header
     throw e;
   }
 }
+
+/** Privileged internal mutation for OAuth-authenticated MCP administrators. */
+export async function setOAuthClientDisabledWithMcp(env:AuthEnv,clientId:string,disabled:boolean,actor:string){
+  if(!/^[A-Za-z0-9._-]{1,200}$/.test(clientId))throw Error("Invalid client id");
+  const result=await env.DB.prepare('UPDATE "oauthClient" SET "disabled"=? WHERE "clientId"=?')
+    .bind(disabled?1:0,clientId).run();
+  if(!result.meta?.changes)throw Error("Unknown OAuth client");
+  await audit(env,actor,disabled?"oauth_client_disable":"oauth_client_enable",clientId,"succeeded");
+  return {clientId,disabled,note:"Existing bearer access tokens may remain valid until expiration; revoke tokens separately if required."};
+}
