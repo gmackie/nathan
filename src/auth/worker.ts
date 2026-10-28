@@ -62,7 +62,9 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
   if(url.pathname==="/security/api/bootstrap" && request.method==="GET"){
     const session=await auth.api.getSession({headers:request.headers});
     if(!session?.user?.id)return reject(401,"Authenticated session required");
-    return Response.json(await bootstrapStatus(env,session.user.id),{headers:{"Cache-Control":"no-store"}});
+    return Response.json({...await bootstrapStatus(env,session.user.id),
+      sessionReady:await mayAdminister(env,session.user.id,session.session.id)},
+      {headers:{"Cache-Control":"no-store"}});
   }
   if(url.pathname==="/security/api/bootstrap/complete" && request.method==="POST"){
     if(request.headers.get("Origin")!==issuer.origin || request.headers.get("Sec-Fetch-Site")==="cross-site")
