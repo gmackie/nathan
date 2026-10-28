@@ -2,11 +2,12 @@ import { parseCookie, makeCookie, safeReturnPath, constantTimeEqual, validateIss
 import { randomId, seal, unseal, sha256 } from "./crypto";
 import { discover, authorizeUrl, exchangeCode, verifyIdToken } from "./oidc";
 import type { GatewayEnv } from "./env";
+import { handleBackchannelLogout } from "./backchannel";
 
 const SESSION_COOKIE = "__Host-nathan-session";
 const FLOW_COOKIE = "__Host-nathan-flow";
 type Flow = { state: string; nonce: string; verifier: string; returnTo: string; expiresAt: number };
-type StoredSession = { subject: string; email: string | null; sessionIdHash: string; expiresAt: number; acr: string | null; authTime: number | null; issuer: string };
+type StoredSession = { subject: string; email: string | null; sessionIdHash: string; expiresAt: number; acr: string | null; authTime: number | null; issuer: string; sid?: string | null };
 
 function origin(env: GatewayEnv) {
   const u = new URL(env.PUBLIC_ORIGIN);
@@ -61,9 +62,9 @@ async function completeLogin(url: URL, request: Request, env: GatewayEnv): Promi
     const ttl = Math.max(300, Math.min(8 * 60 * 60, Number(env.SESSION_TTL_SECONDS || "28800")));
     const expiresAt = Math.floor(Date.now() / 1000) + ttl;
     await env.SESSIONS.prepare(
-      "INSERT INTO nathan_gateway_sessions(id_hash, subject, email, issuer, client_id, acr, auth_time, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+      "INSERT INTO nathan_gateway_sessions(id_hash, subject, email, issuer, client_id, acr, auth_time, sid, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
     ).bind(hash, id.sub, typeof id.email === "string" ? id.email : null, meta.issuer, env.OIDC_CLIENT_ID,
-      typeof id.acr === "string" ? id.acr : null, typeof id.auth_time === "number" ? id.auth_time : null, expiresAt).run();
+      typeof id.acr === "string" ? id.acr : null, typeof id.auth_time === "number" ? id.auth_time : null, typeof id.sid === "string" ? id.sid : null, expiresAt).run();
     const response = Response.redirect(origin(env) + flow.returnTo, 303);
     response.headers.append("Set-Cookie", makeCookie(SESSION_COOKIE, handle, { maxAge: ttl }));
     return cleared(response);
@@ -115,6 +116,7 @@ export default {
       if (url.pathname === "/__nathan/login" && request.method === "GET") return beginLogin(url, env);
       if (url.pathname === "/__nathan/callback" && request.method === "GET") return completeLogin(url, request, env);
       if (url.pathname === "/__nathan/logout" && request.method === "POST") return logout(request, env);
+      if (url.pathname === "/__nathan/backchannel" && request.method === "POST") return handleBackchannelLogout(request, env);
       if (url.pathname.startsWith("/__nathan/")) return errorResponse(404, "Not found");
       const session = await currentSession(request, env);
       if (!session) {
