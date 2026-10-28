@@ -9,7 +9,7 @@ export type NathanVerifierOptions = {
 export function createNathanTokenVerifier(options: NathanVerifierOptions) {
   const issuer = new URL(options.issuer);
   if (issuer.protocol !== "https:") throw Error("Issuer must be HTTPS");
-  const jwks = createRemoteJWKSet(new URL(issuer.origin + "/api/auth/jwks"));
+  const jwks = createRemoteJWKSet(new URL(issuer.origin + issuer.pathname.replace(/\/$/, "") + "/jwks"));
   return async (request: Request): Promise<NathanPrincipal | null> => {
     const header = request.headers.get("Authorization");
     if (!header?.startsWith("Bearer ")) return null;
