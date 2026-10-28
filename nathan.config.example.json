@@ -1,6 +1,6 @@
 {
   "name": "nathan",
-  "hostname": "auth.example.com",
+  "hostname": "login.example.com",
   "securityProfile": "business",
   "database": {
     "type": "d1",
@@ -16,11 +16,25 @@
   },
   "applications": [
     {
+      "id": "website",
+      "kind": "external",
+      "hostname": "example.com",
+      "callbackPath": "/auth/callback",
+      "protection": "oidc"
+    },
+    {
       "id": "dashboard",
       "kind": "worker",
       "workerName": "my-dashboard",
-      "hostname": "dashboard.example.com",
+      "hostname": "app.example.com",
       "protection": "gateway"
     }
-  ]
+  ],
+  "realm": {
+    "apex": "example.com",
+    "issuerHostname": "login.example.com",
+    "includeApex": true,
+    "includeSubdomains": true,
+    "registration": "approved-only"
+  }
 }

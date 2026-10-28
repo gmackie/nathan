@@ -35,6 +35,23 @@ export class CloudflareClient {
     if (!this.accountId) throw Error("Account ID required");
     return this.request("/accounts/" + this.accountId + "/d1/database");
   }
+  async workerDomains() {
+    if(!this.accountId)throw Error("Account ID required");
+    const rows=await this.request("/accounts/"+this.accountId+"/workers/domains");
+    if(!Array.isArray(rows))throw Error("Unexpected Worker custom-domain inventory");
+    return rows;
+  }
+  async dnsRecordsForZone(zoneId) {
+    if(!/^[a-f0-9]{32}$/.test(zoneId))throw Error("Invalid Cloudflare zone ID");
+    const output=[];
+    for(let page=1;page<=100;page++){
+      const records=await this.request("/zones/"+zoneId+"/dns_records?per_page=100&page="+page);
+      if(!Array.isArray(records))throw Error("Unable to enumerate DNS records");
+      output.push(...records);
+      if(records.length<100)return output;
+    }
+    throw Error("DNS inventory exceeds 10,000 records; cannot safely claim a complete discovery");
+  }
   async dnsRecords(zoneId, hostname) {
     if (!/^[a-f0-9]{32}$/.test(zoneId)) throw Error("Invalid zone ID");
     return this.request("/zones/" + zoneId + "/dns_records?name=" + encodeURIComponent(hostname));

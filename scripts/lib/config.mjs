@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { realmForLoginHostname, isHostnameWithinRealm, realmCallback } from "../../src/shared/realm.mjs";
 
 export const ALLOWED_PROFILES = new Set(["standard", "business", "high"]);
 const SLUG = /^[a-z][a-z0-9-]{0,62}$/;
@@ -22,6 +23,17 @@ export function validateConfig(value) {
   if (!ALLOWED_PROFILES.has(value.securityProfile)) errors.push("securityProfile must be standard, business, or high");
   if (value.accountId != null && !/^[a-f0-9]{32}$/.test(value.accountId)) errors.push("accountId must be a 32-character Cloudflare account ID");
   if (value.database?.type !== "d1" || !SLUG.test(value.database?.name || "")) errors.push("database must specify a valid D1 name");
+  if (value.realm !== undefined) {
+    if(!value.realm || typeof value.realm!=="object" || Array.isArray(value.realm)) errors.push("realm must be a domain-wide SSO object");
+    else {
+      try{
+        const derived=realmForLoginHostname(value.hostname);
+        if(value.realm.apex!==derived.apex || value.realm.includeApex!==true ||
+           value.realm.includeSubdomains!==true || value.realm.registration!=="approved-only")
+          errors.push("realm must match login.<apex>, include root and subdomains, and require explicit OIDC registration approval");
+      }catch(e){errors.push("realm requires issuer hostname login.<domain>");}
+    }
+  }
   if (value.providers != null && (typeof value.providers !== "object" || Array.isArray(value.providers)))
     errors.push("providers must be an object");
   if (!Array.isArray(value.applications)) errors.push("applications must be an array");
@@ -55,8 +67,16 @@ export function buildPlan(cfg) {
     { operation: "propose", resource: "d1", name: cfg.database.name },
     { operation: "propose", resource: "custom-domain", name: cfg.hostname }
   ];
+  if(cfg.realm)out.push({operation:"propose",resource:"domain-wide-sso-realm",
+    name:cfg.realm.apex,issuer:"https://"+cfg.hostname+"/api/auth",
+    coverage:[cfg.realm.apex,"*."+cfg.realm.apex],registration:"approved-only",
+    wildcardRouting:false,wildcardRedirectUris:false});
   for (const app of cfg.applications) {
-    out.push({ operation: "propose", resource: "oidc-client", name: app.id });
+    out.push({ operation: "propose", resource: "oidc-client", name: app.id,
+      ...(cfg.realm && app.hostname && isHostnameWithinRealm(app.hostname,cfg.realm.apex) && app.hostname!==cfg.hostname
+        ? {redirect:realmCallback(app.hostname,cfg.realm.apex,cfg.hostname,
+          app.protection==="gateway"?"gateway":"worker",app.callbackPath)}:{})
+    });
     if (app.protection === "gateway")
       out.push({ operation: "propose", resource: "gateway-worker", name: cfg.name + "-" + app.id + "-gateway" });
     if (app.kind === "worker")

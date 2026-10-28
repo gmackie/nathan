@@ -17,3 +17,16 @@ test("plan never implies mutation",()=>assert.ok(buildPlan(cfg).every(x=>x.opera
 test("longest valid matching zone",()=>assert.equal(zoneForHostname([{name:"example.com"},{name:"deep.example.com"}],"auth.deep.example.com").name,"deep.example.com"));
 test("zone boundary rules",()=>assert.equal(zoneForHostname([{name:"example.com"}],"myexample.com"),null));
 test("JSONC parser retains URLs in quoted strings",()=>assert.deepEqual(JSON.parse(stripJsonc('{"url":"https://example.com", // note\n"x":1,}')),{url:"https://example.com",x:1}));
+
+test("domain-wide realm must use matching login hostname and explicit approval",()=>{
+  const valid={...cfg,hostname:"login.example.com",realm:{
+    apex:"example.com",issuerHostname:"login.example.com",
+    includeApex:true,includeSubdomains:true,registration:"approved-only"
+  }};
+  assert.deepEqual(validateConfig(valid),[]);
+  assert.match(validateConfig({...valid,hostname:"auth.example.com"}).join(" "),/realm/);
+  assert.match(validateConfig({...valid,realm:{...valid.realm,apex:"evil.example.com"}}).join(" "),/realm/);
+  const plan=buildPlan(valid);
+  assert.ok(plan.some(x=>x.resource==="domain-wide-sso-realm" && x.registration==="approved-only"));
+  assert.ok(plan.some(x=>x.resource==="oidc-client" && x.redirect==="https://app.example.com/__nathan/callback"));
+});

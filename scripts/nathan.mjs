@@ -8,6 +8,8 @@ import { discoverWrangler, runCli, createGeneratedConfig } from "./lib/wrangler.
 import { providerCommand } from "./lib/provider-wizard.mjs";
 import { protectCommand } from "./lib/protect-wizard.mjs";
 import { adminCommand } from "./lib/admin-wizard.mjs";
+import { domainCommand } from "./lib/domain-wizard.mjs";
+import { realmForLoginHostname } from "../src/shared/realm.mjs";
 
 const [command = "help", ...args] = process.argv.slice(2);
 const file = args.find(x => x.endsWith(".json")) || "nathan.config.json";
@@ -59,16 +61,21 @@ async function init() {
       console.error("Worker / DNS discovery unavailable:",error.message);
     }
   }
-  const hostname = await ask("Identity hostname", existing?.hostname || (suggestedZone?"auth."+suggestedZone:"auth.example.com"));
+  const hostname = await ask("Identity hostname", existing?.hostname || (suggestedZone?"login."+suggestedZone:"login.example.com"));
+  let realm=existing?.realm;
+  if(!realm && hostname.startsWith("login.") &&
+     await yesNo("Use this as shared OIDC login for the root and authorized subdomains?",false)){
+    realm=realmForLoginHostname(hostname);
+  }
   const profile = await ask("Security profile (standard/business/high)", existing?.securityProfile || "business");
   const adminEmail = await ask("Admin allowlist email (requires verified account + admin role)", existing?.adminEmails?.[0] || "");
   const appName = await ask("Worker to protect (blank to skip)", existing?.applications?.[0]?.workerName || detected?.name || availableWorkers[0] || "");
   const cfg = {
-    name, hostname, ...(accountId ? {accountId} : {}), securityProfile: profile,
+    name, hostname, ...(realm?{realm}:{}), ...(accountId ? {accountId} : {}), securityProfile: profile,
     adminEmails: adminEmail ? [adminEmail] : [],
     database: { type:"d1", name: existing?.database?.name || name + "-auth" },
     providers: existing?.providers || { google: { enabled:false }, github: { enabled:false } },
-    applications: appName ? [{id: appName.replace(/[^a-z0-9-]/g,"-"), kind:"worker",workerName:appName,protection:"binding"}] : []
+    applications: existing?.applications || (appName ? [{id: appName.replace(/[^a-z0-9-]/g,"-"), kind:"worker",workerName:appName,protection:"binding"}] : [])
   };
   const errors = validateConfig(cfg);
   if (errors.length) throw Error(errors.join("\n"));
@@ -123,6 +130,19 @@ async function provision(forceApply=false) {
   const liveConfig = JSON.parse(await readFile(configPath,"utf8"));
   console.log("Applying reviewed D1 migrations before publishing the identity hostname.");
   await runCli("npx",["wrangler","d1","migrations","apply",name,"--remote","--config",configPath]);
+  if (cfg.realm) {
+    if (!snapshot.zone?.id) throw Error("Cannot verify realm's Cloudflare zone");
+    const apex=cfg.realm.apex;
+    // The account/zone that owns login.<apex> is the authority for this realm.
+    await client.queryDatabase(dbId,
+      "INSERT OR IGNORE INTO nathan_domain_realms(apex,issuer_hostname,account_id,zone_id,registered_by) VALUES (?,?,?,?,?)",
+      [apex,cfg.hostname,cfg.accountId,snapshot.zone.id,"cli:"+cfg.adminEmails?.[0]||"cli"]);
+    const rows=await client.queryDatabase(dbId,
+      "SELECT issuer_hostname,account_id,zone_id FROM nathan_domain_realms WHERE apex=? LIMIT 1",[apex]);
+    if(rows.length!==1 || rows[0].issuer_hostname!==cfg.hostname ||
+       rows[0].account_id!==cfg.accountId || rows[0].zone_id!==snapshot.zone.id)
+      throw Error("Existing domain realm does not match the verified account, zone, or issuer");
+  }
   if (!snapshot.existingAuthWorker) {
     // Bootstrap without an ingress route. Only expose the hostname after its secret is installed.
     const stagingPath = ".nathan/generated/" + liveConfig.name + ".staging.json";
@@ -216,5 +236,6 @@ async function wizard(){
   if (command === "providers") return providerCommand(args.filter(a=>a!=="--apply"&&!a.endsWith(".json")),file,apply);
   if (command === "protect") return protectCommand(args.filter(a=>a!=="--apply"&&!a.endsWith(".json")),file,apply);
   if (command === "admin") return adminCommand(args.filter(a=>a!=="--apply"&&!a.endsWith(".json")),file,apply);
-  console.log("Nathan CLI\n  wizard               guided end-to-end installer\n  init                 guided local config\n  plan                 read-only plan + optional Cloudflare discovery\n  doctor [--live]      validate config and optionally OIDC discovery\n  deploy --apply       provision D1 and deploy Worker (requires Cloudflare token)\n  providers guide      OAuth callback and provider-specific setup\n  providers add --apply    configure provider secrets securely\n  protect <app>        plan a gateway for a private upstream\n  protect <app> --apply   deploy only after public-origin isolation\n  admin promote --apply     elevate a verified allowlisted user\n\nNo password or OAuth client secret is accepted as a CLI flag.");
+  if (command === "domains") return domainCommand(args.filter(a=>!a.endsWith(".json")),file);
+  console.log("Nathan CLI\n  wizard               guided end-to-end installer\n  init                 guided local config\n  plan                 read-only plan + optional Cloudflare discovery\n  doctor [--live]      validate config and optionally OIDC discovery\n  deploy --apply       provision D1 and deploy Worker (requires Cloudflare token)\n  providers guide      OAuth callback and provider-specific setup\n  providers add --apply    configure provider secrets securely\n  protect <app>        plan a gateway for a private upstream\n  protect <app> --apply   deploy only after public-origin isolation\n  admin promote --apply     elevate a verified allowlisted user\n  domains discover         Cloudflare DNS/Worker host inventory and exact OIDC callbacks\n  domains callback <host>  Exact root/subdomain OIDC callback\n  domains routes           Wildcard proxy routing preview (not applied)\n\nNo password or OAuth client secret is accepted as a CLI flag.");
 })().catch(e => { console.error("Nathan error:",e.message); process.exitCode=1; });

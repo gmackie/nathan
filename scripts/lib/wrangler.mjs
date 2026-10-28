@@ -38,6 +38,7 @@ export async function createGeneratedConfig(cfg, databaseId, gateway = null) {
     wrangler.name = cfg.name + "-auth";
     wrangler.routes = [{ pattern: cfg.hostname, custom_domain: true }];
     wrangler.vars.NATHAN_ISSUER = "https://" + cfg.hostname;
+    wrangler.vars.NATHAN_REALM_APEX = cfg.realm?.apex || "";
     wrangler.vars.NATHAN_ADMIN_EMAILS = (cfg.adminEmails || []).join(",");
     wrangler.d1_databases[0].database_name = cfg.database.name;
     wrangler.d1_databases[0].database_id = databaseId;
