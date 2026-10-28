@@ -1,5 +1,7 @@
 export interface AuthEnv {
   DB: D1Database;
+  NATHAN_INSTALL_ACTIVE?: string;
+  NATHAN_MCP_WRITE_ENABLED?: string;
   BETTER_AUTH_SECRET: string;
   NATHAN_ISSUER: string;
   NATHAN_ADMIN_EMAILS: string;
