@@ -4,6 +4,9 @@ import { createAuth } from "./instance";
 import { signInPage, consentPage, studioPage } from "./ui";
 import type { AuthEnv } from "./env";
 import pluginCatalog from "../../plugins/catalog.json";
+import { handleMcp, protectedResourceMetadata } from "./mcp";
+import { isAdminUser, listApplications, listSso, upsertApplication,
+  setApplicationEnabled, registerEnterpriseOidc } from "./admin-service";
 
 function reject(status: number, reason: string) {
   return Response.json({ error: reason }, { status, headers: { "Cache-Control": "no-store" } });
@@ -17,8 +20,15 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
   const issuer = new URL(env.NATHAN_ISSUER);
   const url = new URL(request.url);
   if (url.hostname !== issuer.hostname || url.protocol !== "https:") return reject(421, "Misdirected request");
-  if (url.pathname === "/healthz") return Response.json({ ok: true, system: "nathan" });
+  if (url.pathname === "/healthz") return Response.json({ ok: true, system: "nathan", active: env.NATHAN_INSTALL_ACTIVE !== "false" });
+  // The hosted installer uploads inactive code before it creates a public route.
+  if (env.NATHAN_INSTALL_ACTIVE === "false") return reject(503, "Installation not active");
+  if (url.pathname === "/.well-known/oauth-protected-resource" ||
+      url.pathname === "/.well-known/oauth-protected-resource/mcp") {
+    return protectedResourceMetadata(env);
+  }
   const auth = createAuth(env);
+  if (url.pathname === "/mcp") return handleMcp(request,env,auth);
   if (url.pathname.startsWith("/api/auth/") || url.pathname.startsWith("/.well-known/")) {
     return auth.handler(request);
   }
@@ -39,7 +49,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     if (!isAdmin(session, env)) return reject(403, "Admin session required");
     return studioPage(session!.user.email);
   }
-  if (["/studio/api/clients", "/studio/api/status", "/studio/api/plugins", "/studio/api/audit"].includes(url.pathname) && request.method === "GET") {
+  if (["/studio/api/clients", "/studio/api/status", "/studio/api/plugins", "/studio/api/audit", "/studio/api/apps", "/studio/api/sso"].includes(url.pathname) && request.method === "GET") {
     const session = await auth.api.getSession({ headers: request.headers });
     if (!isAdmin(session, env)) return reject(403, "Admin session required");
     if (url.pathname === "/studio/api/status") {
@@ -49,6 +59,12 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
         features: {oidcProvider: true, passkeys: true, totp: true, enterpriseSso: env.ENTERPRISE_SSO === "true", password: env.ENABLE_PASSWORD === "true"},
         note: "Authentication assurance level enforcement and guided plugin installation are not yet available"
       }, {headers: {"Cache-Control":"no-store"}});
+    }
+    if (url.pathname === "/studio/api/apps") {
+      return Response.json({applications:await listApplications(env)},{headers:{"Cache-Control":"no-store"}});
+    }
+    if (url.pathname === "/studio/api/sso") {
+      return Response.json({providers:await listSso(env)},{headers:{"Cache-Control":"no-store"}});
     }
     if (url.pathname === "/studio/api/plugins") {
       return Response.json(pluginCatalog,{headers:{"Cache-Control":"no-store"}});
@@ -62,6 +78,34 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
       .all<{id:string,name:string,redirectUris:string,disabled:number,authMethod:string}>();
     return Response.json({clients:clients.results.map(c => ({...c,redirectUris:JSON.parse(c.redirectUris || "[]")}))},{headers:{"Cache-Control":"no-store"}});
   }
+
+  if (["/studio/api/apps","/studio/api/apps/status","/studio/api/sso/oidc"].includes(url.pathname) && request.method === "POST") {
+    if (request.headers.get("Origin") !== issuer.origin ||
+        request.headers.get("Sec-Fetch-Site") === "cross-site") return reject(403,"Cross-origin request denied");
+    if (request.headers.get("Content-Type")?.split(";")[0] !== "application/json")
+      return reject(415,"JSON required");
+    const session = await auth.api.getSession({headers:request.headers});
+    if (!isAdminUser(session?.user,env)) return reject(403,"Verified administrator required");
+    const raw=await request.text();
+    if(raw.length>16384)return reject(413,"Request too large");
+    let body:any;
+    try{body=JSON.parse(raw);}catch{return reject(400,"Invalid JSON");}
+    try {
+      if(url.pathname==="/studio/api/apps") {
+        return Response.json(await upsertApplication(env,body,session!.user.id),{headers:{"Cache-Control":"no-store"}});
+      }
+      if(url.pathname==="/studio/api/apps/status") {
+        if(typeof body.enabled!=="boolean"||body.confirm!==("CONFIRM "+(body.enabled?"ENABLE ":"DISABLE ")+body.id))
+          return reject(400,"Explicit confirmation required");
+        return Response.json(await setApplicationEnabled(env,body.id,body.enabled,session!.user.id),{headers:{"Cache-Control":"no-store"}});
+      }
+      const value=await registerEnterpriseOidc(auth,env,request.headers,body,session!.user.id);
+      return Response.json(value,{headers:{"Cache-Control":"no-store"}});
+    }catch {
+      return reject(400,"Operation denied or rejected by identity provider");
+    }
+  }
+
   if (url.pathname === "/studio/api/clients/status" && request.method === "POST") {
     if (request.headers.get("Origin") !== issuer.origin) return reject(403, "Cross-origin request denied");
     if (request.headers.get("Content-Type")?.split(";")[0] !== "application/json") return reject(415, "JSON required");
@@ -140,7 +184,10 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
 }
 
 export default {
-  fetch: (request: Request, env: AuthEnv) => handle(request, env)
+  fetch: (request: Request, env: AuthEnv) => handle(request, env),
+  scheduled: async (_: ScheduledEvent,env:AuthEnv) => {
+    await env.DB.prepare("DELETE FROM nathan_mcp_limits WHERE expires_at < unixepoch()").run();
+  }
 };
 
 export class NathanVerifier extends WorkerEntrypoint<AuthEnv> {
