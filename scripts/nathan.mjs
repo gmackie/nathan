@@ -24,11 +24,45 @@ async function init() {
   const detected = await discoverWrangler();
   console.log("Nathan setup. No Cloudflare resources are created by init.");
   const name = await ask("Deployment name", existing?.name || "nathan");
-  const hostname = await ask("Identity hostname", existing?.hostname || "auth.example.com");
-  const accountId = await ask("Cloudflare account ID (optional for local planning)", existing?.accountId || "");
+  let suggestedAccount = existing?.accountId || detected?.account_id || "";
+  let suggestedZone = "";
+  let availableWorkers = [];
+  if (process.env.CLOUDFLARE_API_TOKEN) {
+    try {
+      const cf = new CloudflareClient(process.env.CLOUDFLARE_API_TOKEN);
+      const accounts = await cf.accounts();
+      if (Array.isArray(accounts) && accounts.length) {
+        console.log("Accessible Cloudflare accounts:");
+        accounts.slice(0,20).forEach((a,i)=>console.log("  "+(i+1)+". "+a.name+" ("+a.id+")"));
+        if (!suggestedAccount && accounts.length === 1) suggestedAccount = accounts[0].id;
+      }
+    } catch (error) {
+      console.error("Cloudflare account discovery unavailable:", error.message);
+    }
+  }
+  const accountId = await ask("Cloudflare account ID (optional for local planning)", suggestedAccount);
+  if (process.env.CLOUDFLARE_API_TOKEN && accountId) {
+    try {
+      const cf = new CloudflareClient(process.env.CLOUDFLARE_API_TOKEN,accountId);
+      const zones=await cf.zones();
+      const active=Array.isArray(zones)?zones.filter(z=>z.status==="active"):[];
+      if(active.length) {
+        console.log("Active DNS zones:",active.slice(0,15).map(z=>z.name).join(", "));
+        suggestedZone=active[0].name;
+      }
+      const workers=await cf.workers();
+      if(Array.isArray(workers)) {
+        availableWorkers=workers.map(w=>w.id).filter(Boolean);
+        if(availableWorkers.length) console.log("Existing Workers:",availableWorkers.slice(0,20).join(", "));
+      }
+    } catch (error) {
+      console.error("Worker / DNS discovery unavailable:",error.message);
+    }
+  }
+  const hostname = await ask("Identity hostname", existing?.hostname || (suggestedZone?"auth."+suggestedZone:"auth.example.com"));
   const profile = await ask("Security profile (standard/business/high)", existing?.securityProfile || "business");
   const adminEmail = await ask("Admin allowlist email (requires verified account + admin role)", existing?.adminEmails?.[0] || "");
-  const appName = await ask("Worker to protect (blank to skip)", existing?.applications?.[0]?.workerName || detected?.name || "");
+  const appName = await ask("Worker to protect (blank to skip)", existing?.applications?.[0]?.workerName || detected?.name || availableWorkers[0] || "");
   const cfg = {
     name, hostname, ...(accountId ? {accountId} : {}), securityProfile: profile,
     adminEmails: adminEmail ? [adminEmail] : [],
