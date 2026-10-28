@@ -1,13 +1,13 @@
 const htmlEscape = (s: string) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 
 function page(title: string, body: string, script = ""): Response {
-  const html = \`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>\${htmlEscape(title)} · Nathan</title><style>
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${htmlEscape(title)} · Nathan</title><style>
   :root{color-scheme:dark}*{box-sizing:border-box}body{font:16px system-ui;background:#10121a;color:#f2f3fa;margin:0;min-height:100vh;display:grid;place-items:center}
   main{width:min(480px,94vw);padding:32px;background:#1b1e2a;border:1px solid #35394b;border-radius:16px}
   h1{font-size:26px;margin:4px 0 12px}p{color:#b6bfce;line-height:1.5}button,input{font:inherit}
   button{background:#ef9028;color:#171717;border:0;border-radius:8px;padding:13px 16px;cursor:pointer;margin:6px 4px 6px 0}
   button.secondary{background:#363d52;color:#fff}input{background:#10121a;color:#fff;border:1px solid #434b60;border-radius:6px;padding:12px;width:100%;margin:5px 0 12px}
-  small{color:#a8b3c7}a{color:#f5aa62}</style></head><body><main><small>NATHAN 🌭</small><h1>\${htmlEscape(title)}</h1>\${body}</main><script>\${script}</script></body></html>\`;
+  small{color:#a8b3c7}a{color:#f5aa62}</style></head><body><main><small>NATHAN 🌭</small><h1>${htmlEscape(title)}</h1>${body}</main><script>${script}</script></body></html>`;
   return new Response(html, {
     headers: {
       "Content-Type": "text/html; charset=utf-8",
@@ -20,9 +20,9 @@ function page(title: string, body: string, script = ""): Response {
 }
 
 export function signInPage(providers: string[], passwordEnabled: boolean): Response {
-  const buttons = providers.map(p => \`<button data-provider="\${htmlEscape(p)}">Continue with \${htmlEscape(p)}</button>\`).join("");
+  const buttons = providers.map(p => `<button data-provider="${htmlEscape(p)}">Continue with ${htmlEscape(p)}</button>`).join("");
   const password = passwordEnabled ? '<label>Email<input id="email" type="email" autocomplete="username"></label><label>Password<input id="password" type="password" autocomplete="current-password"></label><button id="password-submit">Sign in</button>' : "";
-  return page("Sign in", '<p>Sign in securely with your configured identity provider.</p>' + buttons + password + '<p id="status" role="alert"></p>', \`
+  return page("Sign in", '<p>Sign in securely with your configured identity provider.</p>' + buttons + password + '<p id="status" role="alert"></p>', `
     const status=document.getElementById('status');
     document.querySelectorAll('[data-provider]').forEach(b=>b.onclick=async()=>{
       try{
@@ -35,11 +35,11 @@ export function signInPage(providers: string[], passwordEnabled: boolean): Respo
       const r=await fetch('/api/auth/sign-in/email',{method:'POST',headers:{'content-type':'application/json'},credentials:'same-origin',body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('password').value})});
       if(!r.ok){status.textContent='Sign-in failed';return;} location.assign('/');
     };
-  \`);
+  `);
 }
 export function consentPage(verified: boolean, clientName: string, scope: string): Response {
   if(!verified) return new Response("Invalid or expired consent request", {status:400});
-  return page("Authorize application", \`<p><strong>\${htmlEscape(clientName)}</strong> requests access.</p><p>Requested scopes: \${htmlEscape(scope)}</p><button id="allow">Allow</button><button class="secondary" id="deny">Deny</button><p id="status" role="alert"></p>\`, \`
+  return page("Authorize application", `<p><strong>${htmlEscape(clientName)}</strong> requests access.</p><p>Requested scopes: ${htmlEscape(scope)}</p><button id="allow">Allow</button><button class="secondary" id="deny">Deny</button><p id="status" role="alert"></p>`, `
     async function consent(accept){
       try{
         const r=await fetch('/api/auth/oauth2/consent',{method:'POST',headers:{'content-type':'application/json'},credentials:'same-origin',body:JSON.stringify({accept})});
@@ -48,14 +48,14 @@ export function consentPage(verified: boolean, clientName: string, scope: string
     }
     document.getElementById('allow').onclick=()=>consent(true);
     document.getElementById('deny').onclick=()=>consent(false);
-  \`);
+  `);
 }
 export function studioPage(userEmail: string): Response {
-  return page("Identity Studio", \`<p>Signed in as <strong>\${htmlEscape(userEmail)}</strong>.</p><h2>Register OIDC client</h2>
+  return page("Identity Studio", `<p>Signed in as <strong>${htmlEscape(userEmail)}</strong>.</p><h2>Register OIDC client</h2>
   <label>Client name<input id="name" placeholder="My application"></label>
   <label>Exact HTTPS redirect URI<input id="redirect" placeholder="https://app.example.com/oauth/callback"></label>
   <button id="create">Register client</button><p id="status" role="alert"></p><pre id="result" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
-  <p><small>Client secrets are shown once. Store them in a secure manager.</small></p>\`, \`
+  <p><small>Client secrets are shown once. Store them in a secure manager.</small></p>`, `
     document.getElementById('create').onclick=async()=>{
       const status=document.getElementById('status');status.textContent='Creating...';
       try{
@@ -64,5 +64,5 @@ export function studioPage(userEmail: string): Response {
         document.getElementById('result').textContent=JSON.stringify(d,null,2);
       }catch(e){status.textContent=e.message}
     }
-  \`);
+  `);
 }
