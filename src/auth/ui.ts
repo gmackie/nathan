@@ -23,21 +23,82 @@ function page(title: string, body: string, script = ""): Response {
   });
 }
 
-export function signInPage(providers: string[], passwordEnabled: boolean): Response {
-  const buttons = providers.map(p => `<button data-provider="${htmlEscape(p)}">Continue with ${htmlEscape(p)}</button>`).join("");
-  const password = passwordEnabled ? '<label>Email<input id="email" type="email" autocomplete="username"></label><label>Password<input id="password" type="password" autocomplete="current-password"></label><button id="password-submit">Sign in</button>' : "";
-  return page("Sign in", '<p>Sign in securely with your configured identity provider.</p>' + buttons + password + '<p id="status" role="alert"></p>', `
+export function signInPage(providers: string[], passwordEnabled: boolean, enterpriseSso=false): Response {
+  const buttons=providers.map(p=>'<button data-provider="'+htmlEscape(p)+'">Continue with '+htmlEscape(p)+'</button>').join("");
+  const password=passwordEnabled?'<h2>Email/password</h2><label>Email<input id="email" type="email" autocomplete="username"></label>'+
+    '<label>Password<input id="password" type="password" autocomplete="current-password"></label>'+
+    '<button id="password-submit">Sign in</button>'+
+    '<div id="two-factor" hidden><label>Authenticator code<input id="totp-code" autocomplete="one-time-code" inputmode="numeric"></label>'+
+    '<button id="two-factor-submit">Verify second factor</button></div>':"";
+  const sso=enterpriseSso?'<h2>Work or school account</h2>'+
+    '<label>Corporate email address<input id="sso-email" type="email" autocomplete="email" placeholder="you@company.com"></label>'+
+    '<button id="sso-submit">Continue with enterprise SSO</button>':"";
+  const passkey='<h2>Passkey</h2><button id="passkey-login">Sign in with passkey</button>';
+  return page("Sign in",'<p>Use your configured identity provider, passkey, or approved enterprise account.</p>'+
+    buttons+passkey+sso+password+'<p id="status" role="alert"></p>',String.raw`
     const status=document.getElementById('status');
+    const unwrap=x=>x.data||x;
+    async function request(path,payload){
+      const res=await fetch('/api/auth'+path,{method:'POST',headers:{'Content-Type':'application/json'},
+        credentials:'same-origin',body:JSON.stringify(payload)});
+      const body=await res.json().catch(()=>({}));if(!res.ok)throw Error(body.message||body.error||'Authentication failed');
+      return unwrap(body);
+    }
     document.querySelectorAll('[data-provider]').forEach(b=>b.onclick=async()=>{
-      try{
-        const r=await fetch('/api/auth/sign-in/social',{method:'POST',headers:{'content-type':'application/json'},credentials:'same-origin',body:JSON.stringify({provider:b.dataset.provider,callbackURL:'/'})});
-        const d=await r.json(); if(!r.ok||!d.url)throw Error('Login could not be started'); location.assign(d.url);
+      try{const d=await request('/sign-in/social',{provider:b.dataset.provider,callbackURL:'/'});
+        if(!d.url)throw Error('No OAuth redirect URL');location.assign(d.url);
       }catch(e){status.textContent=e.message}
     });
-    const btn=document.getElementById('password-submit');
-    if(btn)btn.onclick=async()=>{
-      const r=await fetch('/api/auth/sign-in/email',{method:'POST',headers:{'content-type':'application/json'},credentials:'same-origin',body:JSON.stringify({email:document.getElementById('email').value,password:document.getElementById('password').value})});
-      if(!r.ok){status.textContent='Sign-in failed';return;} location.assign('/');
+    const pwd=document.getElementById('password-submit');
+    if(pwd)pwd.onclick=async()=>{
+      try{
+        const d=await request('/sign-in/email',{email:document.getElementById('email').value,
+          password:document.getElementById('password').value});
+        if(d.twoFactorRedirect){
+          document.getElementById('two-factor').hidden=false;
+          status.textContent='Enter the code from your authenticator to finish signing in.';
+        }else location.assign('/');
+      }catch(e){status.textContent=e.message}
+    };
+    const totp=document.getElementById('two-factor-submit');
+    if(totp)totp.onclick=async()=>{
+      try{
+        await request('/two-factor/verify-totp',{code:document.getElementById('totp-code').value,trustDevice:false});
+        location.assign('/');
+      }catch(e){status.textContent=e.message}
+    };
+    const sso=document.getElementById('sso-submit');
+    if(sso)sso.onclick=async()=>{
+      try{
+        const d=await request('/sign-in/sso',{email:document.getElementById('sso-email').value,callbackURL:'/'});
+        if(!d.url)throw Error('SSO provider unavailable');
+        location.assign(d.url);
+      }catch(e){status.textContent=e.message}
+    };
+    const decode=s=>Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
+    const encode=b=>{
+      let s='';for(const x of new Uint8Array(b))s+=String.fromCharCode(x);
+      return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+    };
+    document.getElementById('passkey-login').onclick=async()=>{
+      try{
+        if(!window.PublicKeyCredential)throw Error('Passkeys are unavailable in this browser');
+        const optRes=await fetch('/api/auth/passkey/generate-authenticate-options',{credentials:'same-origin'});
+        const options=await optRes.json();if(!optRes.ok)throw Error('Passkey challenge unavailable');
+        const publicKey=unwrap(options).publicKey||unwrap(options);
+        publicKey.challenge=decode(publicKey.challenge);
+        if(publicKey.allowCredentials)publicKey.allowCredentials=publicKey.allowCredentials.map(c=>({...c,id:decode(c.id)}));
+        const cred=await navigator.credentials.get({publicKey});
+        if(!cred)throw Error('Passkey authentication cancelled');
+        const response={id:cred.id,rawId:encode(cred.rawId),type:'public-key',
+          response:{clientDataJSON:encode(cred.response.clientDataJSON),
+            authenticatorData:encode(cred.response.authenticatorData),
+            signature:encode(cred.response.signature),
+            userHandle:cred.response.userHandle?encode(cred.response.userHandle):undefined},
+          clientExtensionResults:cred.getClientExtensionResults()};
+        await request('/passkey/verify-authentication',{response});
+        location.assign('/');
+      }catch(e){status.textContent=e.message}
     };
   `);
 }
