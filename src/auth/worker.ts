@@ -2,6 +2,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { verifyOAuthQueryParams } from "@better-auth/oauth-provider";
 import { createAuth } from "./instance";
 import { signInPage, consentPage, studioPage } from "./ui";
+import { securityPage } from "./security-ui";
 import type { AuthEnv } from "./env";
 import pluginCatalog from "../../plugins/catalog.json";
 import { handleMcp, protectedResourceMetadata } from "./mcp";
@@ -43,6 +44,11 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     const { secret } = await auth.$context;
     const verified = await verifyOAuthQueryParams(url.search.slice(1), secret);
     return consentPage(Boolean(verified), url.searchParams.get("client_id") ?? "Application", url.searchParams.get("scope") ?? "");
+  }
+  if (url.pathname === "/security" && request.method === "GET") {
+    const session=await auth.api.getSession({headers:request.headers});
+    if(!session?.user?.id)return Response.redirect(issuer.origin+"/sign-in",302);
+    return securityPage(session.user.email);
   }
   if (url.pathname === "/studio" && request.method === "GET") {
     const session = await auth.api.getSession({ headers: request.headers });
