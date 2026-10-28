@@ -62,6 +62,20 @@
 - [ ] Verify high-assurance or mandatory MFA options **remain disabled** until downstream \`acr\`/\`amr\` evidence is correct.
 - [ ] Run policy tests for role authorization, applications disabled by default and changed permissions.
 
+## First administrator, OAuth, SCIM and MFA acceptance
+
+- [ ] Verify Cloudflare OAuth owner email matches the bootstrap admin and an arbitrary first visitor cannot become admin.
+- [ ] Require verified Better Auth email and stable user ID before promoting the first account.
+- [ ] Confirm enrollment and recovery codes, then require a recent session-bound passkey login for Business-profile privileged admin changes.
+- [ ] Add a second verified administrator, test their MFA and permissions, revoke their grant and verify session invalidation; never permit web revocation of root owner.
+- [ ] Block raw Better Auth admin/SSO management endpoints; test CSRF and authorized Studio checks.
+- [ ] Encrypt initial Google/GitHub credentials in D1 and verify rotation/disable in Studio without stale Worker-secret fallback.
+- [ ] Verify enterprise OIDC remains untrusted before DNS TXT domain proof; test same-domain account linking and signed upstream tokens.
+- [ ] Validate SCIM Durable Object Users/Groups transactions, immutable externalId, PATCH active, ETags, bearer revocation and no automatic login authorization.
+- [ ] Ensure audit records never reveal credentials, recovery codes or OAuth tokens.
+- [ ] Confirm UI can tighten but never lower effective deployment MFA requirements.
+- [ ] Test NATHAN_CONFIG_KEY loss/restore and managed-provider ciphertext decryption.
+- [ ] Do not enable untested enterprise SAML metadata/signing/key management flows.
 ## MCP/admin acceptance
 
 - [ ] Verify Identity Studio requires verified allowlisted Better Auth admin.
