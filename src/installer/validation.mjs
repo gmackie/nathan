@@ -1,4 +1,5 @@
 import { realmForLoginHostname,validateDomainName } from "../shared/realm.mjs";
+import {validateScimConnection} from "../auth/scim/validation.mjs";
 const SLUG=/^[a-z][a-z0-9-]{0,62}$/;
 const ACCOUNT=/^[a-f0-9]{32}$/;
 export function validateAccountId(input){
@@ -33,7 +34,12 @@ export function validateInstallPlan(input){
       throw Error("Realm apex must match login.<domain> issuer");
     realmApex=derived.apex;
   }
-  return {accountId,hostname,name,securityProfile:input.securityProfile||"business",realmApex};
+  if(input.scimEnabled!==undefined && typeof input.scimEnabled!=="boolean")
+    throw Error("scimEnabled must be a boolean");
+  let scim=null;
+  if(input.scimEnabled===true)
+    scim=validateScimConnection({id:input.scimConnectionId,domain:input.scimDomain});
+  return {accountId,hostname,name,securityProfile:input.securityProfile||"business",realmApex,scim};
 }
 export function isAllowedOrigin(origin,expected){
   if(typeof origin!=="string"||typeof expected!=="string")return false;

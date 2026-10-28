@@ -36,3 +36,12 @@ test("hosted wizard accepts login.<domain> for apex and subdomain coverage",()=>
   assert.throws(()=>validateInstallPlan({...input,hostname:"auth.example.com"}),/login/);
   assert.equal(validateInstallPlan({...input,hostname:"auth.example.com",realmEnabled:false}).realmApex,null);
 });
+
+test("wizard validates optional SCIM connection and stable domain",()=>{
+  const base={accountId:"a".repeat(32),hostname:"login.example.com",name:"nathan-auth"};
+  assert.equal(validateInstallPlan(base).scim,null);
+  assert.deepEqual(validateInstallPlan({...base,scimEnabled:true,
+    scimConnectionId:"acme-hr",scimDomain:"acme.example"}).scim,
+    {id:"acme-hr",domain:"acme.example",organizationId:null});
+  assert.throws(()=>validateInstallPlan({...base,scimEnabled:true,scimConnectionId:"bad",scimDomain:"oops"}));
+});

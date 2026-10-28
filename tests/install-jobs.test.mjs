@@ -7,6 +7,7 @@ function create(){
   const db=new DatabaseSync(":memory:");
   db.exec(sql);
   db.exec(readFileSync("migrations/installer/0003_realm.sql","utf8"));
+  db.exec(readFileSync("migrations/installer/0004_scim_settings.sql","utf8"));
   return db;
 }
 const example={
@@ -58,5 +59,17 @@ test("installation migration can store canonical root-domain SSO realm",()=>{
   const db=create();insert(db);
   db.prepare("UPDATE nathan_install_jobs SET realm_apex=? WHERE id=?").run("example.com",example.id);
   assert.equal(db.prepare("SELECT realm_apex FROM nathan_install_jobs").get().realm_apex,"example.com");
+  db.close();
+});
+
+test("wizard stores only SCIM intent, not directory bearer credentials",()=>{
+  const db=create();insert(db);
+  db.prepare("UPDATE nathan_install_jobs SET scim_requested=1,scim_connection_id=?,scim_domain=? WHERE id=?")
+    .run("acme-hr","acme.example",example.id);
+  const row=db.prepare("SELECT scim_requested,scim_connection_id,scim_domain FROM nathan_install_jobs").get();
+  assert.equal(row.scim_connection_id,"acme-hr");
+  assert.equal(row.scim_domain,"acme.example");
+  const columns=db.prepare("PRAGMA table_info(nathan_install_jobs)").all().map(x=>x.name);
+  assert.ok(!columns.includes("scim_bearer_token")&&!columns.includes("scim_secret"));
   db.close();
 });
