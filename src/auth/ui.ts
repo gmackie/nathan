@@ -133,6 +133,14 @@ export function studioPage(userEmail: string): Response {
   <button class="secondary" id="social-disable">Disable provider</button>
   <p id="social-result" role="status"></p>
   <h2>Identity providers and security posture</h2><button class="secondary" id="status-btn">View active capabilities</button><pre id="capabilities"></pre><h2>Available plugins</h2><p>Catalog entries are read-only until their packages and database migrations are reviewed and deployed.</p><select id="plugin-tier"><option value="all">All tiers</option><option value="verified">Verified candidates</option><option value="community">Community</option><option value="custom">Private/custom</option></select><button class="secondary" id="plugins-btn">List integrations</button><pre id="plugins"></pre><h2>Security audit events</h2><button class="secondary" id="audit-btn">Refresh security audit</button><pre id="audit"></pre>
+  <h2>Administrators and recovery</h2>
+  <p>The first administrator is bound to the Cloudflare installer's verified email and can never be revoked from this screen. Additional admins require an existing email-verified Nathan account, explicit approval, enrolled authenticators, and recent passkey reauthentication.</p>
+  <button class="secondary" id="admin-grants-refresh">Show admin grants</button><pre id="admin-grants-list"></pre>
+  <label>Grant admin to verified email<input id="admin-grant-email" type="email" placeholder="admin@example.com"></label>
+  <button id="admin-grant">Grant administrator</button>
+  <label>Revoke an additional administrator (user ID)<input id="admin-revoke-id" placeholder="Better Auth user ID"></label>
+  <button class="secondary" id="admin-revoke">Revoke administrator and sessions</button>
+  <p id="admin-grant-status" role="status"></p>
   <h2>Users</h2><p>Read-only directory of recent accounts. Passwords, credentials and session values are never returned.</p>
   <button class="secondary" id="users-list">Refresh users</button><pre id="users-results"></pre>
   <h2>Domain-wide SSO</h2>
@@ -276,6 +284,35 @@ export function studioPage(userEmail: string): Response {
     async function postJson(path,value){
       return j(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});
     }
+
+    document.getElementById('admin-grants-refresh').onclick=async()=>{
+      const out=document.getElementById('admin-grants-list');
+      try{out.textContent=JSON.stringify(await j('/studio/api/admins'),null,2)}
+      catch(e){out.textContent=e.message}
+    };
+    document.getElementById('admin-grant').onclick=async()=>{
+      const email=document.getElementById('admin-grant-email').value.trim().toLowerCase();
+      if(!confirm('Grant administrator rights to verified Nathan account '+email+'?'))return;
+      const out=document.getElementById('admin-grant-status');
+      try{
+        out.textContent=JSON.stringify(await postJson('/studio/api/admins/grant',{
+          email,confirm:'CONFIRM GRANT ADMIN '+email
+        }));
+        document.getElementById('admin-grants-refresh').click();
+      }catch(e){out.textContent=e.message}
+    };
+    document.getElementById('admin-revoke').onclick=async()=>{
+      const id=document.getElementById('admin-revoke-id').value.trim();
+      if(!confirm('Revoke privileges and sessions for user '+id+'? This cannot be undone without a new grant.'))return;
+      const out=document.getElementById('admin-grant-status');
+      try{
+        out.textContent=JSON.stringify(await postJson('/studio/api/admins/revoke',{
+          id,confirm:'CONFIRM REVOKE ADMIN '+id
+        }));
+        document.getElementById('admin-grants-refresh').click();
+      }catch(e){out.textContent=e.message}
+    };
+
     document.getElementById('users-list').onclick=async()=>{
       const out=document.getElementById('users-results');
       try{out.textContent=JSON.stringify(await j('/studio/api/users'),null,2)}catch(e){out.textContent=e.message}
