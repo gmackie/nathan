@@ -206,3 +206,102 @@ export async function verifyEnterpriseDomain(auth:any,env:AuthEnv,headers:Header
     throw e;
   }
 }
+
+/**
+ * The Cloudflare-bound bootstrap owner is a special root-of-trust. Other admins
+ * require a verified account, an admin role and an explicit current D1 grant.
+ */
+export async function isBootstrapOwner(user:unknown,env:AuthEnv):Promise<boolean>{
+  if(!isAdminUser(user,env))return false;
+  if(env.NATHAN_BOOTSTRAP_REQUIRED!=="true")return true;
+  const u=user as AdminActor;
+  const row=await env.DB.prepare(
+    "SELECT admin_user_id,admin_email,state FROM nathan_bootstrap_status WHERE id='primary' LIMIT 1"
+  ).first<{admin_user_id:string|null;admin_email:string;state:string}>();
+  return Boolean(row && row.admin_user_id===u.id &&
+    row.admin_email===u.email.trim().toLowerCase() && row.state!=="pending");
+}
+export async function isAdminPrincipal(user:unknown,env:AuthEnv):Promise<boolean>{
+  if(!user||typeof user!=="object")return false;
+  const u=user as Record<string,unknown>;
+  if(u.emailVerified!==true||u.role!=="admin" ||
+     typeof u.id!=="string"||typeof u.email!=="string")return false;
+  if(await isBootstrapOwner(u,env)){
+    const b=await env.DB.prepare(
+      "SELECT state FROM nathan_bootstrap_status WHERE id='primary' LIMIT 1"
+    ).first<{state:string}>();
+    return env.NATHAN_BOOTSTRAP_REQUIRED!=="true"||b?.state==="complete";
+  }
+  const grant=await env.DB.prepare(
+    "SELECT enabled FROM nathan_admin_grants WHERE user_id=? AND email=? LIMIT 1"
+  ).bind(u.id,u.email.trim().toLowerCase()).first<{enabled:number}>();
+  return grant?.enabled===1;
+}
+export async function listAdminGrants(env:AuthEnv){
+  const [grants,owner]=await Promise.all([
+    env.DB.prepare(
+      "SELECT g.user_id AS id,g.email AS email,g.enabled AS enabled,"+
+      "g.granted_by AS grantedBy,g.created_at AS createdAt "+
+      "FROM nathan_admin_grants g ORDER BY g.created_at DESC LIMIT 100"
+    ).all(),
+    env.DB.prepare(
+      "SELECT admin_user_id AS id,admin_email AS email,state FROM nathan_bootstrap_status WHERE id='primary' LIMIT 1"
+    ).first()
+  ]);
+  return {owner,grants:grants.results.map((r:any)=>({...r,enabled:r.enabled===1}))};
+}
+export async function grantAdmin(env:AuthEnv,input:any,actor:string){
+  const email=String(input?.email||"").trim().toLowerCase();
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254)
+    throw Error("Select an existing verified user by exact email");
+  if(input?.confirm!=="CONFIRM GRANT ADMIN "+email)
+    throw Error("Explicit admin grant confirmation required");
+  const users=await env.DB.prepare(
+    'SELECT "id" AS id,"emailVerified" AS verified,"banned" AS banned FROM "user" WHERE lower("email")=? LIMIT 2'
+  ).bind(email).all<{id:string;verified:number;banned:number}>();
+  if(users.results.length!==1||users.results[0].verified!==1||users.results[0].banned===1)
+    throw Error("User must exist, have a verified email and not be suspended");
+  const id=users.results[0].id;
+  const original=await env.DB.prepare(
+    "SELECT admin_user_id FROM nathan_bootstrap_status WHERE id='primary' LIMIT 1"
+  ).first<{admin_user_id:string|null}>();
+  if(id===original?.admin_user_id)throw Error("Initial bootstrap owner already has administrator authority");
+  await audit(env,actor,"admin_grant",id,"attempted");
+  try {
+    await env.DB.batch([
+      env.DB.prepare('UPDATE "user" SET "role"=? WHERE "id"=? AND "emailVerified"=1')
+        .bind("admin",id),
+      env.DB.prepare(
+        "INSERT INTO nathan_admin_grants(user_id,email,granted_by,enabled) VALUES(?,?,?,1) "+
+        "ON CONFLICT(user_id) DO UPDATE SET email=excluded.email,granted_by=excluded.granted_by,"+
+        "enabled=1,updated_at=unixepoch()"
+      ).bind(id,email,actor)
+    ]);
+    await audit(env,actor,"admin_grant",id,"succeeded");
+    return {id,email,enabled:true,
+      note:"Administrator added. Their current session must satisfy enrollment and recent passkey step-up before access."};
+  }catch(e){await audit(env,actor,"admin_grant",id,"failed");throw e;}
+}
+export async function revokeAdminGrant(env:AuthEnv,input:any,actor:string){
+  const id=input?.id;
+  if(typeof id!=="string"||id.length>256||
+     input.confirm!=="CONFIRM REVOKE ADMIN "+id)throw Error("Invalid revocation confirmation");
+  const owner=await env.DB.prepare(
+    "SELECT admin_user_id FROM nathan_bootstrap_status WHERE id='primary' LIMIT 1"
+  ).first<{admin_user_id:string|null}>();
+  if(id===owner?.admin_user_id)throw Error("Cannot revoke the bootstrap root through Identity Studio");
+  if(id===actor)throw Error("An administrator cannot revoke their own grant through this endpoint");
+  const grant=await env.DB.prepare("SELECT enabled FROM nathan_admin_grants WHERE user_id=? LIMIT 1")
+    .bind(id).first<{enabled:number}>();
+  if(!grant||grant.enabled!==1)throw Error("Active admin grant not found");
+  await env.DB.batch([
+    env.DB.prepare("UPDATE nathan_admin_grants SET enabled=0,updated_at=unixepoch() WHERE user_id=?")
+      .bind(id),
+    env.DB.prepare('UPDATE "user" SET "role"=? WHERE "id"=?')
+      .bind("user",id),
+    env.DB.prepare('DELETE FROM "session" WHERE "userId"=?').bind(id),
+    env.DB.prepare('DELETE FROM nathan_admin_assurance WHERE user_id=?').bind(id)
+  ]);
+  await audit(env,actor,"admin_revoke",id,"succeeded");
+  return {id,enabled:false,note:"Better Auth sessions were revoked; existing external JWTs need expiry/online introspection."};
+}
