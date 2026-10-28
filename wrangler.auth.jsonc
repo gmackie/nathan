@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nathan-auth",
+  "main": "src/auth/worker.ts",
+  "compatibility_date": "2026-10-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "nathan-auth", "database_id": "REPLACE_WITH_D1_DATABASE_ID", "migrations_dir": "migrations" }
+  ],
+  "vars": {
+    "NATHAN_ISSUER": "https://auth.example.com",
+    "NATHAN_ADMIN_EMAILS": "",
+    "ENABLE_PASSWORD": "false",
+    "ENTERPRISE_SSO": "false"
+  },
+  "routes": [{ "pattern": "auth.example.com", "custom_domain": true }]
+}

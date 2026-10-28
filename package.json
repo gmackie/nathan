@@ -1,15 +1,32 @@
 {
   "name": "nathan-blueprint",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
-  "version": "0.0.0",
-  "description": "Cloudflare-native identity and access blueprint",
+  "description": "Deployable Cloudflare-native Better Auth identity provider and access gateway",
+  "engines": { "node": ">=22.13.0" },
   "scripts": {
-    "plan": "node ./scripts/nathan.mjs plan",
-    "doctor": "node ./scripts/nathan.mjs doctor",
-    "test": "node --test tests/*.test.mjs"
+    "init": "node scripts/nathan.mjs init",
+    "plan": "node scripts/nathan.mjs plan",
+    "doctor": "node scripts/nathan.mjs doctor",
+    "deploy": "node scripts/nathan.mjs deploy",
+    "schema:generate": "npx @better-auth/cli generate --config src/auth/schema-config.ts",
+    "test": "node --test tests/*.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "build:auth": "wrangler deploy --config wrangler.auth.jsonc --dry-run --outdir .nathan/build-auth",
+    "build:gateway": "wrangler deploy --config wrangler.gateway.jsonc --dry-run --outdir .nathan/build-gateway"
   },
-  "engines": {
-    "node": ">=20"
+  "dependencies": {
+    "better-auth": "1.7.12",
+    "@better-auth/oauth-provider": "1.7.12",
+    "@better-auth/passkey": "1.7.12",
+    "@better-auth/sso": "1.7.12",
+    "jose": "^6.1.0"
+  },
+  "devDependencies": {
+    "@better-auth/cli": "1.7.12",
+    "@cloudflare/workers-types": "^4.20261001.0",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.0.0"
   }
 }
