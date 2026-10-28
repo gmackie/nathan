@@ -53,7 +53,7 @@ kbd{color:#ffe3ae}code{color:#e5d4b7}footer{margin:25px 0;color:#8493a8}
 <label>OAuth client secret<input id="client-secret" type="password" autocomplete="off"></label>
 <p class="muted">Credentials are sent only to your live installation request over HTTPS, directly stored as Worker secrets, and not persisted in the installer database.</p>
 </section>
-<section><h2>4. Enterprise and MFA</h2>
+<section><h2>4. Enterprise, MFA and directory provisioning</h2>
 <label><input type="checkbox" id="enterprise"> Enable enterprise SSO plugin</label>
 <p class="muted">After deployment, configure your OIDC/SAML connections in Identity Studio. Employee domains must be verified before use.</p>
 <label>MFA enforcement<select id="mfa">
@@ -62,11 +62,16 @@ kbd{color:#ffe3ae}code{color:#e5d4b7}footer{margin:25px 0;color:#8493a8}
 <option value="all">Require MFA for everyone (pending assurance verification)</option>
 </select></label>
 <p class="muted">Required MFA choices will be blocked by the backend until OAuth, passkey, and federated assurance paths have passed security testing.</p>
+  <h3>SCIM 2.0 directory provisioning</h3>
+  <label><input type="checkbox" id="scim-enabled"> Prepare an optional SCIM directory connection</label>
+  <label>Connection ID<input id="scim-connection" placeholder="acme-workforce" autocomplete="off"></label>
+  <label>Corporate directory email domain<input id="scim-domain" placeholder="acme.example" autocomplete="off"></label>
+  <p class="muted">The initial connection is created disabled after administrator verification and MFA enrollment. Its one-time bearer token is displayed only at completion. Users and groups are staged in a transactional Durable Object; account linking and authorization are not automatic.</p>
 </section>
 <section><h2>5. Review and deploy</h2>
 <button class="secondary" id="plan">Preview deployment</button><button id="apply">Start deployment</button>
 <div id="errors" role="alert"></div><pre id="result" aria-live="polite"></pre>
-<div id="install-progress" hidden><h2>Installation progress</h2><ol id="steps"></ol>
+<div id="install-progress" hidden><h2>Installation progress</h2><ol id="steps"></ol><h3>One-time directory credential</h3><pre id="scim-once" hidden></pre>
 <p id="job-info" role="status"></p>
 <button class="secondary" id="resume">Continue / Retry</button>
 <a id="sign-in-new" target="_blank" rel="noopener noreferrer" hidden>Sign in to your new Nathan instance</a></div>
@@ -105,6 +110,9 @@ function validPlan(){
     name:$('worker').value.trim().toLowerCase(),adminEmail:$('admin-email').value.trim().toLowerCase(),
     securityProfile:$('profile').value,enterpriseSSO:$('enterprise').checked,
     realmEnabled:$('realm-enabled').checked,realmApex:$('realm-enabled').checked?$('realm-apex').value.trim().toLowerCase():undefined,
+    scimEnabled:$('scim-enabled').checked,
+    scimConnectionId:$('scim-enabled').checked?$('scim-connection').value.trim().toLowerCase():undefined,
+    scimDomain:$('scim-enabled').checked?$('scim-domain').value.trim().toLowerCase():undefined,
     mfaPolicy:$('mfa').value==='optional'?'optional':'required'};
 }
 function updateRealmApex(){
@@ -146,6 +154,10 @@ async function resumeStatus(id){
 }
 function renderJob(job){
   $('install-progress').hidden=false;
+  if(job.oneTimeScim){
+    $('scim-once').hidden=false;
+    $('scim-once').textContent=JSON.stringify(job.oneTimeScim,null,2);
+  }
   $('steps').textContent='';
   for(const item of job.steps||[]){
     const el=document.createElement('li');
@@ -161,7 +173,7 @@ function renderJob(job){
     $('job-info').textContent=job.actionRequired.instruction;
   }else $('sign-in-new').hidden=true;
   if(job.stage==='complete'){
-    $('result').textContent='Nathan installed. Sign in at '+job.url+'/studio to configure applications and SSO.';
+    $('result').textContent='Nathan installed. Open '+job.url+'/studio to configure OAuth, enterprise SSO, SCIM and other applications. If a one-time SCIM token was lost, rotate it inside Identity Studio.';
     $('resume').disabled=true;
   }
 }
