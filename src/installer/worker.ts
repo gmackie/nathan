@@ -157,6 +157,8 @@ async function dashboard(request:Request,env:InstallerEnv){
         {kind:"worker",name:plan.name,action:worker?"CONFLICT: Worker already exists":"create"},
         {kind:"d1",name:plan.name+"-db",action:database?"CONFLICT: D1 name in use":"create"},
         {kind:"custom-domain",name:plan.hostname,action:dns.length||domain?"CONFLICT: hostname in use":"create"},
+        ...(plan.scim?[{kind:"scim-directory",name:plan.scim.id,domain:plan.scim.domain,
+          action:"create-disabled",mode:"directory-only"}]:[]),
         ...(plan.realmApex?[{kind:"oidc-realm",name:plan.realmApex,issuer:"https://"+plan.hostname+"/api/auth",action:"create",
           coverage:[plan.realmApex,"*."+plan.realmApex],clientRegistration:"approved-only"}]:[])
       ],
