@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS nathan_install_jobs (
   worker_name TEXT NOT NULL,
   admin_email TEXT NOT NULL,
   profile TEXT NOT NULL CHECK(profile IN ('standard','business')),
+  enterprise_sso INTEGER NOT NULL DEFAULT 0 CHECK (enterprise_sso IN (0,1)),
   release_id TEXT NOT NULL,
   stage TEXT NOT NULL DEFAULT 'database',
   database_id TEXT,
