@@ -43,12 +43,37 @@ One identity provider can serve apps on Cloudflare or elsewhere. Applications ca
 | JWT verification SDK for protected APIs | **Initial implementation** |
 | Cloudflare account/zone/Worker/DNS discovery | **Initial CLI implementation** |
 | Local wizard, dry-run plan, guarded deployment flow | **Initial CLI implementation** |
-| Hosted Cloudflare OAuth installer | **Login/discovery/preview implemented; publish disabled** |
+| Hosted Cloudflare OAuth installer | **Read-only discovery and resumable publish workflow coded; live API testing pending** |
 | Generated Better Auth + rate-limit migration | **Committed; CI regenerates and verifies** |
+| Admin MCP tools and Identity Studio | **OIDC client, policy and enterprise SSO admin surfaces coded; conformance testing pending** |
+| Sealed installer release upload | **Compiled and integrity-checked in CI; first live provisioning pending** |
 | Node tests + three Worker CI bundles | **Passing in GitHub Actions** |
 | End-to-end protocol/security audit and live deployment | **Not completed** |
 
 No active deployment is claimed.
+
+## Run the guided setup
+
+For a developer with a scoped Cloudflare API token, the CLI wizard guides account discovery, DNS, Google/GitHub OAuth, application enrollment and administrator bootstrap:
+
+```sh
+git clone https://github.com/gmackie/nathan.git
+cd nathan
+git switch feat/bootstrap-blueprint
+npm ci
+# Configure CLOUDFLARE_API_TOKEN securely in your terminal environment
+npm run wizard
+```
+
+To host a **browser-based Deploy to Cloudflare wizard** for others, configure a Cloudflare OAuth client (scopes include Workers Admin, Routes Write, D1 Write, Zone Read and account identity) and run:
+
+```sh
+npm run setup:installer
+```
+
+The bootstrap CLI asks for the installer hostname and Cloudflare OAuth client ID/secret, creates a dedicated installer D1 database, builds and verifies a pinned Nathan release, applies its installer migrations, stages the Worker privately, installs secrets, and publishes the installer at the selected hostname. Your visitors then sign into their own Cloudflare accounts via OAuth and use a browser wizard to deploy Nathan into those accounts.
+
+**The production deployment path is experimental.** It needs a real OAuth client, authorized Cloudflare account and staging-domain tests before real customer use. See [installer instructions](docs/installer.md) and [MCP administration](docs/mcp.md).
 
 ## Local setup
 
@@ -88,7 +113,7 @@ node scripts/nathan.mjs admin promote --apply
 node scripts/nathan.mjs protect dashboard
 ```
 
-**Do not deploy Nathan in production at this stage.** The deployment script refuses to proceed without the committed Better Auth migration and blocks unverified high-assurance profiles; it also requires explicit consent and Cloudflare account verification. See [deployment instructions](docs/deploy.md).
+**Do not rely on Nathan for production authentication at this stage.** The deployment script refuses to proceed without the committed Better Auth migration and blocks unverified high-assurance profiles; it also requires explicit consent and Cloudflare account verification. See [deployment instructions](docs/deploy.md).
 
 The intended stable command will eventually be `npx nathan init` with a browser wizard, Cloudflare OAuth, provider-specific instructions and resumable provisioning.
 
@@ -96,7 +121,8 @@ The intended stable command will eventually be `npx nathan init` with a browser 
 
 - [Architecture and trust boundaries](docs/architecture.md)
 - [Deploy and DNS setup](docs/deploy.md)
-- [Hosted installer preview and Cloudflare OAuth](docs/installer.md)
+- [Hosted installer and Cloudflare OAuth](docs/installer.md)
+- [Admin MCP setup and tool contracts](docs/mcp.md)
 - [Threat model and operational assumptions](docs/threat-model.md)
 - [Backups, rotation, and incident response](docs/operations.md)
 - [OAuth/OIDC client integration](docs/oidc.md)

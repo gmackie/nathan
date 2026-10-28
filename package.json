@@ -22,9 +22,10 @@
     "protect": "node scripts/nathan.mjs protect",
     "build:installer": "wrangler deploy --config wrangler.installer.jsonc --dry-run --outdir .nathan/build-installer",
     "pack:release": "node scripts/pack-release.mjs",
-    "deploy:installer": "npm run pack:release && wrangler deploy --config wrangler.installer.jsonc",
+    "deploy:installer": "node scripts/setup-installer.mjs",
     "wizard": "node scripts/nathan.mjs wizard",
-    "setup:installer": "node scripts/setup-installer.mjs"
+    "setup:installer": "node scripts/setup-installer.mjs",
+    "verify:release": "node scripts/verify-release.mjs"
   },
   "dependencies": {
     "better-auth": "1.7.14",

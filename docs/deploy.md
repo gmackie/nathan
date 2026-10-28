@@ -10,6 +10,18 @@
 - A verified email account for administrator bootstrap.
 - A Google or GitHub OAuth application, or another supported upstream IdP.
 
+## Quick-start wizard
+
+```sh
+npm ci
+# Export a scoped CLOUDFLARE_API_TOKEN from your secret manager
+npm run wizard
+```
+
+This interactive wizard covers local manifest creation, account/zone/Worker discovery, deployment planning, private IdP deployment, provider credentials, admin promotion and an optional protected-Worker gateway. Every mutation requests explicit approval.
+
+For browser-first customer onboarding, run `npm run setup:installer` to create a dedicated Cloudflare OAuth-powered installer. See [installer.md](installer.md). Once deployed, visitors do not need to install Node or supply a general-purpose Cloudflare API token.
+
 ## 1. Prepare
 
 ```sh
@@ -61,7 +73,7 @@ Run `node scripts/nathan.mjs providers guide google` or `providers guide github`
 
 ## 4. Deploy safely
 
-The experimental CLI requires an explicit `--apply` confirmation and uses the current Cloudflare API token and generated Wrangler config. **It currently only deploys the identity Worker.** Before applying, inspect the generated migration set and the script's order of operations.
+The CLI requires an explicit `--apply` confirmation and uses the current Cloudflare API token and generated Wrangler config. **It currently only deploys the identity Worker.** Before applying, inspect the generated migration set and the script's order of operations.
 
 ```sh
 node scripts/nathan.mjs deploy --apply

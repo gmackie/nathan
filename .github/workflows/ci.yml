@@ -46,8 +46,8 @@ jobs:
         run: npm run build:gateway
       - name: Pack pinned IdP release into hosted installer
         run: npm run pack:release
-      - name: Verify release manifest
-        run: test -s installer/public/release/manifest.json
+      - name: Verify release manifest and every package hash
+        run: npm run verify:release
       - name: Archive installer release manifest
         uses: actions/upload-artifact@v4
         with:
