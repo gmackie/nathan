@@ -11,3 +11,5 @@ nathan.config.json
 dist/
 coverage/
 *.log
+
+installer/public/release/
