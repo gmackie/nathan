@@ -228,12 +228,19 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
       const dbName=job.worker_name+"-db";
       const databases=await api<Array<{uuid:string;name:string}>>("/accounts/"+job.account_id+"/d1/database");
       const found=databases.find(d=>d.name===dbName);
+      // Never reuse a database that the job cannot prove it created.
+      if(found && !job.database_id)
+        throw Error("D1 database now exists but is not recorded as owned by this installer job; inspect it before retrying");
       const db=found||await write<{uuid:string}>("POST","/accounts/"+job.account_id+"/d1/database",{name:dbName});
       if(!/^[a-f0-9-]{36}$/.test(db.uuid))throw Error("D1 API returned an invalid database UUID");
       updatedDbId=db.uuid;job.database_id=db.uuid;
     }else if(job.stage==="schema"){
       await ensureMigrations(env,write,release,job);
     }else if(job.stage==="upload"){
+      const scripts=await api<Array<{id:string;tags?:string[]}>>("/accounts/"+job.account_id+"/workers/scripts");
+      const existing=scripts.find(s=>s.id===job.worker_name);
+      if(existing && (!Array.isArray(existing.tags)||!existing.tags.includes("nathan")))
+        throw Error("Worker name was claimed by an unrelated deployment after planning; refusing to overwrite it");
       await uploadWorker(env,write,release,job,false,validateProvider(input));
       // An uploaded Worker must never be reachable at workers.dev or preview URLs.
       await write("POST","/accounts/"+job.account_id+"/workers/scripts/"+job.worker_name+"/subdomain",
