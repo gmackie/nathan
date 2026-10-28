@@ -81,6 +81,14 @@ function addCandidate(out,host,source,worker,apex,issuerHostname) {
  * Build a review-only inventory of exact, proxied HTTP DNS hostnames and Worker
  * Custom Domains. Don't infer that discovered hosts can be safely proxied.
  */
+/**
+ * @param {{
+ * apex: string,
+ * issuerHostname: string,
+ * dnsRecords?: Array<{name: string, type: string, proxied?: boolean}>,
+ * workerDomains?: Array<{hostname: string, service?: string, zone_id?: string}>
+ * }} inventory
+ */
 export function discoverRealmHostCandidates({apex,issuerHostname,dnsRecords=[],workerDomains=[]}) {
   const base=validateDomainName(apex);
   const issuer=validateDomainName(issuerHostname);
