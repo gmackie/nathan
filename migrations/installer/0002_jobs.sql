@@ -21,3 +21,5 @@ CREATE TABLE IF NOT EXISTS nathan_install_jobs (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS nathan_install_job_unique_target ON nathan_install_jobs(account_id,worker_name);
 CREATE INDEX IF NOT EXISTS nathan_install_job_owner ON nathan_install_jobs(owner_user_id,account_id,created_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS nathan_install_job_unique_hostname ON nathan_install_jobs(account_id,hostname);
