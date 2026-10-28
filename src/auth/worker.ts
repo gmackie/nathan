@@ -7,7 +7,7 @@ import type { AuthEnv } from "./env";
 import pluginCatalog from "../../plugins/catalog.json";
 import { handleMcp, protectedResourceMetadata } from "./mcp";
 import { isAdminUser, listApplications, listSso, upsertApplication,
-  setApplicationEnabled, registerEnterpriseOidc } from "./admin-service";
+  setApplicationEnabled, registerEnterpriseOidc, createOAuthClient } from "./admin-service";
 
 function reject(status: number, reason: string) {
   return Response.json({ error: reason }, { status, headers: { "Cache-Control": "no-store" } });
@@ -142,50 +142,21 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     }
   }
   if (url.pathname === "/studio/api/clients" && request.method === "POST") {
-    if (request.headers.get("Origin") !== issuer.origin) return reject(403, "Cross-origin request denied");
-    if (request.headers.get("Content-Type")?.split(";")[0] !== "application/json") return reject(415, "JSON required");
-    if (Number(request.headers.get("Content-Length") || "0") > 8192) return reject(413, "Request too large");
-    const session = await auth.api.getSession({ headers: request.headers });
-    if (!isAdmin(session, env)) return reject(403, "Admin session required");
-    let body: any;
-    try { body = await request.json(); } catch { return reject(400, "Invalid JSON"); }
-    if (typeof body?.name !== "string" || body.name.length < 1 || body.name.length > 100) return reject(400, "Invalid client name");
-    let redirect: URL;
-    try { redirect = new URL(body.redirectUri); } catch { return reject(400, "Invalid redirect URI"); }
-    if (redirect.protocol !== "https:" || redirect.username || redirect.password || redirect.hash)
-      return reject(400, "Client redirect must be HTTPS without credentials or fragment");
-    if (!["external","worker","gateway"].includes(body.kind)) return reject(400, "Invalid client type");
-    if (body.publicClient && body.kind === "gateway") return reject(400, "A gateway must be a confidential client");
-    const auditId=crypto.randomUUID();
-    await env.DB.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) VALUES (?,?,?,?,?)")
-      .bind(auditId,session!.user.id,"oauth_client_create",body.kind+":"+redirect.origin,"attempted").run();
-    let client;
-    try {
-      client = await auth.api.adminCreateOAuthClient({
-      headers: request.headers,
-      body: {
-        client_name: body.name,
-        redirect_uris: [redirect.href],
-        token_endpoint_auth_method: body.publicClient ? "none" : "client_secret_basic",
-        application_type: "web",
-        ...(body.kind === "gateway" ? {
-          backchannel_logout_uri: redirect.origin + "/__nathan/backchannel",
-          enable_end_session: true
-        } : {}),
-        grant_types: ["authorization_code", "refresh_token"],
-        require_pkce: true,
-        skip_consent: false
-      }
-      });
-    } catch (error) {
-      await env.DB.prepare("UPDATE nathan_security_audit SET outcome=? WHERE id=?")
-        .bind("failed",auditId).run();
-      throw error;
+    if (request.headers.get("Origin") !== issuer.origin ||
+        request.headers.get("Sec-Fetch-Site") === "cross-site") return reject(403,"Cross-origin request denied");
+    if (request.headers.get("Content-Type")?.split(";")[0] !== "application/json") return reject(415,"JSON required");
+    const session=await auth.api.getSession({headers:request.headers});
+    if (!isAdminUser(session?.user,env)) return reject(403,"Verified administrator required");
+    const raw=await request.text();
+    if(raw.length>8192)return reject(413,"Request too large");
+    try{
+      const client=await createOAuthClient(auth,env,request.headers,JSON.parse(raw),session!.user.id);
+      return Response.json(client,{headers:{"Cache-Control":"no-store"}});
+    }catch{
+      return reject(400,"Client creation rejected; verify exact redirect URI, permitted scopes and provider configuration");
     }
-    await env.DB.prepare("UPDATE nathan_security_audit SET outcome=? WHERE id=?")
-      .bind("succeeded",auditId).run();
-    return Response.json(client, { headers: { "Cache-Control": "no-store" } });
   }
+
   return reject(404, "Not found");
 }
 
