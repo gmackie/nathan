@@ -44,5 +44,15 @@ export async function adminCommand(args, file, apply) {
     [rows[0].id]
   );
   if (confirm.length !== 1 || confirm[0].role !== "admin") throw Error("Admin promotion verification failed");
+  const claimed=await api.queryDatabase(dbId,
+    "UPDATE nathan_bootstrap_status SET admin_user_id=?,state='identity_verified',updated_at=unixepoch() "+
+    "WHERE id='primary' AND admin_email=? AND cloudflare_user_id=? "+
+    "AND (admin_user_id IS NULL OR admin_user_id=?)",
+    [rows[0].id,email,"cli:"+cfg.accountId,rows[0].id]);
+  const boot=await api.queryDatabase(dbId,
+    "SELECT admin_user_id FROM nathan_bootstrap_status WHERE id='primary' LIMIT 1",[]);
+  if(boot.length!==1 || boot[0].admin_user_id!==rows[0].id)
+    throw Error("Bootstrap ownership binding failed; admin account requires manual security review");
+
   console.log("Promoted verified allowlisted administrator. Enroll MFA immediately.");
 }

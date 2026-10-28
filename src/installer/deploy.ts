@@ -241,6 +241,15 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
       updatedDbId=db.uuid;job.database_id=db.uuid;
     }else if(job.stage==="schema"){
       await ensureMigrations(env,write,release,job);
+      // One immutable bootstrap authority: the Cloudflare-authenticated installer.
+      await query(write,job,
+        "INSERT OR IGNORE INTO nathan_bootstrap_status(id,cloudflare_user_id,admin_email,state) VALUES('primary',?,?,'pending')",
+        [user.id,job.admin_email]);
+      const bootstrapOwner=await query(write,job,
+        "SELECT cloudflare_user_id,admin_email FROM nathan_bootstrap_status WHERE id='primary' LIMIT 1");
+      if(bootstrapOwner.length!==1 || bootstrapOwner[0].cloudflare_user_id!==user.id ||
+         bootstrapOwner[0].admin_email!==job.admin_email)
+        throw Error("Existing admin bootstrap belongs to another Cloudflare owner; manual recovery required");
       if(job.realm_apex){
         if(job.hostname!==realmIssuerHostname(job.realm_apex))
           throw Error("Domain-wide SSO issuer does not match verified base domain");
@@ -303,18 +312,41 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
       if(!healthJson.active||metadata.issuer!=="https://"+job.hostname+"/api/auth"||
          !Array.isArray(keys.keys))throw Error("OIDC discovery, JWKS or active flag mismatch");
     }else if(job.stage==="bootstrap"){
-      const rows=await query(write,job,'SELECT "id","email","emailVerified","role" FROM "user" WHERE lower("email")=lower(?) LIMIT 2',[job.admin_email]);
-      if(rows.length!==1||Number(rows[0].emailVerified)!==1)actionRequired={
-        kind:"sign-in",url:"https://"+job.hostname+"/sign-in",
-        instruction:"Sign in with the verified Cloudflare email using the configured upstream provider, then retry this step."
-      };
-      else if(rows[0].role!=="admin"){
-        await query(write,job,'UPDATE "user" SET "role"=? WHERE "id"=? AND "emailVerified"=1',["admin",rows[0].id]);
+      // A verified Better Auth user with exactly the Cloudflare installer identity's
+      // approved email is necessary; no unauthenticated bootstrap password.
+      const rows=await query(write,job,
+        'SELECT "id","email","emailVerified","role" FROM "user" WHERE lower("email")=lower(?) LIMIT 2',
+        [job.admin_email]);
+      if(rows.length!==1||Number(rows[0].emailVerified)!==1) {
+        actionRequired={kind:"sign-in",url:"https://"+job.hostname+"/sign-in",
+          instruction:"Sign in at Nathan with the verified Cloudflare account email, then return to the wizard."};
+      } else {
+        const existing=await query(write,job,
+          "SELECT cloudflare_user_id,admin_email,admin_user_id,state FROM nathan_bootstrap_status WHERE id='primary' LIMIT 1");
+        if(existing.length!==1 || existing[0].cloudflare_user_id!==user.id ||
+           existing[0].admin_email!==job.admin_email ||
+           (existing[0].admin_user_id && existing[0].admin_user_id!==rows[0].id))
+          throw Error("Initial administrator claim conflicts with the verified Cloudflare installer identity");
+        if(rows[0].role!=="admin"){
+          await query(write,job,
+            'UPDATE "user" SET "role"=? WHERE "id"=? AND "emailVerified"=1',
+            ["admin",rows[0].id]);
+          await query(write,job,
+            "INSERT INTO nathan_security_audit(id,actor,action,target,outcome) VALUES (?,?,?,?,?)",
+            [crypto.randomUUID(),"installer:"+user.id,"admin_bootstrap",rows[0].id,"succeeded"]);
+        }
         await query(write,job,
-          "INSERT INTO nathan_security_audit(id,actor,action,target,outcome) VALUES (?,?,?,?,?)",
-          [crypto.randomUUID(),"installer:"+user.id,"admin_bootstrap",rows[0].id,"succeeded"]);
-      }
-    }
+          "UPDATE nathan_bootstrap_status SET admin_user_id=?,state=CASE WHEN state='complete' THEN 'complete' "+
+          "ELSE 'identity_verified' END,updated_at=unixepoch() WHERE id='primary' AND cloudflare_user_id=?",
+          [rows[0].id,user.id]);
+        const state=await query(write,job,
+          "SELECT state FROM nathan_bootstrap_status WHERE id='primary' AND admin_user_id=? LIMIT 1",
+          [rows[0].id]);
+        if(state.length!==1 || state[0].state!=="complete") {
+          actionRequired={kind:"security-enrollment",url:"https://"+job.hostname+"/security?setup=admin",
+            instruction:"Initial admin identity verified. Enroll a passkey and a TOTP authenticator, save backup codes, then click Complete initial setup on Nathan's security page and resume the wizard."};
+        }
+      }}
     if(actionRequired){
       await env.INSTALLER_DB.prepare("UPDATE nathan_install_jobs SET locked_until=0,error=NULL,updated_at=unixepoch() WHERE id=?")
         .bind(job.id).run();

@@ -153,9 +153,11 @@ function renderJob(job){
     $('steps').append(el);
   }
   $('job-info').textContent='Stage: '+job.stage+' · '+job.url;
-  if(job.actionRequired?.kind==='sign-in'){
+  if(job.actionRequired?.url){
     $('sign-in-new').hidden=false;$('sign-in-new').href=job.actionRequired.url;
-    $('sign-in-new').textContent='Sign in at '+job.actionRequired.url;
+    $('sign-in-new').textContent=job.actionRequired.kind==='security-enrollment'
+      ? 'Enroll authenticators and finish admin setup'
+      : 'Sign in at '+job.actionRequired.url;
     $('job-info').textContent=job.actionRequired.instruction;
   }else $('sign-in-new').hidden=true;
   if(job.stage==='complete'){

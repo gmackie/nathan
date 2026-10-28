@@ -129,6 +129,21 @@ async function provision(forceApply=false) {
   const liveConfig = JSON.parse(await readFile(configPath,"utf8"));
   console.log("Applying reviewed D1 migrations before publishing the identity hostname.");
   await runCli("npx",["wrangler","d1","migrations","apply",name,"--remote","--config",configPath]);
+  // A scoped Cloudflare token and an exact administrator allowlist establish
+  // ownership for CLI bootstraps. The verified Better Auth user must still
+  // sign in and enroll authenticators before privileged UI access is enabled.
+  if(cfg.adminEmails?.length){
+    const email=cfg.adminEmails[0].trim().toLowerCase();
+    const caller="cli:"+cfg.accountId;
+    await client.queryDatabase(dbId,
+      "INSERT OR IGNORE INTO nathan_bootstrap_status(id,cloudflare_user_id,admin_email,state) VALUES('primary',?,?,'pending')",
+      [caller,email]);
+    const rows=await client.queryDatabase(dbId,
+      "SELECT cloudflare_user_id,admin_email FROM nathan_bootstrap_status WHERE id='primary' LIMIT 1",[]);
+    if(rows.length!==1 || rows[0].cloudflare_user_id!==caller || rows[0].admin_email!==email)
+      throw Error("Admin bootstrap ownership mismatch; refusing to publish identity Worker");
+  }
+
   if (cfg.realm) {
     if (!snapshot.zone?.id) throw Error("Cannot verify realm's Cloudflare zone");
     const apex=cfg.realm.apex;
