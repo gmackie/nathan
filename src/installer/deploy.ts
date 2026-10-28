@@ -4,6 +4,7 @@ import { cloudflareRequest, cloudflareWrite } from "./cloudflare";
 import { loadRelease, releaseFile, type NathanRelease, type ReleaseFile } from "./release";
 import { validateInstallPlan, validateHostname } from "./validation.mjs";
 import { realmIssuerHostname } from "../shared/realm.mjs";
+import { generateConfigKey,encryptProviderSecret } from "../auth/config-crypto.mjs";
 
 const STAGES=["database","schema","upload","domain","activate","verify","bootstrap","complete"] as const;
 type Stage=typeof STAGES[number];
@@ -142,7 +143,7 @@ async function ensureMigrations(env:InstallerEnv,write:Write,release:NathanRelea
   await query(write,job,
     "CREATE TABLE IF NOT EXISTS nathan_release_migrations(name TEXT PRIMARY KEY,sha256 TEXT NOT NULL,applied_at INTEGER NOT NULL DEFAULT (unixepoch()))");
   const migrations=release.files.filter(f=>f.type==="migration").sort((a,b)=>a.name.localeCompare(b.name));
-  if(migrations.length<5)throw Error("Release is missing required domain and identity migrations");
+  if(migrations.length<6)throw Error("Release is missing identity, realm or control-plane migrations");
   for(const item of migrations){
     const prev=await query(write,job,"SELECT sha256 FROM nathan_release_migrations WHERE name=?",[item.name]);
     if(prev.length){
@@ -171,7 +172,7 @@ function validateProvider(payload:any) {
 }
 async function uploadWorker(
   env:InstallerEnv,write:Write,release:NathanRelease,job:InstallJob,active:boolean,
-  provider?:ReturnType<typeof validateProvider>
+  provider?:ReturnType<typeof validateProvider>, configKey?:string
 ){
   if(!job.database_id)throw Error("Database ID missing");
   const bindings:any[]=[
@@ -182,13 +183,15 @@ async function uploadWorker(
     {type:"plain_text",name:"NATHAN_INSTALL_ACTIVE",text:active?"true":"false"},
     {type:"plain_text",name:"NATHAN_MCP_WRITE_ENABLED",text:"false"},
     {type:"plain_text",name:"ENABLE_PASSWORD",text:"false"},
+    {type:"plain_text",name:"NATHAN_SECURITY_PROFILE",text:job.profile},
+    {type:"plain_text",name:"NATHAN_BOOTSTRAP_REQUIRED",text:"true"},
     {type:"plain_text",name:"ENTERPRISE_SSO",text:job.enterprise_sso===1?"true":"false"}
   ];
   if(provider){
+    if(!configKey)throw Error("Configuration encryption key missing during private Worker upload");
     bindings.push(
       {type:"secret_text",name:"BETTER_AUTH_SECRET",text:b64url(48)},
-      {type:"secret_text",name:provider.name.toUpperCase()+"_CLIENT_ID",text:provider.id},
-      {type:"secret_text",name:provider.name.toUpperCase()+"_CLIENT_SECRET",text:provider.secret}
+      {type:"secret_text",name:"NATHAN_CONFIG_KEY",text:configKey}
     );
   }
   const metadata={
@@ -252,12 +255,22 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
           throw Error("Existing domain realm does not match approved account, zone and issuer");
       }
     }else if(job.stage==="upload"){
+      const initialProvider=validateProvider(input);
+      // Both wizard and ongoing Identity Studio use the same encrypted D1 provider store.
+      // This inactive IdP can be retried safely before the public route exists.
+      const configKey=generateConfigKey();
+      const cipher=await encryptProviderSecret(initialProvider.name,initialProvider.secret,configKey);
       const scripts=await api<Array<{id:string;tags?:string[]}>>("/accounts/"+job.account_id+"/workers/scripts");
       const workerName=job.worker_name;
       const existing=scripts.find(s=>s.id===workerName);
       if(existing && (!Array.isArray(existing.tags)||!existing.tags.includes("nathan")))
         throw Error("Worker name was claimed by an unrelated deployment after planning; refusing to overwrite it");
-      await uploadWorker(env,write,release,job,false,validateProvider(input));
+      await query(write,job,
+        "INSERT INTO nathan_oauth_providers(id,client_id,secret_cipher,enabled,updated_by) "+
+        "VALUES (?,?,?,1,?) ON CONFLICT(id) DO UPDATE SET client_id=excluded.client_id,"+
+        "secret_cipher=excluded.secret_cipher,enabled=1,updated_at=unixepoch(),updated_by=excluded.updated_by",
+        [initialProvider.name,initialProvider.id,cipher,"installer:"+user.id]);
+      await uploadWorker(env,write,release,job,false,initialProvider,configKey);
       // An uploaded Worker must never be reachable at workers.dev or preview URLs.
       await write("POST","/accounts/"+job.account_id+"/workers/scripts/"+job.worker_name+"/subdomain",
         {enabled:false,previews_enabled:false});
