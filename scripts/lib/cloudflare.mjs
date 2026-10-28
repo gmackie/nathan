@@ -39,6 +39,40 @@ export class CloudflareClient {
     if (!/^[a-f0-9]{32}$/.test(zoneId)) throw Error("Invalid zone ID");
     return this.request("/zones/" + zoneId + "/dns_records?name=" + encodeURIComponent(hostname));
   }
+  async workerExposure(workerName) {
+    const unknown = [], publicEndpoints = [];
+    // An upstream must not be callable through Workers.dev, preview URLs,
+    // any custom domain, or any zone route the installer can observe.
+    const encode = encodeURIComponent(workerName);
+    try {
+      const sub = await this.request("/accounts/" + this.accountId + "/workers/scripts/" + encode + "/subdomain");
+      if (sub?.enabled === true) publicEndpoints.push({kind:"workers.dev",worker:workerName});
+      if (sub?.previews_enabled === true) publicEndpoints.push({kind:"preview",worker:workerName});
+      if (typeof sub?.enabled !== "boolean" || typeof sub?.previews_enabled !== "boolean")
+        unknown.push("Unrecognized subdomain exposure response");
+    } catch (error) { unknown.push("Unable to inspect workers.dev / preview routes: " + error.message); }
+    try {
+      const domains = await this.request("/accounts/" + this.accountId + "/workers/domains");
+      if (!Array.isArray(domains)) unknown.push("Unexpected custom domain inventory response");
+      else for (const d of domains) {
+        if (d.service === workerName || d.script === workerName)
+          publicEndpoints.push({kind:"custom-domain",hostname:d.hostname});
+      }
+    } catch (error) { unknown.push("Unable to inspect Worker custom domains: " + error.message); }
+    try {
+      const zones = await this.zones();
+      if (!Array.isArray(zones)) unknown.push("Unexpected zones inventory response");
+      else for (const z of zones) {
+        try {
+          const routes = await this.request("/zones/" + z.id + "/workers/routes");
+          if (!Array.isArray(routes)) unknown.push("Cannot enumerate routes for " + z.name);
+          else for (const r of routes) if (r.script === workerName)
+            publicEndpoints.push({kind:"zone-route",pattern:r.pattern,zone:z.name});
+        } catch (error) { unknown.push("Unable to inspect routes in " + z.name + ": " + error.message); }
+      }
+    } catch (error) { unknown.push("Unable to enumerate zones: " + error.message); }
+    return { public: publicEndpoints, unknown };
+  }
   async createDatabase(name) {
     if (!this.accountId) throw Error("Account ID required");
     return this.request("/accounts/" + this.accountId + "/d1/database", { method: "POST", body: { name } });
