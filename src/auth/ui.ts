@@ -121,6 +121,8 @@ export function studioPage(userEmail: string): Response {
   <label>Exact HTTPS redirect URI<input id="redirect" placeholder="https://app.example.com/oauth/callback"></label><label>Client type<select id="kind"><option value="external">External web app</option><option value="worker">Cloudflare Worker</option><option value="gateway">Nathan gateway</option><option value="mcp">MCP administrator</option></select></label><label><input type="checkbox" id="public-client"> Public OIDC client (PKCE, no secret)</label>
   <button id="create">Register client</button><p id="status" role="alert"></p><pre id="result"></pre>
   <p><small>Client secrets are shown once. Store them in a secure manager.</small></p><h2>Registered applications</h2><button class="secondary" id="refresh">Refresh registered clients</button><pre id="clients" aria-live="polite"></pre><h3>Disable or resume OIDC client</h3><label>Client ID<input id="manage-client" placeholder="OIDC client_id"></label><button class="secondary" id="disable-client">Disable</button><button class="secondary" id="enable-client">Re-enable</button><p id="manage-status" role="status"></p><h2>Identity providers and security posture</h2><button class="secondary" id="status-btn">View active capabilities</button><pre id="capabilities"></pre><h2>Available plugins</h2><p>Catalog entries are read-only until their packages and database migrations are reviewed and deployed.</p><select id="plugin-tier"><option value="all">All tiers</option><option value="verified">Verified candidates</option><option value="community">Community</option><option value="custom">Private/custom</option></select><button class="secondary" id="plugins-btn">List integrations</button><pre id="plugins"></pre><h2>Security audit events</h2><button class="secondary" id="audit-btn">Refresh security audit</button><pre id="audit"></pre>
+  <h2>Users</h2><p>Read-only directory of recent accounts. Passwords, credentials and session values are never returned.</p>
+  <button class="secondary" id="users-list">Refresh users</button><pre id="users-results"></pre>
   <h2>Protected applications</h2><p>Service-binding policies start disabled. Save a policy, then explicitly enable it.</p>
   <label>Application ID<input id="app-id" placeholder="operations"></label>
   <label>Hostname<input id="app-host" placeholder="operations.example.com"></label>
@@ -177,6 +179,10 @@ export function studioPage(userEmail: string): Response {
     async function postJson(path,value){
       return j(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});
     }
+    document.getElementById('users-list').onclick=async()=>{
+      const out=document.getElementById('users-results');
+      try{out.textContent=JSON.stringify(await j('/studio/api/users'),null,2)}catch(e){out.textContent=e.message}
+    };
     document.getElementById('app-save').onclick=async()=>{
       const out=document.getElementById('app-create-result');
       try{out.textContent=JSON.stringify(await postJson('/studio/api/apps',{
