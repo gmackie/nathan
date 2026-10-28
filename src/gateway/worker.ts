@@ -1,4 +1,4 @@
-import { parseCookie, makeCookie, safeReturnPath, constantTimeEqual, validateIssuer } from "../shared/security.mjs";
+import { parseCookie, makeCookie, safeReturnPath, constantTimeEqual, validateIssuer, isAllowedUnsafeRequest } from "../shared/security.mjs";
 import { randomId, seal, unseal, sha256 } from "./crypto";
 import { discover, authorizeUrl, exchangeCode, verifyIdToken } from "./oidc";
 import type { GatewayEnv } from "./env";
@@ -77,8 +77,8 @@ async function currentSession(request: Request, env: GatewayEnv): Promise<Stored
   if (!handle || !/^[A-Za-z0-9_-]{32,128}$/.test(handle)) return null;
   const hash = await sha256(handle);
   const row = await env.SESSIONS.prepare(
-    "SELECT subject, email, id_hash as sessionIdHash, expires_at as expiresAt, acr, auth_time as authTime, issuer FROM nathan_gateway_sessions WHERE id_hash=? AND expires_at > unixepoch()"
-  ).bind(hash).first<StoredSession>();
+    "SELECT subject, email, id_hash as sessionIdHash, expires_at as expiresAt, acr, auth_time as authTime, issuer FROM nathan_gateway_sessions WHERE id_hash=? AND client_id=? AND issuer=? AND expires_at > unixepoch()"
+  ).bind(hash, env.OIDC_CLIENT_ID, env.NATHAN_ISSUER).first<StoredSession>();
   return row ?? null;
 }
 async function logout(request: Request, env: GatewayEnv): Promise<Response> {
@@ -118,6 +118,8 @@ export default {
       if (url.pathname === "/__nathan/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/__nathan/backchannel" && request.method === "POST") return handleBackchannelLogout(request, env);
       if (url.pathname.startsWith("/__nathan/")) return errorResponse(404, "Not found");
+      if (!isAllowedUnsafeRequest(request.method,request.headers.get("Origin"),expected,request.headers.get("Sec-Fetch-Site")))
+        return errorResponse(403, "Cross-origin state-changing request denied");
       const session = await currentSession(request, env);
       if (!session) {
         if (needsRedirect(request)) return Response.redirect(expected + "/__nathan/login?returnTo=" + encodeURIComponent(url.pathname + url.search), 302);
@@ -130,5 +132,12 @@ export default {
     } catch {
       return errorResponse(503, "Access verification temporarily unavailable");
     }
+  },
+  async scheduled(_event: ScheduledEvent, env: GatewayEnv): Promise<void> {
+    // TTL alone is not sufficient; remove expired opaque sessions and consumed logout JTIs.
+    await env.SESSIONS.batch([
+      env.SESSIONS.prepare("DELETE FROM nathan_gateway_sessions WHERE expires_at <= unixepoch()"),
+      env.SESSIONS.prepare("DELETE FROM nathan_gateway_logout_jti WHERE exp <= unixepoch()")
+    ]);
   }
 };

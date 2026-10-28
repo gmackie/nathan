@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { safeReturnPath, parseCookie, makeCookie, validateIssuer, constantTimeEqual } from "../src/shared/security.mjs";
+import { safeReturnPath, parseCookie, makeCookie, validateIssuer, constantTimeEqual, isAllowedUnsafeRequest } from "../src/shared/security.mjs";
 test("safe redirect paths",()=>{
   for(const p of ["//evil.com","/\\evil.com","https://evil.com","/hello\nSet-Cookie:evil","/hello\\world"])
     assert.equal(safeReturnPath(p),"/");
@@ -21,4 +21,13 @@ test("constant time string comparison behavior",()=>{
   assert.equal(constantTimeEqual("abc","abc"),true);
   assert.equal(constantTimeEqual("abc","ab"),false);
   assert.equal(constantTimeEqual("abc","abd"),false);
+});
+
+test("CSRF guard denies unsafe cross-origin and originless writes",()=>{
+  const same="https://app.example.com";
+  assert.equal(isAllowedUnsafeRequest("POST",same,same,"same-origin"),true);
+  assert.equal(isAllowedUnsafeRequest("PUT","https://evil.example",same,"cross-site"),false);
+  assert.equal(isAllowedUnsafeRequest("POST",null,same,null),false);
+  assert.equal(isAllowedUnsafeRequest("DELETE",same,same,"cross-site"),false);
+  assert.equal(isAllowedUnsafeRequest("GET",null,same,"cross-site"),true);
 });

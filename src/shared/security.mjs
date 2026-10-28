@@ -39,3 +39,9 @@ export function constantTimeEqual(a, b) {
     diff |= (x[i] || 0) ^ (y[i] || 0);
   return diff === 0;
 }
+
+/** Session-cookie authenticated state changes must come from the protected origin. */
+export function isAllowedUnsafeRequest(method, originHeader, expectedOrigin, fetchSite) {
+  if (["GET", "HEAD", "OPTIONS"].includes(method)) return true;
+  return originHeader === expectedOrigin && fetchSite !== "cross-site";
+}
