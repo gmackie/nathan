@@ -1,0 +1,26 @@
+{
+  "name": "nathan",
+  "hostname": "auth.example.com",
+  "securityProfile": "business",
+  "database": {
+    "type": "d1",
+    "name": "nathan-auth"
+  },
+  "providers": {
+    "google": {
+      "enabled": false
+    },
+    "github": {
+      "enabled": false
+    }
+  },
+  "applications": [
+    {
+      "id": "dashboard",
+      "kind": "worker",
+      "workerName": "my-dashboard",
+      "hostname": "dashboard.example.com",
+      "protection": "gateway"
+    }
+  ]
+}
