@@ -117,9 +117,8 @@ async function provision(forceApply=false) {
   const snapshot = await inspectDeployment(client,cfg);
   if (!snapshot.zone || snapshot.zone.status !== "active") throw Error("Auth hostname is not in an active Cloudflare zone");
   if (snapshot.dnsConflicts.length) throw Error("Conflicting DNS records detected; resolve them manually before deploying");
-  if (cfg.applications.some(a=>a.protection==="gateway")) {
-    throw Error("Gateway deployment requires per-app OIDC client registration and a private upstream. Deploy the IdP first; use docs/deploy.md.");
-  }
+  // The IdP is deployed independently. Per-application gateways are registered
+  // and published in a separate step after their OIDC clients exist.
   out({notice:"This creates a D1 database, migrates schema and publishes the auth Worker", accountId:cfg.accountId, hostname:cfg.hostname});
   if (!(await yesNo("Apply changes to this account and hostname?"))) throw Error("Cancelled");
   const name = cfg.database.name;

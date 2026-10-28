@@ -28,7 +28,7 @@ export function validateConfig(value) {
     else {
       try{
         const derived=realmForLoginHostname(value.hostname);
-        if(value.realm.apex!==derived.apex || value.realm.includeApex!==true ||
+        if(value.realm.apex!==derived.apex || value.realm.issuerHostname!==derived.issuerHostname || value.realm.includeApex!==true ||
            value.realm.includeSubdomains!==true || value.realm.registration!=="approved-only")
           errors.push("realm must match login.<apex>, include root and subdomains, and require explicit OIDC registration approval");
       }catch(e){errors.push("realm requires issuer hostname login.<domain>");}

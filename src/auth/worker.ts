@@ -21,7 +21,7 @@ function isAdmin(session: any, env: AuthEnv): boolean {
 async function handle(request: Request, env: AuthEnv): Promise<Response> {
   const issuer = new URL(env.NATHAN_ISSUER);
   const url = new URL(request.url);
-  if (url.hostname !== issuer.hostname || url.protocol !== "https:") return reject(421, "Misdirected request");
+  if (url.origin !== issuer.origin || url.protocol !== "https:") return reject(421, "Misdirected request");
   if (url.pathname === "/healthz") return Response.json({ ok: true, system: "nathan", active: env.NATHAN_INSTALL_ACTIVE !== "false" });
   // The hosted installer uploads inactive code before it creates a public route.
   if (env.NATHAN_INSTALL_ACTIVE === "false") return reject(503, "Installation not active");

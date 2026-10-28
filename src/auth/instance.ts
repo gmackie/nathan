@@ -25,6 +25,8 @@ export function createAuth(env: AuthEnv) {
     basePath: "/api/auth",
     secret: env.BETTER_AUTH_SECRET,
     database: env.DB,
+    // Federated tokens are sensitive; encrypt them in D1 and keep OAuth state server-side.
+    account: { encryptOAuthTokens: true, storeStateStrategy: "database" },
     disabledPaths: ["/token"],
     rateLimit: {
       enabled: true,
@@ -49,6 +51,11 @@ export function createAuth(env: AuthEnv) {
         sendAuthEmail(env, user.email, "Verify your Nathan email", url)
     },
     advanced: {
+      // The IdP's session is strictly host-only on login.<domain>.
+      // Never turn on cross-subdomain cookies to implement OIDC SSO.
+      cookiePrefix: "nathan",
+      useSecureCookies: true,
+      crossSubDomainCookies: { enabled: false },
       ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] },
       database: { joins: false }
     },
