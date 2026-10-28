@@ -5,10 +5,16 @@
 ## Prerequisites
 
 - Node.js 22+, npm, Wrangler / Cloudflare Workers Paid account.
-- A Cloudflare-managed active zone for your identity hostname (e.g. `auth.example.com`).
+- A Cloudflare-managed active zone for your identity hostname (e.g. `login.example.com`).
 - A Cloudflare API token scoped to the chosen account/zone. Avoid global API keys.
 - A verified email account for administrator bootstrap.
 - A Google or GitHub OAuth application, or another supported upstream IdP.
+
+## Domain-wide login identity
+
+If the intention is one central identity provider for an entire Cloudflare zone, use `login.example.com` as Nathan's custom domain and select **Domain-wide SSO**. The setup registers a verified realm for `example.com` and its subdomains, without changing their existing DNS or automatically protecting unrelated applications.
+
+After installation, open `https://login.example.com/studio` → Domain-wide SSO to review and register exact hostname OIDC clients. The root and any additional subdomains get their own callback and session, reusing the central Nathan login. Read [domain-wide-sso.md](domain-wide-sso.md).
 
 ## Quick-start wizard
 
@@ -60,13 +66,13 @@ Apply migrations against a staging D1 database before production. Cloudflare D1'
 When creating a Google OAuth Web application, use the exact URL:
 
 ```
-https://auth.example.com/api/auth/callback/google
+https://login.example.com/api/auth/callback/google
 ```
 
 For GitHub OAuth use:
 
 ```
-https://auth.example.com/api/auth/callback/github
+https://login.example.com/api/auth/callback/github
 ```
 
 Run `node scripts/nathan.mjs providers guide google` or `providers guide github`, then `providers add google --apply` / `providers add github --apply`. These commands collect the secret in a masked TTY and use `wrangler secret put`. Alternatively set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GITHUB_CLIENT_ID`, and `GITHUB_CLIENT_SECRET` manually via Wrangler. Never include these values in source-controlled Wrangler config, command arguments, logs, or screenshots.
@@ -87,7 +93,7 @@ Create an ordinary verified account through the configured IdP, then promote it 
 
 ## 6. Register clients
 
-Navigate to `https://auth.example.com/studio`. Register an HTTPS redirect URI for each OIDC client. The client secret is displayed once and must be stored safely.
+Navigate to `https://login.example.com/studio`. Register an HTTPS redirect URI for each OIDC client. The client secret is displayed once and must be stored safely.
 
 A Cloudflare application can use the standard OIDC flow, a bound Nathan verifier, or a dedicated gateway. An external domain uses OIDC directly; only legacy apps without OIDC need an HTTP gateway.
 

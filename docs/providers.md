@@ -12,7 +12,7 @@ node scripts/nathan.mjs providers add google --apply
 Open [Google Auth Platform](https://console.cloud.google.com/auth/clients), create an OAuth Web application and configure the consent screen. Copy the exact redirect URL printed by Nathan, for example:
 
 ```
-https://auth.example.com/api/auth/callback/google
+https://login.example.com/api/auth/callback/google
 ```
 
 Provide the Client ID and masked Client Secret. Nathan writes both as Worker secrets and does not persist them in its manifest.
@@ -27,7 +27,7 @@ node scripts/nathan.mjs providers add github --apply
 Create an OAuth App at [GitHub Developer Settings](https://github.com/settings/developers). Configure the authorization callback exactly:
 
 ```
-https://auth.example.com/api/auth/callback/github
+https://login.example.com/api/auth/callback/github
 ```
 
 Validate callback URLs and the first sign-in after setup.

@@ -1,12 +1,12 @@
 # Admin MCP server
 
-Nathan exposes a stateless, OAuth-protected Model Context Protocol endpoint at \`https://auth.example.com/mcp\`.
+Nathan exposes a stateless, OAuth-protected Model Context Protocol endpoint at \`https://login.example.com/mcp\`.
 
-**Security:** Never supply Better Auth cookies to MCP. MCP requires a resource-bound JWT access token issued to \`https://auth.example.com/mcp\`, with \`nathan:read\` or \`nathan:admin\` scopes. The resource metadata is discoverable at \`/.well-known/oauth-protected-resource\`. All requests are checked against the current Nathan identity store: email must be verified, user must be in the admin role and in \`NATHAN_ADMIN_EMAILS\`, and account must not be suspended.
+**Security:** Never supply Better Auth cookies to MCP. MCP requires a resource-bound JWT access token issued to \`https://login.example.com/mcp\`, with \`nathan:read\` or \`nathan:admin\` scopes. The resource metadata is discoverable at \`/.well-known/oauth-protected-resource\`. All requests are checked against the current Nathan identity store: email must be verified, user must be in the admin role and in \`NATHAN_ADMIN_EMAILS\`, and account must not be suspended.
 
 ## Client registration
 
-From Identity Studio register a **MCP administrator** application with an exact HTTPS redirect URI, such as an agent's OAuth callback. Public clients require PKCE and do not receive a client secret. Ask for the \`resource=https://auth.example.com/mcp\` authorization parameter and the \`nathan:read\` scope.
+From Identity Studio register a **MCP administrator** application with an exact HTTPS redirect URI, such as an agent's OAuth callback. Public clients require PKCE and do not receive a client secret. Ask for the \`resource=https://login.example.com/mcp\` authorization parameter and the \`nathan:read\` scope.
 
 This initial implementation uses Nathan's own strict stateless JSON-RPC adapter with MCP protocol version **2026-07-28**. It supports \`server/discover\`, \`tools/list\`, and \`tools/call\`. The client must send \`MCP-Protocol-Version\`, \`Mcp-Method\`, \`Mcp-Name\` (when invoking tools), and matching \`params._meta\`. Production client-compatibility tests against the official MCP SDK are still required.
 

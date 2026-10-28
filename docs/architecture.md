@@ -40,3 +40,9 @@ Default: identity Worker + D1 + custom auth hostname. Optional gateways: one Wor
 The local CLI discovers account and zone resources with Cloudflare's API, validates configuration, computes a read-only plan, and requires explicit confirmation before deployment. The hosted Coworkers-style installer now supports Cloudflare OAuth, encrypted session storage, read-only account discovery and planning; its publish path is disabled until the packaged release upload and migration sequence pass staging tests. The production reconciler, live plugin installer and external policy engine remain roadmap items.
 
 Plugin code executes in the IdP's trust boundary: arbitrary third-party hooks cannot safely be sandboxed merely through a UI manifest.
+
+## Verified domain-wide SSO realm
+
+A domain installation hosted at `login.example.com` can serve the apex `example.com` and approved subdomains as a **single OIDC issuer**. The installer proves ownership through the selected Cloudflare account and active zone, stores the verified apex and issuer in `nathan_domain_realms`, and seeds no wildcard OAuth clients. Identity Studio and read-only MCP tools expose the realm and its registered hosts. Each exact host has its own Better Auth OIDC client with a distinct callback URI, disabled until approved and configured. More details: [domain-wide-sso.md](domain-wide-sso.md).
+
+This mechanism is different from wildcard HTTP ingress. Existing apex and subdomain applications continue to serve requests through their original origins until explicitly integrated with OIDC or moved behind a properly isolated Nathan gateway. The central Better Auth cookie is host-only on the login hostname; no `.example.com` session cookie is shared.
