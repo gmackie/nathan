@@ -1,6 +1,6 @@
 import { createLocalJWKSet, jwtVerify } from "jose";
 import type { AuthEnv } from "./env";
-import { isAdminUser, listClients, listApplications, listSso, recentAudit,
+import { isAdminUser, listClients, listApplications, listSso, listUsers, recentAudit,
   setApplicationEnabled, setOAuthClientDisabledWithMcp, audit } from "./admin-service";
 import { MCP_VERSION, READ_TOOLS, WRITE_TOOLS, isWriteTool,
   requiredConfirm, decodeMcpRequest, mcpResult, mcpError, textContent } from "../mcp/protocol.mjs";
@@ -85,6 +85,7 @@ async function executeTool(name:string,args:Record<string,any>,env:AuthEnv,auth:
     mcpWritesEnabled:env.NATHAN_MCP_WRITE_ENABLED==="true"
   };
   if(name==="nathan_clients_list")return {clients:await listClients(env)};
+  if(name==="nathan_users_list")return {users:await listUsers(env)};
   if(name==="nathan_apps_list")return {applications:await listApplications(env)};
   if(name==="nathan_sso_list")return {providers:await listSso(env)};
   if(name==="nathan_audit_recent")return {events:await recentAudit(env)};
