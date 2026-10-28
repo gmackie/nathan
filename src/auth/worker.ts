@@ -89,7 +89,10 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
         redirect_uris: [redirect.href],
         token_endpoint_auth_method: body.publicClient ? "none" : "client_secret_basic",
         application_type: "web",
-        ...(body.kind === "gateway" ? {backchannel_logout_uri: redirect.origin + "/__nathan/backchannel"} : {}),
+        ...(body.kind === "gateway" ? {
+          backchannel_logout_uri: redirect.origin + "/__nathan/backchannel",
+          enable_end_session: true
+        } : {}),
         grant_types: ["authorization_code", "refresh_token"],
         require_pkce: true,
         skip_consent: false

@@ -63,6 +63,13 @@ export function createAuth(env: AuthEnv) {
         scopes: ["openid", "profile", "email", "offline_access"],
         allowDynamicClientRegistration: false,
         allowUnauthenticatedClientRegistration: false,
+        // Public dynamic registration is disabled; only verified and allowlisted
+        // Nathan admins may use Better Auth's authenticated client CRUD API.
+        clientPrivileges: async ({ user }) => {
+          if (!user?.email || !user.emailVerified || (user as any).role !== "admin") return false;
+          const allowed = env.NATHAN_ADMIN_EMAILS.split(",").map(x=>x.trim().toLowerCase()).filter(Boolean);
+          return allowed.includes(user.email.toLowerCase());
+        },
         ...(env.NATHAN_PAIRWISE_SECRET ? { pairwiseSecret: env.NATHAN_PAIRWISE_SECRET } : {})
       }),
       ...(env.ENTERPRISE_SSO === "true" ? [sso({
