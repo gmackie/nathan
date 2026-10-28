@@ -4,6 +4,7 @@ import { createAuth } from "./instance";
 import {isRawManagementEndpoint} from "./management-boundary.mjs";
 import { loadSocialCredentials, providerStatus, upsertSocialProvider, setSocialProviderEnabled } from "./provider-store";
 import {bootstrapStatus,completeBootstrap,mayAdminister} from "./bootstrap";
+import {effectiveAdminPolicy,tightenAdminPolicy} from "./security-policy";
 import {handleScim} from "./scim/gateway";
 import {listScimConnections,createScimConnection,setScimConnectionEnabled,rotateScimToken} from "./scim/admin";
 export {NathanScimDirectory} from "./scim/directory";
@@ -84,7 +85,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     if (!await mayAdminister(env,session!.user.id,session!.session.id)) return Response.redirect(issuer.origin+"/security?setup=admin",302);
     return studioPage(session!.user.email);
   }
-  if (["/studio/api/clients", "/studio/api/status", "/studio/api/plugins", "/studio/api/audit", "/studio/api/apps", "/studio/api/sso", "/studio/api/users", "/studio/api/realm", "/studio/api/realm/clients", "/studio/api/providers", "/studio/api/scim/connections", "/studio/api/admins"].includes(url.pathname) && request.method === "GET") {
+  if (["/studio/api/clients", "/studio/api/status", "/studio/api/plugins", "/studio/api/audit", "/studio/api/apps", "/studio/api/sso", "/studio/api/users", "/studio/api/realm", "/studio/api/realm/clients", "/studio/api/providers", "/studio/api/scim/connections", "/studio/api/admins", "/studio/api/security-policy"].includes(url.pathname) && request.method === "GET") {
     const session = await auth.api.getSession({ headers: request.headers });
     if (!await isAdmin(session, env) || !await mayAdminister(env,session!.user.id,session!.session.id)) return reject(403, "Admin enrollment incomplete");
     if (url.pathname === "/studio/api/status") {
@@ -94,6 +95,9 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
         features: {oidcProvider: true, passkeys: true, totp: true, enterpriseSso: env.ENTERPRISE_SSO === "true", password: env.ENABLE_PASSWORD === "true", scimDirectory: Boolean(env.SCIM_DIRECTORY)},
         note: "Authentication assurance level enforcement and guided plugin installation are not yet available"
       }, {headers: {"Cache-Control":"no-store"}});
+    }
+    if (url.pathname === "/studio/api/security-policy") {
+      return Response.json(await effectiveAdminPolicy(env),{headers:{"Cache-Control":"no-store"}});
     }
     if (url.pathname === "/studio/api/admins") {
       return Response.json(await listAdminGrants(env),{headers:{"Cache-Control":"no-store"}});
@@ -232,6 +236,25 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     }
   }
 
+
+
+  if(url.pathname==="/studio/api/security-policy/tighten"&&request.method==="POST"){
+    if(request.headers.get("Origin")!==issuer.origin||
+       request.headers.get("Sec-Fetch-Site")==="cross-site")return reject(403,"Cross-origin request denied");
+    if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")
+      return reject(415,"JSON required");
+    const session=await auth.api.getSession({headers:request.headers});
+    if(!await isAdminPrincipal(session?.user,env) ||
+       !await mayAdminister(env,session!.user.id,session!.session.id))
+      return reject(403,"Admin enrollment and privileged session required");
+    const raw=await request.text();
+    if(raw.length>2048)return reject(413,"Policy input too large");
+    let body:any;try{body=JSON.parse(raw)}catch{return reject(400,"Invalid JSON")}
+    try{
+      const result=await tightenAdminPolicy(env,body,session!.user.id,session!.session.id);
+      return Response.json(result,{headers:{"Cache-Control":"no-store"}});
+    }catch{return reject(409,"Cannot tighten policy until the required authenticators and recent verification are available");}
+  }
 
   if(["/studio/api/admins/grant","/studio/api/admins/revoke"].includes(url.pathname)&&request.method==="POST"){
     if(request.headers.get("Origin")!==issuer.origin ||
