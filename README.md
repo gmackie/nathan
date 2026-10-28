@@ -76,6 +76,21 @@ Nathan never enables wildcard redirect URIs, parent-domain login cookies, or bla
 
 See the [domain-wide SSO guide](docs/domain-wide-sso.md).
 
+## First administrator and ongoing configuration
+
+The initial administrator is tied to the signed-in Cloudflare installer's verified email, **not the first visitor to the new login page**. The wizard verifies that same Better Auth identity and requires authenticator enrollment before unlocking Identity Studio.
+
+After installation, \`https://login.example.com/studio\` uses the same configuration database for:
+- Google/GitHub OAuth client-secret management (encrypted, add/rotate/enable/disable without redeploy).
+- Enterprise OIDC registration with TXT domain-verification challenges.
+- SCIM 2.0 directory connections and bearer-token rotation. Current SCIM mode stages directory users/groups but **does not automatically provision or deprovision Better Auth accounts**.
+- Additional verified administrators, revocation, and session termination.
+- Review and tightening of the effective admin MFA policy.
+
+Personal enrollment and fresh passkey reauthentication are at \`https://login.example.com/security\`. Enterprise SAML GUI onboarding and full SCIM-to-auth lifecycle synchronization remain unverified.
+
+See [Initial admin, OAuth, SCIM and MFA lifecycle](docs/setup-lifecycle.md) for the complete wizard-vs-UI feature matrix and recovery requirements.
+
 ## Run the guided setup
 
 For a developer with a scoped Cloudflare API token, the CLI wizard guides account discovery, DNS, Google/GitHub OAuth, application enrollment and administrator bootstrap:
@@ -149,6 +164,7 @@ The intended stable command will eventually be `npx nathan init` with a browser 
 - [Admin MCP setup and tool contracts](docs/mcp.md)
 - [Threat model and operational assumptions](docs/threat-model.md)
 - [Backups, rotation, and incident response](docs/operations.md)
+- [Initial admin, OAuth, SCIM and MFA lifecycle](docs/setup-lifecycle.md)
 - [Domain-wide SSO for root and approved subdomains](docs/domain-wide-sso.md)
 - [OAuth/OIDC client integration](docs/oidc.md)
 - [Plugin architecture and tiers](docs/plugins.md)
