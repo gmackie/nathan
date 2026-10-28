@@ -120,7 +120,13 @@ export function studioPage(userEmail: string): Response {
   <label>Client name<input id="name" placeholder="My application"></label>
   <label>Exact HTTPS redirect URI<input id="redirect" placeholder="https://app.example.com/oauth/callback"></label><label>Client type<select id="kind"><option value="external">External web app</option><option value="worker">Cloudflare Worker</option><option value="gateway">Nathan gateway</option><option value="mcp">MCP administrator</option></select></label><label><input type="checkbox" id="public-client"> Public OIDC client (PKCE, no secret)</label>
   <button id="create">Register client</button><p id="status" role="alert"></p><pre id="result"></pre>
-  <p><small>Client secrets are shown once. Store them in a secure manager.</small></p><h2>Registered applications</h2><button class="secondary" id="refresh">Refresh registered clients</button><pre id="clients" aria-live="polite"></pre><h3>Disable or resume OIDC client</h3><label>Client ID<input id="manage-client" placeholder="OIDC client_id"></label><button class="secondary" id="disable-client">Disable</button><button class="secondary" id="enable-client">Re-enable</button><p id="manage-status" role="status"></p><h2>Social OAuth providers</h2>
+  <p><small>Client secrets are shown once. Store them in a secure manager.</small></p><h2>Registered applications</h2><button class="secondary" id="refresh">Refresh registered clients</button><pre id="clients" aria-live="polite"></pre><h3>Disable or resume OIDC client</h3><label>Client ID<input id="manage-client" placeholder="OIDC client_id"></label><button class="secondary" id="disable-client">Disable</button><button class="secondary" id="enable-client">Re-enable</button><p id="manage-status" role="status"></p><h2>Authentication and MFA policy</h2>
+  <p>Nathan's effective security posture combines the selected installer profile with any stricter policy configured here. Administrators may increase requirements without redeploying, but weakening a baseline requires a separately reviewed Cloudflare operator change. Federated NIST AAL claims remain unsupported until validated.</p>
+  <button class="secondary" id="security-policy-show">View effective policy</button><pre id="security-policy-current"></pre>
+  <button id="security-require-both">Require passkey + verified TOTP enrollment for administrators</button>
+  <button id="security-require-recent">Require a recent passkey login for privileged administration</button>
+  <p id="security-policy-status" role="status"></p>
+  <h2>Social OAuth providers</h2>
   <p>Add or rotate Google and GitHub credentials without redeploying. Secrets are encrypted inside the customer-owned D1 database and are never returned by the admin API. Keep another tested login method before disabling your last provider.</p>
   <button class="secondary" id="social-list">Refresh OAuth providers</button><pre id="social-list-result"></pre>
   <label>Provider<select id="social-provider"><option value="google">Google</option><option value="github">GitHub</option></select></label>
@@ -219,6 +225,26 @@ export function studioPage(userEmail: string): Response {
     updateSocialGuide();
     document.getElementById('social-copy').onclick=()=>navigator.clipboard.writeText(
       document.getElementById('social-callback').textContent);
+
+    document.getElementById('security-policy-show').onclick=async()=>{
+      const out=document.getElementById('security-policy-current');
+      try{out.textContent=JSON.stringify(await j('/studio/api/security-policy'),null,2)}
+      catch(e){out.textContent=e.message}
+    };
+    async function strengthenAdminPolicy(setting){
+      const out=document.getElementById('security-policy-status');
+      if(!confirm('Increase Nathan admin security to REQUIRE '+setting+'? This cannot be weakened from the UI.'))return;
+      try{
+        const value=await postJson('/studio/api/security-policy/tighten',{
+          setting,confirm:'CONFIRM REQUIRE '+setting
+        });
+        out.textContent=value.note;
+        document.getElementById('security-policy-show').click();
+      }catch(e){out.textContent=e.message}
+    }
+    document.getElementById('security-require-both').onclick=()=>strengthenAdminPolicy('both-authenticators');
+    document.getElementById('security-require-recent').onclick=()=>strengthenAdminPolicy('recent-passkey');
+
     document.getElementById('social-list').onclick=async()=>{
       const out=document.getElementById('social-list-result');
       try{out.textContent=JSON.stringify((await j('/studio/api/providers')).providers,null,2)}
