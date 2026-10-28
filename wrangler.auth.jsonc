@@ -13,6 +13,8 @@
   "vars": {
     "NATHAN_ISSUER": "https://auth.example.com",
     "NATHAN_ADMIN_EMAILS": "",
+    "NATHAN_INSTALL_ACTIVE": "true",
+    "NATHAN_MCP_WRITE_ENABLED": "false",
     "ENABLE_PASSWORD": "false",
     "ENTERPRISE_SSO": "false"
   },
