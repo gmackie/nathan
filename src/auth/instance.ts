@@ -98,7 +98,7 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
         // Public dynamic registration is disabled; only verified and allowlisted
         // Nathan admins may use Better Auth's authenticated client CRUD API.
         clientPrivileges: async ({ user, session }) => {
-          return await isAdminPrincipal(user,env) && await mayAdminister(env,user.id,session?.id);
+          return Boolean(user && await isAdminPrincipal(user,env) && await mayAdminister(env,user.id,session?.id));
         },
         ...(env.NATHAN_PAIRWISE_SECRET ? { pairwiseSecret: env.NATHAN_PAIRWISE_SECRET } : {})
       }),
