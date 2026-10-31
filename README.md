@@ -2,7 +2,9 @@
 
 **Authentication, SSO, and access control for Cloudflare Workers and everything else. Deploy it in your own account.**
 
-Nathan is a developer-first, open-source blueprint built on [Better Auth](https://www.better-auth.com/) and [Cloudflare Workers](https://developers.cloudflare.com/workers/). It aims to make protecting an application a guided workflow: discover your Cloudflare account and hostnames, configure identity providers and MFA, register OIDC clients, create a private application gateway, then deploy and verify.
+Nathan is an independent, developer-first open-source blueprint built on [Better Auth](https://www.better-auth.com/) and [Cloudflare Workers](https://developers.cloudflare.com/workers/). It is not affiliated with or endorsed by Cloudflare. It aims to make protecting an application a guided workflow: discover your Cloudflare account and hostnames, configure identity providers and MFA, register OIDC clients, create a private application gateway, then deploy and verify.
+
+The static Cloudflare Pages marketing site is in [`site/`](site/README.md). Run `npm run build:site` to generate `dist/site/`, or `npm run verify:site` to check the page, public cost report and selectable cost scenarios. This site build is separate from the authentication Workers.
 
 > [!WARNING]
 > **Experimental, not production-ready.** The identity Worker, gateway, CLI, and SDK have initial implementations, but the complete OAuth flow, D1 migration, registration UI, MFA/SSO, and gateway origin isolation have **not yet passed live integration and security tests**. Do not use Nathan as your production IdP until the release gates in [the roadmap](docs/roadmap.md) pass.

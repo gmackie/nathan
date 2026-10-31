@@ -1,0 +1,448 @@
+{
+  "verifiedAt": "2026-10-29T18:01:42.110592+00:00",
+  "productionUrl": "https://nathan-site-1eb.pages.dev",
+  "deploymentId": "e3934cd5-ceb9-4557-a086-cf85154ca6f4",
+  "immutableDeployment": {
+    "url": "https://e3934cd5.nathan-site-1eb.pages.dev",
+    "status": 200,
+    "sha256": "d3a4d2b96896bfbd924be2d25a865222afdf4aee48c1764b7565f27b65193041",
+    "matched": true,
+    "transport": "curl; HTTPS certificate verification passed"
+  },
+  "publicFiles": [
+    {
+      "path": "/assets/favicon.svg",
+      "url": "https://nathan-site-1eb.pages.dev/assets/favicon.svg",
+      "status": 200,
+      "sha256": "300df48d35c6be31604c11a65d5d8fdb029f7d23608cb6158475317a286f3d78",
+      "expectedSha256": "300df48d35c6be31604c11a65d5d8fdb029f7d23608cb6158475317a286f3d78",
+      "matched": true,
+      "contentType": "image/svg+xml",
+      "elapsedSeconds": 0.352
+    },
+    {
+      "path": "/assets/naming-origin.webp",
+      "url": "https://nathan-site-1eb.pages.dev/assets/naming-origin.webp",
+      "status": 200,
+      "sha256": "02b1ad02e895d92e53e98dc454a4dadf81f7f851ac726fff20b327de66054d70",
+      "expectedSha256": "02b1ad02e895d92e53e98dc454a4dadf81f7f851ac726fff20b327de66054d70",
+      "matched": true,
+      "contentType": "image/webp",
+      "elapsedSeconds": 0.404
+    },
+    {
+      "path": "/reports/baseline-costs.csv",
+      "url": "https://nathan-site-1eb.pages.dev/reports/baseline-costs.csv",
+      "status": 200,
+      "sha256": "8d67c1a73e10446357e9318bf3598ddd747270d7e9c07e3fd2f7f552c560fe53",
+      "expectedSha256": "8d67c1a73e10446357e9318bf3598ddd747270d7e9c07e3fd2f7f552c560fe53",
+      "matched": true,
+      "contentType": "text/csv; charset=utf-8",
+      "elapsedSeconds": 0.352
+    },
+    {
+      "path": "/reports/calculator.mjs",
+      "url": "https://nathan-site-1eb.pages.dev/reports/calculator.mjs",
+      "status": 200,
+      "sha256": "849e3fc76cf2d4b32734033eb73f0bb4828686e2db169c42f2e144603142e9d3",
+      "expectedSha256": "849e3fc76cf2d4b32734033eb73f0bb4828686e2db169c42f2e144603142e9d3",
+      "matched": true,
+      "contentType": "application/javascript",
+      "elapsedSeconds": 0.352
+    },
+    {
+      "path": "/reports/cost-at-scale.png",
+      "url": "https://nathan-site-1eb.pages.dev/reports/cost-at-scale.png",
+      "status": 200,
+      "sha256": "d33b9e136b2bcd58089465d22042d208eca71ac8155776b7c8303e5280e282a0",
+      "expectedSha256": "d33b9e136b2bcd58089465d22042d208eca71ac8155776b7c8303e5280e282a0",
+      "matched": true,
+      "contentType": "image/png",
+      "elapsedSeconds": 0.44
+    },
+    {
+      "path": "/reports/cost-at-scale.svg",
+      "url": "https://nathan-site-1eb.pages.dev/reports/cost-at-scale.svg",
+      "status": 200,
+      "sha256": "c31677c73101670dfb3d1d2f09085788c68e84ddabd8d02034c4bd0beb59e29c",
+      "expectedSha256": "c31677c73101670dfb3d1d2f09085788c68e84ddabd8d02034c4bd0beb59e29c",
+      "matched": true,
+      "contentType": "image/svg+xml",
+      "elapsedSeconds": 0.353
+    },
+    {
+      "path": "/reports/cost_model.py",
+      "url": "https://nathan-site-1eb.pages.dev/reports/cost_model.py",
+      "status": 200,
+      "sha256": "1447320421a340202d896c643b592c43785e2e8c825afac4285ac16a75722bb3",
+      "expectedSha256": "1447320421a340202d896c643b592c43785e2e8c825afac4285ac16a75722bb3",
+      "matched": true,
+      "contentType": "application/octet-stream",
+      "elapsedSeconds": 0.352
+    },
+    {
+      "path": "/reports/costs.html",
+      "url": "https://nathan-site-1eb.pages.dev/reports/costs",
+      "status": 200,
+      "sha256": "84c694f70acb039f78c8bf49b74a204274649e99ba23988192c7e8971f90ddea",
+      "expectedSha256": "84c694f70acb039f78c8bf49b74a204274649e99ba23988192c7e8971f90ddea",
+      "matched": true,
+      "contentType": "text/html; charset=utf-8",
+      "elapsedSeconds": 0.608
+    },
+    {
+      "path": "/reports/crud-cost-composition.png",
+      "url": "https://nathan-site-1eb.pages.dev/reports/crud-cost-composition.png",
+      "status": 200,
+      "sha256": "2a34b72770479df0ec89532dc3c44f3d523303e889a2d2df748b3627e8f5e48e",
+      "expectedSha256": "2a34b72770479df0ec89532dc3c44f3d523303e889a2d2df748b3627e8f5e48e",
+      "matched": true,
+      "contentType": "image/png",
+      "elapsedSeconds": 0.278
+    },
+    {
+      "path": "/reports/crud-cost-composition.svg",
+      "url": "https://nathan-site-1eb.pages.dev/reports/crud-cost-composition.svg",
+      "status": 200,
+      "sha256": "a1b926898e9db7be63ddd06f750f3a10462ebe77572d7b059892c294d8b860e1",
+      "expectedSha256": "a1b926898e9db7be63ddd06f750f3a10462ebe77572d7b059892c294d8b860e1",
+      "matched": true,
+      "contentType": "image/svg+xml",
+      "elapsedSeconds": 0.204
+    },
+    {
+      "path": "/reports/crud-sensitivity-costs.csv",
+      "url": "https://nathan-site-1eb.pages.dev/reports/crud-sensitivity-costs.csv",
+      "status": 200,
+      "sha256": "d4599d6e026c83b8e91e4b4332de5bf39b6e81d27d60399ce46b5b17385e9ce7",
+      "expectedSha256": "d4599d6e026c83b8e91e4b4332de5bf39b6e81d27d60399ce46b5b17385e9ce7",
+      "matched": true,
+      "contentType": "text/csv; charset=utf-8",
+      "elapsedSeconds": 0.188
+    },
+    {
+      "path": "/reports/crud-total-cost-at-scale.png",
+      "url": "https://nathan-site-1eb.pages.dev/reports/crud-total-cost-at-scale.png",
+      "status": 200,
+      "sha256": "34a95fb2496d43138453f08d5f48bac92040c4cbb73a86637392d01c7ab4976f",
+      "expectedSha256": "34a95fb2496d43138453f08d5f48bac92040c4cbb73a86637392d01c7ab4976f",
+      "matched": true,
+      "contentType": "image/png",
+      "elapsedSeconds": 0.292
+    },
+    {
+      "path": "/reports/crud-total-cost-at-scale.svg",
+      "url": "https://nathan-site-1eb.pages.dev/reports/crud-total-cost-at-scale.svg",
+      "status": 200,
+      "sha256": "54a8530bd7797a6b364da52207906c1ef412547064c821c2601edd2f5bf32154",
+      "expectedSha256": "54a8530bd7797a6b364da52207906c1ef412547064c821c2601edd2f5bf32154",
+      "matched": true,
+      "contentType": "image/svg+xml",
+      "elapsedSeconds": 0.197
+    },
+    {
+      "path": "/reports/crud-total-costs.csv",
+      "url": "https://nathan-site-1eb.pages.dev/reports/crud-total-costs.csv",
+      "status": 200,
+      "sha256": "b3a16c258de5c03d74759403e47b4840a3826761dcb5b3442cb8e55a3a9aa0a3",
+      "expectedSha256": "b3a16c258de5c03d74759403e47b4840a3826761dcb5b3442cb8e55a3a9aa0a3",
+      "matched": true,
+      "contentType": "text/csv; charset=utf-8",
+      "elapsedSeconds": 0.238
+    },
+    {
+      "path": "/reports/fetch_sources.py",
+      "url": "https://nathan-site-1eb.pages.dev/reports/fetch_sources.py",
+      "status": 200,
+      "sha256": "505b4cb4ab8c7116ba9084a5b4a692fa1a8059c7357ec0557b29b7f5a7541185",
+      "expectedSha256": "505b4cb4ab8c7116ba9084a5b4a692fa1a8059c7357ec0557b29b7f5a7541185",
+      "matched": true,
+      "contentType": "application/octet-stream",
+      "elapsedSeconds": 0.201
+    },
+    {
+      "path": "/reports/make_charts.py",
+      "url": "https://nathan-site-1eb.pages.dev/reports/make_charts.py",
+      "status": 200,
+      "sha256": "79c8eecdf95eb5b1fc5be1b003f14928a175b13c1a6d2fac19037905ccc6e93c",
+      "expectedSha256": "79c8eecdf95eb5b1fc5be1b003f14928a175b13c1a6d2fac19037905ccc6e93c",
+      "matched": true,
+      "contentType": "application/octet-stream",
+      "elapsedSeconds": 0.336
+    },
+    {
+      "path": "/reports/model-inputs.json",
+      "url": "https://nathan-site-1eb.pages.dev/reports/model-inputs.json",
+      "status": 200,
+      "sha256": "7642cfd75504fcad12ba5d991d8c3f2edaf4ef9e55159ba6e0f613d43f948491",
+      "expectedSha256": "7642cfd75504fcad12ba5d991d8c3f2edaf4ef9e55159ba6e0f613d43f948491",
+      "matched": true,
+      "contentType": "application/json",
+      "elapsedSeconds": 0.327
+    },
+    {
+      "path": "/reports/model-results.json",
+      "url": "https://nathan-site-1eb.pages.dev/reports/model-results.json",
+      "status": 200,
+      "sha256": "cee05de7e5f49d7ffe93ef3831af715ceb65c2ba5f13dd744c6a2e5fa826f341",
+      "expectedSha256": "cee05de7e5f49d7ffe93ef3831af715ceb65c2ba5f13dd744c6a2e5fa826f341",
+      "matched": true,
+      "contentType": "application/json",
+      "elapsedSeconds": 0.379
+    },
+    {
+      "path": "/reports/one-million-breakdown.png",
+      "url": "https://nathan-site-1eb.pages.dev/reports/one-million-breakdown.png",
+      "status": 200,
+      "sha256": "804f750333827a927980fb787ee6d5f7e18b493d9c83d295658c517c60e43200",
+      "expectedSha256": "804f750333827a927980fb787ee6d5f7e18b493d9c83d295658c517c60e43200",
+      "matched": true,
+      "contentType": "image/png",
+      "elapsedSeconds": 0.468
+    },
+    {
+      "path": "/reports/one-million-breakdown.svg",
+      "url": "https://nathan-site-1eb.pages.dev/reports/one-million-breakdown.svg",
+      "status": 200,
+      "sha256": "fe9da75221d913e94e27e14ac8a794555162abc70a6f32a4a3edc2e178436c74",
+      "expectedSha256": "fe9da75221d913e94e27e14ac8a794555162abc70a6f32a4a3edc2e178436c74",
+      "matched": true,
+      "contentType": "image/svg+xml",
+      "elapsedSeconds": 0.369
+    },
+    {
+      "path": "/reports/report-static.html",
+      "url": "https://nathan-site-1eb.pages.dev/reports/report-static",
+      "status": 200,
+      "sha256": "84c694f70acb039f78c8bf49b74a204274649e99ba23988192c7e8971f90ddea",
+      "expectedSha256": "84c694f70acb039f78c8bf49b74a204274649e99ba23988192c7e8971f90ddea",
+      "matched": true,
+      "contentType": "text/html; charset=utf-8",
+      "elapsedSeconds": 0.766
+    },
+    {
+      "path": "/reports/report.html",
+      "url": "https://nathan-site-1eb.pages.dev/reports/report",
+      "status": 200,
+      "sha256": "9fb8e45992a33dd2584a8b543c16aa90f08efad0598df9313a0537a5d5f1a712",
+      "expectedSha256": "9fb8e45992a33dd2584a8b543c16aa90f08efad0598df9313a0537a5d5f1a712",
+      "matched": true,
+      "contentType": "text/html; charset=utf-8",
+      "elapsedSeconds": 1.128
+    },
+    {
+      "path": "/reports/sensitivity-costs.csv",
+      "url": "https://nathan-site-1eb.pages.dev/reports/sensitivity-costs.csv",
+      "status": 200,
+      "sha256": "1ead05b6bb6bb95c335202b881055e01154e7c880365eb458517fa817b3f3df3",
+      "expectedSha256": "1ead05b6bb6bb95c335202b881055e01154e7c880365eb458517fa817b3f3df3",
+      "matched": true,
+      "contentType": "text/csv; charset=utf-8",
+      "elapsedSeconds": 0.327
+    },
+    {
+      "path": "/reports/source-ledger.json",
+      "url": "https://nathan-site-1eb.pages.dev/reports/source-ledger.json",
+      "status": 200,
+      "sha256": "f1cc58863ac6b2fdbeabf84876747145ac5b3ab2cf3da7af7cca10776453d81d",
+      "expectedSha256": "f1cc58863ac6b2fdbeabf84876747145ac5b3ab2cf3da7af7cca10776453d81d",
+      "matched": true,
+      "contentType": "application/json",
+      "elapsedSeconds": 0.237
+    },
+    {
+      "path": "/reports/sources/clerk-pricing.txt",
+      "url": "https://nathan-site-1eb.pages.dev/reports/sources/clerk-pricing.txt",
+      "status": 200,
+      "sha256": "8733483dd298accd8270126a605990ac44c8f7c0ee741874d2e6dc968d82ceb4",
+      "expectedSha256": "8733483dd298accd8270126a605990ac44c8f7c0ee741874d2e6dc968d82ceb4",
+      "matched": true,
+      "contentType": "text/plain; charset=utf-8",
+      "elapsedSeconds": 0.21
+    },
+    {
+      "path": "/reports/sources/d1-limits.txt",
+      "url": "https://nathan-site-1eb.pages.dev/reports/sources/d1-limits.txt",
+      "status": 200,
+      "sha256": "ac57223b0970f63e073147612696552e76ba5138cc24d53e013050956f574bc1",
+      "expectedSha256": "ac57223b0970f63e073147612696552e76ba5138cc24d53e013050956f574bc1",
+      "matched": true,
+      "contentType": "text/plain; charset=utf-8",
+      "elapsedSeconds": 0.2
+    },
+    {
+      "path": "/reports/sources/d1-pricing.txt",
+      "url": "https://nathan-site-1eb.pages.dev/reports/sources/d1-pricing.txt",
+      "status": 200,
+      "sha256": "ab06e38349130d15e25109fe9344189639a2801206a641d76d576daa9d04337b",
+      "expectedSha256": "ab06e38349130d15e25109fe9344189639a2801206a641d76d576daa9d04337b",
+      "matched": true,
+      "contentType": "text/plain; charset=utf-8",
+      "elapsedSeconds": 0.19
+    },
+    {
+      "path": "/reports/sources/d1-time-travel.txt",
+      "url": "https://nathan-site-1eb.pages.dev/reports/sources/d1-time-travel.txt",
+      "status": 200,
+      "sha256": "b07c5717edcf6d68943b1ee7f218ad28460598c18e47065010021b7efd34853d",
+      "expectedSha256": "b07c5717edcf6d68943b1ee7f218ad28460598c18e47065010021b7efd34853d",
+      "matched": true,
+      "contentType": "text/plain; charset=utf-8",
+      "elapsedSeconds": 0.208
+    },
+    {
+      "path": "/reports/sources/observability-pricing.txt",
+      "url": "https://nathan-site-1eb.pages.dev/reports/sources/observability-pricing.txt",
+      "status": 200,
+      "sha256": "484f3a9886386fa601f8586ceaf215ef46305d1422df36443e965f8c7033aead",
+      "expectedSha256": "484f3a9886386fa601f8586ceaf215ef46305d1422df36443e965f8c7033aead",
+      "matched": true,
+      "contentType": "text/plain; charset=utf-8",
+      "elapsedSeconds": 0.332
+    },
+    {
+      "path": "/reports/sources/r2-pricing.txt",
+      "url": "https://nathan-site-1eb.pages.dev/reports/sources/r2-pricing.txt",
+      "status": 200,
+      "sha256": "1fe9b5c04a76a2745f118420a0b5b84a705fe30dbf5b3b0da152dd8e7c3df1b7",
+      "expectedSha256": "1fe9b5c04a76a2745f118420a0b5b84a705fe30dbf5b3b0da152dd8e7c3df1b7",
+      "matched": true,
+      "contentType": "text/plain; charset=utf-8",
+      "elapsedSeconds": 0.322
+    },
+    {
+      "path": "/reports/sources/resend-pricing.txt",
+      "url": "https://nathan-site-1eb.pages.dev/reports/sources/resend-pricing.txt",
+      "status": 200,
+      "sha256": "47af4d1c87605df4f26b4a27e00ecb86699fb150e84c68a7d920103349aa7179",
+      "expectedSha256": "47af4d1c87605df4f26b4a27e00ecb86699fb150e84c68a7d920103349aa7179",
+      "matched": true,
+      "contentType": "text/plain; charset=utf-8",
+      "elapsedSeconds": 0.385
+    },
+    {
+      "path": "/reports/sources/service-bindings.txt",
+      "url": "https://nathan-site-1eb.pages.dev/reports/sources/service-bindings.txt",
+      "status": 200,
+      "sha256": "e25bdabe36e7110a2ae2d51cdcd31f5073ba03df7b5d5ef4ee4e96e90fc13f5d",
+      "expectedSha256": "e25bdabe36e7110a2ae2d51cdcd31f5073ba03df7b5d5ef4ee4e96e90fc13f5d",
+      "matched": true,
+      "contentType": "text/plain; charset=utf-8",
+      "elapsedSeconds": 0.349
+    },
+    {
+      "path": "/reports/sources/turnstile-pricing.txt",
+      "url": "https://nathan-site-1eb.pages.dev/reports/sources/turnstile-pricing.txt",
+      "status": 200,
+      "sha256": "87eaf9ba750c372085519a19b7a541c29632c3e410c5eefd9f1888d9ed71a758",
+      "expectedSha256": "87eaf9ba750c372085519a19b7a541c29632c3e410c5eefd9f1888d9ed71a758",
+      "matched": true,
+      "contentType": "text/plain; charset=utf-8",
+      "elapsedSeconds": 0.472
+    },
+    {
+      "path": "/reports/sources/workers-logs.txt",
+      "url": "https://nathan-site-1eb.pages.dev/reports/sources/workers-logs.txt",
+      "status": 200,
+      "sha256": "7902a6e63cc96baaa3b89fbdbbb960997bb78d3629de9248a29e87376e5b85b1",
+      "expectedSha256": "7902a6e63cc96baaa3b89fbdbbb960997bb78d3629de9248a29e87376e5b85b1",
+      "matched": true,
+      "contentType": "text/plain; charset=utf-8",
+      "elapsedSeconds": 0.436
+    },
+    {
+      "path": "/reports/sources/workers-pricing.txt",
+      "url": "https://nathan-site-1eb.pages.dev/reports/sources/workers-pricing.txt",
+      "status": 200,
+      "sha256": "116d9f42dbeda701749b04fea2ef2ed95c9733529d747c1e4b140b238ca4f2b3",
+      "expectedSha256": "116d9f42dbeda701749b04fea2ef2ed95c9733529d747c1e4b140b238ca4f2b3",
+      "matched": true,
+      "contentType": "text/plain; charset=utf-8",
+      "elapsedSeconds": 0.331
+    },
+    {
+      "path": "/reports/sources/workers-runtime.txt",
+      "url": "https://nathan-site-1eb.pages.dev/reports/sources/workers-runtime.txt",
+      "status": 200,
+      "sha256": "700b71453f2033883495286fc3c3638b294c5bf4621b86a835b50e1d283703cb",
+      "expectedSha256": "700b71453f2033883495286fc3c3638b294c5bf4621b86a835b50e1d283703cb",
+      "matched": true,
+      "contentType": "text/plain; charset=utf-8",
+      "elapsedSeconds": 0.318
+    },
+    {
+      "path": "/reports/verify_model.mjs",
+      "url": "https://nathan-site-1eb.pages.dev/reports/verify_model.mjs",
+      "status": 200,
+      "sha256": "1cc9935a9d01683dd8b224d1394b397418282a2b58b17b1f17c88637784e90bb",
+      "expectedSha256": "1cc9935a9d01683dd8b224d1394b397418282a2b58b17b1f17c88637784e90bb",
+      "matched": true,
+      "contentType": "application/javascript",
+      "elapsedSeconds": 0.321
+    },
+    {
+      "path": "/robots.txt",
+      "url": "https://nathan-site-1eb.pages.dev/robots.txt",
+      "status": 200,
+      "sha256": "16ceb5ee3e0dc13aa9adf31a3ebbe45a1d965b8c2b9f72eaf84e5911e140ed95",
+      "expectedSha256": "16ceb5ee3e0dc13aa9adf31a3ebbe45a1d965b8c2b9f72eaf84e5911e140ed95",
+      "matched": true,
+      "contentType": "text/plain; charset=utf-8",
+      "elapsedSeconds": 0.443
+    },
+    {
+      "path": "/",
+      "url": "https://nathan-site-1eb.pages.dev/",
+      "status": 200,
+      "sha256": "d3a4d2b96896bfbd924be2d25a865222afdf4aee48c1764b7565f27b65193041",
+      "expectedSha256": "d3a4d2b96896bfbd924be2d25a865222afdf4aee48c1764b7565f27b65193041",
+      "matched": true,
+      "contentType": "text/html; charset=utf-8",
+      "elapsedSeconds": 0.544,
+      "headers": {
+        "Date": "Thu, 29 Oct 2026 18:00:10 GMT",
+        "Content-Type": "text/html; charset=utf-8",
+        "Content-Length": "190367",
+        "Connection": "close",
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "public, max-age=0, must-revalidate",
+        "ETag": "\"78b3c6b9b16e580384b9deb4eee24a62\"",
+        "content-security-policy": "default-src 'none'; script-src 'self' 'sha256-FB4l0wLzSROreS7ZG4GG99+0RLIzRZ6SUqSHqyiLdVs=' 'sha256-tYPseGe6cWwXAt8z7XuTRbDTSyCEcrwIoCfPyjMT4c4='; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+        "permissions-policy": "camera=(), microphone=(), geolocation=()",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY",
+        "Report-To": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=wd2nz%2F%2FFm5%2BnFOpNYtZQSJTUlm3fYC9VQtkckf2U32fJ%2FILT69onljUf6Aqogk3Pv8%2Ff7N%2FeKa6FszWB1ZLZrRzHbRKpIL462vEGc7aNfzgKvpAprb52Nz35uEt71rqI8oECkRXU%2BMxoOV%2F%2B\"}]}",
+        "Nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.0,\"max_age\":604800}",
+        "Server": "cloudflare",
+        "CF-RAY": "a52414080fd3bfaa-ATL",
+        "alt-svc": "h3=\":443\"; ma=86400"
+      }
+    },
+    {
+      "path": "/build-manifest.json",
+      "url": "https://nathan-site-1eb.pages.dev/build-manifest.json",
+      "status": 200,
+      "sha256": "e65fb75dc43b8a9e530ec25a0e2a0690d69b63bc89777a6e1156a566294cff84",
+      "expectedSha256": "e65fb75dc43b8a9e530ec25a0e2a0690d69b63bc89777a6e1156a566294cff84",
+      "matched": true,
+      "contentType": "application/json",
+      "elapsedSeconds": 0.426
+    }
+  ],
+  "securityHeaders": {
+    "content-security-policy": true,
+    "x-content-type-options": true,
+    "x-frame-options": true,
+    "referrer-policy": true,
+    "permissions-policy": true
+  },
+  "missingPage": {
+    "status": 404,
+    "sha256": "775b89de2605500f6a93454b33897129692d51a83bd3c426296156ff2c5c96ae",
+    "matched": true,
+    "transport": "curl; HTTPS certificate verification passed"
+  },
+  "productionPassed": true,
+  "notes": "Initial alias TLS checks failed during first publication; final production/alias HTTPS checks succeed. Python default-UA checks differed from curl; final curl responses were checked against the exact authored content."
+}

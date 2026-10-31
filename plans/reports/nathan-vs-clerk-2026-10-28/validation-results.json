@@ -1,0 +1,65 @@
+{
+  "verifiedAt": "2026-10-29T00:41:15.104627+00:00",
+  "deliveryIssue": "NATH-3",
+  "pythonAndJavascriptModelAgreementCases": 101,
+  "modelCaseBreakdown": {
+    "identityOnly": 57,
+    "crudAndSharedAccount": 44
+  },
+  "independentArithmeticChecks": [
+    "Clerk tier boundaries",
+    "Cloudflare published $8 and $45.40 examples",
+    "Resend email overage buckets",
+    "one-million identity breakdown",
+    "one-million CRUD request/CPU/row/storage/log totals",
+    "one account minimum and allowances",
+    "service-binding request counted once",
+    "zero-app reconciliation to prior identity results",
+    "common-cost allocation leaves cash savings unchanged"
+  ],
+  "sourceSnapshotsVerifiedBySha256": 12,
+  "htmlChecks": [
+    "balanced tags",
+    "unique IDs",
+    "working fragment links",
+    "no external runtime assets",
+    "critical amounts and shares present",
+    "clean whitespace",
+    "static edition has no scripts/form controls and expands disclosures"
+  ],
+  "visualChecks": [
+    "4 PNG figures and matching SVGs generated from saved results",
+    "new total-cost and composition PNGs inspected; mathtext formatting corrected",
+    "728px dark complete interactive report",
+    "390px light complete interactive report",
+    "390px dark expanded calculator",
+    "728px light static report",
+    "728px dark CRUD section with animations disabled; continuous chart lines visible"
+  ],
+  "calculatorBrowserChecks": [
+    "5 CRUD presets",
+    "9 identity-only presets",
+    "auth cost attribution and percentages",
+    "current/December logging prices",
+    "51,000-user totals",
+    "fractional app activity",
+    "independent app-active and MRU populations",
+    "common costs",
+    "incremental labor",
+    "adverse refresh workload",
+    "storage beyond one-account limit",
+    "zero users",
+    "scope switching prevents gateway request duplication",
+    "invalid inputs rejected",
+    "no page overflow at 390px"
+  ],
+  "t3ReportAttachmentId": "d94d4000-d23f-46ad-9109-246d1b451991-03d73ffa-7cec-4b40-9916-f17fd4cf677c-html",
+  "limitations": [
+    "CRUD workload is illustrative, not a measured typical-usage average",
+    "No live Nathan usage invoice or consumption benchmark",
+    "No 1M+ capacity or throughput testing",
+    "No runtime source changes, vendor purchases or deployments",
+    "No public publication",
+    "Auth percentages use app-first incremental attribution, not an independently billed cost center"
+  ]
+}

@@ -8,6 +8,8 @@
     "node": ">=22.13.0"
   },
   "scripts": {
+    "build:site": "node scripts/build-site.mjs",
+    "verify:site": "node scripts/verify-site.mjs",
     "init": "node scripts/nathan.mjs init",
     "plan": "node scripts/nathan.mjs plan",
     "doctor": "node scripts/nathan.mjs doctor",

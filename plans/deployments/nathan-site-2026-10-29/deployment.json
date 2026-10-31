@@ -1,0 +1,33 @@
+{
+  "issue": "NATH-5",
+  "implementationIssue": "NATH-4",
+  "repository": "https://github.com/gmackie/nathan",
+  "provider": "Cloudflare Pages",
+  "accountId": "c07a7e704db1808e1fff91bed2b1cd49",
+  "project": "nathan-site",
+  "productionBranch": "main",
+  "environment": "production",
+  "deploymentId": "e3934cd5-ceb9-4557-a086-cf85154ca6f4",
+  "productionUrl": "https://nathan-site-1eb.pages.dev",
+  "deploymentUrl": "https://e3934cd5.nathan-site-1eb.pages.dev",
+  "dashboardUrl": "https://dash.cloudflare.com/c07a7e704db1808e1fff91bed2b1cd49/pages/view/nathan-site/e3934cd5-ceb9-4557-a086-cf85154ca6f4",
+  "gitBaseRevision": "90ebc43f6d19cf69049646a19a6f96f74de6975a",
+  "gitDirty": true,
+  "artifactIdentityNote": "Direct upload of the approved uncommitted static build; the Git revision is the checkout base, not an assertion that the artifact is committed there.",
+  "indexSha256": "d3a4d2b96896bfbd924be2d25a865222afdf4aee48c1764b7565f27b65193041",
+  "manifestSha256": "e65fb75dc43b8a9e530ec25a0e2a0690d69b63bc89777a6e1156a566294cff84",
+  "archiveSha256": "b304533d1c5fad1d127a181fa4a92febc2a9a9087d4f7e4111afea427a522f91",
+  "verification": {
+    "at": "2026-10-29T18:01:42.110592+00:00",
+    "publicFiles": 40,
+    "securityHeaders": true,
+    "authored404": true,
+    "deploymentAlias": true,
+    "passed": true
+  },
+  "forgeGraph": {
+    "registeredApp": false,
+    "observation": "forge app show nathan returned App not found (404). No ForgeGraph production receipt or automatic status synchronization was established.",
+    "issueClosure": "Keep NATH-5 open until the external Pages deployment has the required ForgeGraph delivery evidence."
+  }
+}

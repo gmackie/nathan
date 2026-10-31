@@ -1,0 +1,249 @@
+# Resend Pricing
+
+Start for free and scale up to millions of emails with flexible plans.
+
+## Transactional Email
+
+| Plan       | Price     | Emails/mo | Overage (per 1,000) |
+| ---------- | --------- | --------- | ------------------- |
+| Free       | $0/mo     | 3,000     | —                   |
+| Pro        | $20/mo    | 50,000    | $0.90               |
+| Pro        | $35/mo    | 100,000   | $0.90               |
+| Scale      | $90/mo    | 100,000   | $0.90               |
+| Scale      | $160/mo   | 200,000   | $0.80               |
+| Scale      | $350/mo   | 500,000   | $0.70               |
+| Scale      | $650/mo   | 1,000,000 | $0.65               |
+| Scale      | $825/mo   | 1,500,000 | $0.52               |
+| Scale      | $1,150/mo | 2,500,000 | $0.46               |
+| Enterprise | Custom    | Custom    | Custom              |
+
+The overage rate applies only to emails sent beyond the included volume. The Free plan is limited to 100 emails per day.
+
+## High-Volume Examples
+
+To illustrate costs at scale, here are examples at common volume tiers:
+
+- **500K emails/mo**: Scale plan at $350/mo — effective rate of $0.70 per 1,000 emails.
+- **1M emails/mo**: Scale plan at $650/mo — effective rate of $0.65 per 1,000 emails.
+- **2.5M emails/mo**: Scale plan at $1,150/mo — effective rate of $0.46 per 1,000 emails.
+
+## Marketing Email
+
+| Plan          | Price   | Contacts/mo |
+| ------------- | ------- | ----------- |
+| Free          | $0/mo   | 1,000       |
+| Pro marketing | $40/mo  | 5,000       |
+| Pro marketing | $80/mo  | 10,000      |
+| Pro marketing | $120/mo | 15,000      |
+| Pro marketing | $180/mo | 25,000      |
+| Pro marketing | $250/mo | 50,000      |
+| Pro marketing | $450/mo | 100,000     |
+| Pro marketing | $650/mo | 150,000     |
+| Enterprise    | Custom  | Custom      |
+
+Marketing plans are not limited by the number of emails sent — only by the number of contacts. Broadcasts can only be sent to existing contacts.
+
+## Automations (Pay-as-you-go)
+
+All paid plans include 10,000 Automation Runs per month. Beyond that, pay-as-you-go billing applies at $0.0015 per run. The Free plan includes 10,000 Automation Runs per month with no overage.
+
+## Inboxes (Pay-as-you-go)
+
+Every plan includes 3 inboxes. Paid plans can enable pay-as-you-go to add more at $1 per inbox per month; the Free plan stops at 3. Inboxes do not come with a separate email allowance: every email sent or received through an inbox counts towards the plan's transactional email quota.
+
+## Add-ons
+
+- **Domains - $20 / mo**: Adds 100 domains on top of what your plan includes. Available on Pro and Scale, and can be added or removed at any time from the dashboard. On Enterprise, domain limits are set by contract.
+- **Dedicated IPs — $30 / mo**: Available on the Scale plan to customers exceeding 3,000 emails sent per day. Includes automatic warmup, monitoring, and autoscaling.
+- **Single Sign-On — $150 / mo**: Available as an add-on on Scale plans, and included on Enterprise plans. Lets your team sign in to Resend with your identity provider.
+
+## Enterprise
+
+For teams sending 1M+ emails/month, Resend offers custom Enterprise plans with volume-based pricing, dedicated IPs, priority support, SLA guarantees, flexible data retention, and SSO. Enterprise customers commonly send 1M-500M+ emails per month.
+
+Contact sales at [resend.com/enterprise](https://resend.com/enterprise).
+
+## Billing
+
+Self-serve plans are billed monthly only. There are no annual plans and no discount for paying annually. For an annual commitment at high volume, contact sales at [resend.com/enterprise](https://resend.com/enterprise).
+
+## Feature Highlights
+
+### Transactional plans
+
+- **Free**: 100 emails a day, 3 domains, 3 inboxes, Ticket support, 10,000 automation runs, 30-day data retention. Not included: Single Sign-On.
+- **Pro**: All Free features, 10 domains, No daily email limit, 5 webhook endpoints, 100 AI credits / mo, Additional domains with add-on. Not included: Single Sign-On.
+- **Scale**: All Pro features, 1,000 domains, Dedicated Slack channel, 10 webhook endpoints, 500 AI credits / mo, SSO with add-on, Dedicated IP with add-on.
+- **Enterprise**: All Scale features, 99.99% uptime SLA, Personalized migration support, Guaranteed response times, Dedicated CSM, Single Sign-On, Custom usage plan, Enterprise rate limits.
+
+### Marketing plans
+
+- **Free**: Ticket support, 10,000 automation runs, 3 segments, 3 domains, 5 AI credits / mo. Not included: Marketing analytics, Dedicated IPs, Single Sign-On.
+- **Pro marketing**: Slack & ticket support, 10,000 automation runs, Unlimited segments, Unlimited domains, 100 AI credits / mo, Marketing analytics. Not included: Dedicated IP with add-on, Single Sign-On.
+- **Enterprise**: Priority support, Flexible automation runs, Unlimited segments, Unlimited domains, Flexible AI credits, Marketing analytics, Dedicated IPs included, Single Sign-On included.
+
+All plans include: RESTful API, SMTP relay, official SDKs, inbound emails, batch sending, open & link tracking, React Email, multi-region, DKIM/SPF/DMARC, webhooks, SOC 2 Type II, GDPR compliance, MFA, and API key permissions.
+
+## Plan Comparison
+
+What each plan includes, as shown on the pricing page. "Yes" means the feature is included, "No" means it isn't available on that plan.
+
+### Sending & receiving
+
+| Feature         | Description                                                                             | Free | Pro      | Scale    | Enterprise |
+| --------------- | --------------------------------------------------------------------------------------- | ---- | -------- | -------- | ---------- |
+| Daily limit     | Maximum emails sent per day.                                                            | 100  | No limit | No limit | No limit   |
+| Inbound emails  | Receive emails using webhooks. Parse content and attachments. Reply to your users.      | Yes  | Yes      | Yes      | Yes        |
+| RESTful API     | Well-documented RESTful API for integrating email into your app.                        | Yes  | Yes      | Yes      | Yes        |
+| SMTP relay      | Send emails at scale through a reliable SMTP server.                                    | Yes  | Yes      | Yes      | Yes        |
+| Official SDKs   | Integrate using your favorite programming language with official open source libraries. | Yes  | Yes      | Yes      | Yes        |
+| Schedule emails | Send emails at a specific time using natural language.                                  | Yes  | Yes      | Yes      | Yes        |
+| Batch sending   | Capability to send emails in bulk.                                                      | Yes  | Yes      | Yes      | Yes        |
+| Open tracking   | Track when emails are opened.                                                           | Yes  | Yes      | Yes      | Yes        |
+| Link tracking   | Monitor clicks on email links.                                                          | Yes  | Yes      | Yes      | Yes        |
+| React Email     | Send emails with React, TypeScript, and Tailwind.                                       | Yes  | Yes      | Yes      | Yes        |
+
+### Inboxes
+
+| Feature            | Description                                                                                           | Free                | Pro                 | Scale               | Enterprise          |
+| ------------------ | ----------------------------------------------------------------------------------------------------- | ------------------- | ------------------- | ------------------- | ------------------- |
+| Inboxes            | Create inboxes for your team and your agents. Send, receive, and reply from each one.                 | 3                   | 3                   | 3                   | Flexible            |
+| Additional inboxes | Add more inboxes beyond what your plan includes, billed at $1 per inbox per month with pay-as-you-go. | No                  | $1 / inbox          | $1 / inbox          | Flexible            |
+| Inbox emails       | Inbox emails use your transactional quota.                                                            | Transactional quota | Transactional quota | Transactional quota | Transactional quota |
+| Threads            | Conversations are grouped into threads with replies, forwards, and labels.                            | Yes                 | Yes                 | Yes                 | Yes                 |
+| Agent access       | Connect your own agents to inboxes through the API and MCP.                                           | Yes                 | Yes                 | Yes                 | Yes                 |
+
+### Deliverability & reliability
+
+| Feature                         | Description                                                                                             | Free       | Pro         | Scale        | Enterprise  |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------- | ---------- | ----------- | ------------ | ----------- |
+| Custom domains                  | Use your own domain for optimal deliverability and brand recognition.                                   | 3          | 10          | 1,000        | Flexible    |
+| Additional domains              | Add 100 more domains on top of what your plan includes.                                                 | No         | With add-on | With add-on  | Flexible    |
+| Dedicated IPs                   | Purchase a dedicated IP pool so a range of IPs are exclusively assigned to your sending.                | No         | No          | With add-on  | With add-on |
+| Dedicated IP warming            | With Resend's Managed Dedicated IP Pools, the warmup process is handled automatically.                  | No         | No          | Yes          | Yes         |
+| Pristine shared IPs             | By default, all Resend users utilize shared IPs that are carefully monitored and maintained.            | Yes        | Yes         | Yes          | Yes         |
+| Automatic suppression list      | When an email bounces permanently, Resend automatically adds the email address to the suppression list. | Yes        | Yes         | Yes          | Yes         |
+| Bounce details                  | Understand the root cause of soft and hard bounces.                                                     | Yes        | Yes         | Yes          | Yes         |
+| Multi-region                    | Configure the region that your emails are sent from.                                                    | Yes        | Yes         | Yes          | Yes         |
+| Data retention                  | Search your emails and logs to debug or troubleshoot deliverability issues.                             | 30 days    | 30 days     | 30 days      | Flexible    |
+| Deliverability insights         | Improve email deliverability by identifying issues and applying best practices.                         | Yes        | Yes         | Yes          | Yes         |
+| DKIM, SPF, DMARC authentication | Authenticate domains to prevent spoofing and maintain deliverability.                                   | Yes        | Yes         | Yes          | Yes         |
+| Webhook endpoints               | Send events to your server in real-time for processing.                                                 | 1 endpoint | 5 endpoints | 10 endpoints | Flexible    |
+| Webhook events                  | Control which events are sent to your server.                                                           | All events | All events  | All events   | All events  |
+
+### Security & privacy
+
+| Feature                     | Description                                                                                                   | Free | Pro | Scale       | Enterprise |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------- | ---- | --- | ----------- | ---------- |
+| Social login                | Log in using Google or GitHub accounts.                                                                       | Yes  | Yes | Yes         | Yes        |
+| Single Sign-On              | Sign in with your identity provider. Available as an add-on on Scale plans, and included on Enterprise plans. | No   | No  | With add-on | Included   |
+| GDPR compliance             | GDPR compliance obtained and maintained.                                                                      | Yes  | Yes | Yes         | Yes        |
+| SOC 2 Type II certification | SOC 2 Type II obtained and maintained.                                                                        | Yes  | Yes | Yes         | Yes        |
+| Penetration testing         | Regular penetration tests conducted by a third-party security firm.                                           | Yes  | Yes | Yes         | Yes        |
+| DDoS protection             | Automatically protect from DDoS attacks via counterfeit requests (Layer 7) or SYN floods (Layer 3).           | Yes  | Yes | Yes         | Yes        |
+| Automated backups           | Continual backups allow for Point-in-Time Recovery up to 7 days.                                              | Yes  | Yes | Yes         | Yes        |
+| Multi-factor authentication | Secure your account with an additional layer of protection.                                                   | Yes  | Yes | Yes         | Yes        |
+| API key permissions         | Create API keys with limited access to your account and manage different permissions.                         | Yes  | Yes | Yes         | Yes        |
+| Signed webhook endpoints    | Secure webhook events with signed payloads.                                                                   | Yes  | Yes | Yes         | Yes        |
+
+### Customer support
+
+| Feature                  | Description                                                                           | Free | Pro | Scale | Enterprise |
+| ------------------------ | ------------------------------------------------------------------------------------- | ---- | --- | ----- | ---------- |
+| Ticket support           | Access to help via email and ticket channels.                                         | Yes  | Yes | Yes   | Yes        |
+| Slack support            | Dedicated Slack channel with the engineering team to get the help you need.           | No   | No  | Yes   | Yes        |
+| Urgent response SLA      | Guaranteed first response time for critical issues affecting production environments. | No   | No  | Yes   | Yes        |
+| Deliverability expertise | Get personalized recommendations based on your actual sending.                        | No   | Yes | Yes   | Yes        |
+| In-app documentation     | Access to API Documentation based on your real data straight from the app.            | Yes  | Yes | Yes   | Yes        |
+| AI assistant             | Trained on Resend's documentation, knowledge base, and other content.                 | Yes  | Yes | Yes   | Yes        |
+
+### AI credits
+
+| Feature         | Description                                                                | Free | Pro | Scale | Enterprise |
+| --------------- | -------------------------------------------------------------------------- | ---- | --- | ----- | ---------- |
+| AI credits / mo | Monthly credits for AI-powered features like email generation and editing. | 5    | 100 | 500   | Flexible   |
+
+## AI Credits
+
+AI credits are a team's monthly allowance for Resend's AI-powered features. They are separate from the email and contact quotas.
+
+Each of the following spends one credit:
+
+- Generating a full email with AI in the broadcast or template editor
+- Editing a selected passage with AI in the editor
+- Generating an automation with AI
+- The AI-written summary of an automation
+- Drafting an email or an automation through the Resend assistant in the dashboard
+
+These AI features are free and never spend a credit: image alt text, subject line suggestions, preview text suggestions, template name suggestions, broadcast name suggestions, the AI content review, and URL and brand analysis. Asking the Resend assistant questions is also free.
+
+| Plan       | AI Credits / mo |
+| ---------- | --------------- |
+| Free       | 5               |
+| Pro        | 100             |
+| Scale      | 500             |
+| Enterprise | Flexible        |
+
+Credits reset monthly. Unused credits do not roll over. When a team runs out, only the AI features pause until the next reset or a plan upgrade — email sending is not affected. Current usage is shown on the [Usage](https://resend.com/settings/usage) page in the dashboard.
+
+## FAQ
+
+### Do you offer any discounts for annual subscriptions?
+
+No, we only provide monthly plans.
+
+### Do you offer nonprofit or education pricing?
+
+Registered nonprofits can apply for 50% off paid plans at resend.com/nonprofits. We do not offer education pricing.
+
+### What payment methods do you accept?
+
+We accept all major credit cards.
+
+### Is there a free trial available?
+
+No, but we provide a free-forever plan.
+
+### Who can I contact about a custom plan?
+
+Please contact us at resend.com/enterprise.
+
+### What happens if I send more emails than my plan allows?
+
+With pay-as-you-go pricing, you can continue sending beyond your monthly quota and only pay for what you use. Overages are billed in buckets of 1,000 emails at your plan's overage rate. You can enable this in your team settings under "Transactional Overages." If you don't enable pay-as-you-go and exceed your plan limits, you will be notified and given the option to upgrade to a higher plan.
+
+### What is the difference between transactional and marketing emails?
+
+In Resend, transactional emails are emails sent using the /emails API, while marketing emails are sent using the /broadcasts API or through the Broadcasts interface in the dashboard. Transactional emails are typically triggered by user actions and include things like password resets or order confirmations. Marketing emails are typically sent to a list of contacts and include things like newsletters or promotional campaigns. Broadcast emails can only be sent to existing contacts, while transactional emails can be sent to any email address.
+
+### What does "unlimited broadcast sending" mean?
+
+For marketing plans, the focus is on maintaining a relationship with your contacts. Therefore marketing plans are not limited by the number of emails you can send, but only by the number of contacts you have. Broadcasts can only be sent to existing contacts.
+
+### Do broadcast emails count against the transactional email limits?
+
+No. Broadcast emails sent through the /broadcasts API or through the Broadcasts interface in the dashboard do not count against your transactional email limits. Only emails sent through the /emails API count towards your transactional email limits.
+
+### How are inbound emails counted?
+
+Each received email counts towards your transactional emails quota.
+
+### How are inboxes priced?
+
+Every plan includes 3 inboxes. On paid plans with pay-as-you-go enabled, each additional inbox is billed at $1 per month. Inboxes do not come with a separate email allowance: every email sent or received through an inbox counts towards your transactional emails quota.
+
+### Does upgrading my plan raise the API rate limit?
+
+No. The API rate limit (requests per second) is set per team and is the same on every plan, so upgrading doesn't change it. If you're hitting the limit, the Batch Email API sends up to 100 emails in one request, and each batch request counts as a single request against the limit. If your sending pattern still needs a higher limit, contact support with your expected volume and we'll review it.
+
+### Can I send my newsletter through the /emails API instead of Broadcasts?
+
+Yes. A newsletter can be sent through the /emails API, or through the /broadcasts API or the Broadcasts interface in the dashboard. Either way your recipients must have consented to receive it and must be able to unsubscribe: Broadcasts handle the unsubscribe link for you when your message includes the {{{RESEND_UNSUBSCRIBE_URL}}} placeholder, while emails sent through the /emails API need your own visible unsubscribe link plus the List-Unsubscribe and List-Unsubscribe-Post headers. Every recipient of an /emails API send counts as one email against your transactional quota; broadcasts count against your contacts instead.
+
+### Is open and click tracking included on the Free plan?
+
+Yes. Open and click tracking is a per-domain setting available on every plan, including Free. The "Marketing analytics" feature on the pricing page is the separate analytics dashboard for your broadcasts, not tracking.
+
+### Is there a plan between Free and Pro?
+
+No. The plans are Free, Pro, Scale, and Enterprise. If you occasionally need more than your plan includes, pay-as-you-go lets a paid plan keep sending past its monthly quota at the plan's overage rate. It's an option on paid plans, not a plan of its own.

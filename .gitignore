@@ -10,6 +10,7 @@ nathan.config.json
 .wrangler/
 dist/
 coverage/
+__pycache__/
 *.log
 
 installer/public/release/

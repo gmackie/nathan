@@ -1,0 +1,1187 @@
+{
+  "schemaVersion": 1,
+  "status": "draft; source evidence recorded; executable enforcement proof required",
+  "baseline": {
+    "repository": "https://github.com/gmackie/nathan",
+    "assessedRef": "origin/feat/bootstrap-blueprint",
+    "commit": "90ebc43f6d19cf69049646a19a6f96f74de6975a",
+    "date": "2026-10-28",
+    "issue": "NATH-1",
+    "canonicalMain": "README only at assessment; do not assume implementation present",
+    "packages": [
+      {
+        "name": "better-auth",
+        "version": "1.7.14",
+        "tarball": "https://registry.npmjs.org/better-auth/-/better-auth-1.7.14.tgz",
+        "integrity": "sha512-QxDCI0pOCCHDYmruisKhKyrvOJ6Icv9xg0RA6ZUysfKFXENYwhNNpwUlkE/NmViH2nDMgkKcymmLr55pnpR9vw==",
+        "inspection": "tarball SHA-512 checked in memory; selected source inspected, no dependency audit"
+      },
+      {
+        "name": "@better-auth/core",
+        "version": "1.7.14",
+        "tarball": "https://registry.npmjs.org/@better-auth/core/-/core-1.7.14.tgz",
+        "integrity": "sha512-ByhdrGVwp/el+hoTYKSVOHIH23/lQj9TQ1txdGcWOg22tnfr3hJ6ukzySooeYj/R36XsQgBhkJqIp8mKsNeErA==",
+        "inspection": "tarball SHA-512 checked in memory; selected source inspected, no dependency audit"
+      },
+      {
+        "name": "@better-auth/oauth-provider",
+        "version": "1.7.14",
+        "tarball": "https://registry.npmjs.org/@better-auth/oauth-provider/-/oauth-provider-1.7.14.tgz",
+        "integrity": "sha512-ey5PmiL4HcJ8CI65xZ3B9LSmRMziF+CNBuzAXx8oJujrItQ7UrEuDr6EAa+nKLQflexRL0AJMXqT7EYObWZxhg==",
+        "inspection": "tarball SHA-512 checked in memory; selected source inspected, no dependency audit"
+      },
+      {
+        "name": "@better-auth/passkey",
+        "version": "1.7.14",
+        "tarball": "https://registry.npmjs.org/@better-auth/passkey/-/passkey-1.7.14.tgz",
+        "integrity": "sha512-ZUODCRp9vnbk2GThOXRja+bpTLweJar5bJppSoobck2DhM7XCRPaQjzrCIJllnjy6VUBcCkjGm2oKmy2yvepeg==",
+        "inspection": "tarball SHA-512 checked in memory; selected source inspected, no dependency audit"
+      },
+      {
+        "name": "@better-auth/sso",
+        "version": "1.7.14",
+        "tarball": "https://registry.npmjs.org/@better-auth/sso/-/sso-1.7.14.tgz",
+        "integrity": "sha512-sfUzpm6GO5l5MSUA17qRO/E4INthqF+KRmymtj4Hhm+Xsx6CoRgr0BVIDfAic3tSqVhObcVYiiiZ38dXXhkCCw==",
+        "inspection": "tarball SHA-512 checked in memory; selected source inspected, no dependency audit"
+      }
+    ]
+  },
+  "decisions": [
+    {
+      "id": "hosting",
+      "status": "confirmed",
+      "value": "Operator-owned Cloudflare Workers/D1 installation; connect external apps through OIDC."
+    },
+    {
+      "id": "setup",
+      "status": "confirmed",
+      "value": {
+        "installation": "CLI wizard",
+        "externalApps": "Browser-guided Identity Studio"
+      }
+    },
+    {
+      "id": "accessModes",
+      "status": "confirmed",
+      "value": {
+        "perApp": [
+          "approved_users_groups",
+          "any_authenticated"
+        ],
+        "missingOrDisabled": "deny",
+        "emptyApprovedList": "deny",
+        "blockedUser": "deny in either mode",
+        "adminBypass": false
+      }
+    },
+    {
+      "id": "accountAdmission",
+      "status": "confirmed",
+      "value": {
+        "modes": [
+          "invitation_only",
+          "self_service"
+        ],
+        "default": "invitation_only",
+        "appliesTo": "Every new account, including password/social/enterprise first-login provisioning; independent of app grants and admin rights."
+      }
+    },
+    {
+      "id": "authentication",
+      "status": "confirmed",
+      "value": {
+        "required": [
+          "Google",
+          "GitHub",
+          "passkey",
+          "TOTP",
+          "email_password",
+          "enterprise_OIDC"
+        ],
+        "enterpriseAcceptance": "Microsoft Entra ID",
+        "deferred": [
+          "SAML"
+        ]
+      }
+    },
+    {
+      "id": "membershipAuthority",
+      "status": "confirmed",
+      "value": {
+        "source": "Nathan-managed users/groups in Identity Studio",
+        "deferred": [
+          "directory synchronization",
+          "Entra group mapping"
+        ]
+      }
+    },
+    {
+      "id": "mfaPlacement",
+      "status": "confirmed",
+      "value": {
+        "administrators": "required for all privileged paths",
+        "endUsers": "configured independently for each app in either access mode",
+        "enrollmentIsEvidence": false
+      }
+    },
+    {
+      "id": "acceptanceTargets",
+      "status": "confirmed",
+      "value": [
+        "private protected Cloudflare Worker",
+        "externally hosted Grafana",
+        "independent reference OIDC web app"
+      ]
+    },
+    {
+      "id": "releasePath",
+      "status": "confirmed",
+      "value": [
+        "public beta after security and end-to-end gates",
+        "monitored pilot",
+        "production support after exit review"
+      ]
+    },
+    {
+      "id": "capacityPopulation",
+      "status": "confirmed",
+      "value": {
+        "usersPerInstallation": 51000,
+        "isTestedCapacity": false
+      }
+    },
+    {
+      "id": "appClientMapping",
+      "status": "proposed",
+      "value": {
+        "application": "Protected logical app",
+        "client": "OIDC registration with an immutable unique mapping to one logical app",
+        "model": "Allow multiple explicit clients per app in storage; create one per app in the first UI",
+        "activation": "Create disabled. Activate only after client mapping and explicit policy/MFA selection. Orphans deny."
+      }
+    },
+    {
+      "id": "principalAndGroups",
+      "status": "proposed",
+      "value": {
+        "identity": "Stable internal Nathan user ID; never an email address or display name",
+        "groups": "Flat groups with direct user membership and immutable IDs",
+        "grants": "OR across explicit user/group grants; user/app blocking overrides every grant",
+        "deletion": "No reuse of group IDs or inheritance by same-name recreation",
+        "globalRoles": "Administrative privilege only; no implicit application entitlement"
+      }
+    },
+    {
+      "id": "sessionEvidence",
+      "status": "proposed",
+      "value": {
+        "accepted": [
+          "Verified primary authentication plus a Nathan TOTP challenge",
+          "Nathan passkey authentication only with server-verified user verification and an accepted multifactor ceremony model"
+        ],
+        "record": [
+          "user_id",
+          "final_session_id",
+          "method",
+          "credential_id_or_version",
+          "verified_at",
+          "expires_at",
+          "security_version"
+        ],
+        "upstreamMfaClaims": "Do not trust at launch",
+        "rememberedDevices": "Do not satisfy a fresh MFA requirement",
+        "refresh": "Never changes verification time",
+        "recovery": "Invalidate prior evidence and require a new qualifying ceremony",
+        "protocol": "Preserve provider-owned claims; acr remains 0 until a supported truthful mapping exists."
+      }
+    },
+    {
+      "id": "candidateLifetimes",
+      "status": "proposed",
+      "value": {
+        "authorizationCodeSeconds": 60,
+        "accessTokenSeconds": 300,
+        "idTokenSeconds": 300,
+        "refreshAbsoluteSeconds": 28800,
+        "idpSessionAbsoluteSeconds": 28800,
+        "idpSessionIdleSeconds": 1800,
+        "adminMfaFreshnessSeconds": 900,
+        "appMfaFreshnessSeconds": 28800,
+        "newAppMfaDefault": "required, with explicit choice before activation",
+        "refreshRotation": "Each use, zero reuse grace. Reject unsupported override. Enforce absolute family expiry rather than a sliding unlimited lifetime.",
+        "notes": "Validate supported options and persist original deadlines where the provider defaults slide. These are design candidates, not current behavior or accepted user requirements."
+      }
+    },
+    {
+      "id": "capacityWorkload",
+      "status": "proposed",
+      "value": {
+        "apps": 500,
+        "initialClientsPerApp": 1,
+        "concurrentSignInFlows": 1000,
+        "signInFlowBurst": 2000,
+        "protectedRequestsPerSecond": 5000,
+        "protectedRequestBurstPerSecond": 10000,
+        "signInStartsPerSecond": 50,
+        "signInStartBurstPerSecond": 100,
+        "refreshExchangesPerSecond": 100,
+        "refreshBurstPerSecond": 200,
+        "groups": 1000,
+        "memberships": 510000,
+        "activeAppSessions": 10200,
+        "policyWritesPerSecond": 10,
+        "rampMinutes": 5,
+        "baselineMinutes": 30,
+        "burstMinutes": 5,
+        "soakHours": 4,
+        "soakProtectedRequestsPerSecond": 1000,
+        "authorizationP95Milliseconds": 100,
+        "authorizationP99Milliseconds": 300,
+        "authEndpointP95Milliseconds": 500,
+        "authEndpointP99Milliseconds": 1000,
+        "unexpectedValidTrafficFailureFractionLessThan": 0.001,
+        "unauthorizedAllows": 0,
+        "tested": false,
+        "definitions": "Concurrency counts unfinished journeys, not completed logins/second. Traffic is aggregate per installation. Synthetic load and live provider compatibility are separate."
+      }
+    },
+    {
+      "id": "supportedClients",
+      "status": "proposed",
+      "value": "Confidential server web apps using authorization code and S256 PKCE. Defer native/mobile, device, machine, arbitrary plugins and management MCP writes until separately scoped."
+    },
+    {
+      "id": "emailAndDistribution",
+      "status": "proposed",
+      "value": {
+        "email": "Operator-supplied Resend credentials and verified sender, matching the existing adapter. Verify delivery before enabling password/invitation journeys; retries and redacted failures must be usable.",
+        "distribution": "Versioned integrity-verified standalone CLI artifact; secure an operator-owned npm scope before advertising an npx command. Do not assume a package name is available."
+      }
+    },
+    {
+      "id": "pilot",
+      "status": "proposed",
+      "value": {
+        "durationDays": 30,
+        "installationsAtLeast": 3,
+        "representativeUse": "At least one representative larger installation; controlled load proves the profile separately. Quiet pilot traffic is insufficient.",
+        "candidateAvailability": 0.999,
+        "blockingFindings": "No unresolved release-blocking security or correctness findings",
+        "backupRpoHours": 24,
+        "restoreRtoHours": 4,
+        "ownership": "Named release/support/security owners and disclosure channel before public beta; production independent review before support commitment."
+      }
+    }
+  ],
+  "enforcementPoints": [
+    {
+      "id": "oidc_authorize",
+      "required": "Current enabled app/client, active user, explicit entitlement and sufficient session MFA before any final code. Cover consent, continuation, silent and login-resume paths.",
+      "source": "@better-auth/oauth-provider@1.7.14 dist/authorize-B1Bc3IL6.mjs:7114,7219,8408,8465; core databaseHooks.verification.create.before",
+      "candidate": "Global dispatch middleware plus a narrowly filtered final-code verification-create guard; postLogin alone is insufficient.",
+      "verification": "HOOK-01, HOOK-05, HOOK-12",
+      "status": "supported surfaces inspected; composition requires executable proof"
+    },
+    {
+      "id": "oidc_code_exchange",
+      "required": "Recheck current policy using the validated code-bound user/session/client, preserving PKCE, client authentication, one-time use and exact callbacks.",
+      "source": "authorize-B1Bc3IL6.mjs:2133-2231,1980; OAuthClaimExtensionInput at oauth-m0aNFIHP.d.mts:964",
+      "candidate": "Verified-context contributor plus any needed deny-only dispatch guard; restrict every supported user grant to effective openid.",
+      "verification": "HOOK-02, HOOK-05, HOOK-06",
+      "status": "candidate; no universal provider authorization hook established"
+    },
+    {
+      "id": "oidc_refresh",
+      "required": "Recheck user/app/grants/MFA and original session; preserve rotation and original assurance/family deadlines.",
+      "source": "authorize-B1Bc3IL6.mjs:2283-2372; default refreshTokenReuseInterval at 6925",
+      "candidate": "Same verified-context guard; explicitly zero reuse grace. A positive grace needs a guard before cached replay or remains unsupported.",
+      "verification": "HOOK-03, HOOK-04, HOOK-09",
+      "status": "candidate; retry/configuration proof required"
+    },
+    {
+      "id": "account_admission",
+      "required": "Default invitation-only applies before all user creation and session access, including raw APIs and provider callbacks. Null/missing context cannot bypass admission.",
+      "source": "core init-options.d.mts:1294; better-auth internal-adapter.mjs:121,141; with-hooks.mjs:7",
+      "candidate": "databaseHooks.user.create.before with verified source/context; authoritative invitation reservation/consumption and an inactive recoverable state if a multi-write operation cannot be atomic.",
+      "verification": "HOOK-10, HOOK-11",
+      "status": "hook supported; provider coverage and D1 transaction boundary unproven"
+    },
+    {
+      "id": "mfa_passkey",
+      "required": "Qualifying server-verified UV ceremony, bound to the final successfully created session. Enrollment and possession-only ceremonies are insufficient.",
+      "source": "@better-auth/passkey@1.7.14 dist/index.mjs:475-514; PasskeyAuthenticationOptions.afterVerification at dist/index-BQx4sm-v.d.mts:128",
+      "candidate": "Reject a ceremony counted as MFA unless authenticationInfo.userVerified is true; request-scoped verified data plus a successful session hook records evidence.",
+      "verification": "HOOK-07, HOOK-09, HOOK-13",
+      "status": "supported verification callback; session composition requires proof"
+    },
+    {
+      "id": "mfa_totp",
+      "required": "Record successful challenge for the final active session; handle pending login, existing session and enrollment session replacement distinctly.",
+      "source": "better-auth totp/index.mjs:137-191; verify-two-factor.mjs:14-110; dispatch.mjs:245-247",
+      "candidate": "Success-aware endpoint after hook plus authoritative final-session lookup; do not infer success from route name or authenticator counts.",
+      "verification": "HOOK-08, HOOK-09",
+      "status": "source inspected; replay and evidence binding unproven"
+    },
+    {
+      "id": "worker_gateway",
+      "required": "Before upstream forwarding, evaluate trusted app/client and verified app-local session through the common policy; no shared IdP cookie.",
+      "source": "src/gateway/worker.ts:131; src/gateway/oidc.ts:72",
+      "candidate": "Online authorizer using an authenticated app-scoped caller and a server-verified session/token association. Start with primary-authoritative reads, no allow cache.",
+      "verification": "tests/integration/worker-revocation.test.mjs; tests/integration/worker-identity.test.mjs",
+      "status": "production design pending; existing ACR comparison insufficient"
+    },
+    {
+      "id": "worker_binding",
+      "required": "Untrusted request fields cannot select another app or principal; the same 60-second bound applies if this interface ships.",
+      "source": "src/auth/worker.ts:334-351",
+      "candidate": "App-scoped credential and verified app-local identity proof; never raw supplied user ID or a cookie unavailable on app hosts. Redesign or keep legacy interface disabled.",
+      "verification": "tests/integration/worker-identity.test.mjs",
+      "status": "caller/session transport design pending"
+    },
+    {
+      "id": "membership_admin",
+      "required": "Privileged current-session MFA, stable local IDs, audit, complete authorized search/pagination and no alternate self-grant path.",
+      "source": "src/auth/admin-service.ts:17,22,153; src/auth/ui.ts:174; src/auth/management-boundary.mjs:7",
+      "candidate": "Nathan-owned group/grant storage and server-side management APIs; organization/global role/upstream groups are not grants.",
+      "verification": "tests/application-groups.test.mjs; tests/management-boundary.test.mjs; tests/integration/studio-directory.test.mjs",
+      "status": "implementation pending"
+    },
+    {
+      "id": "offline_sdk",
+      "required": "Issuer/audience/signature checks alone cannot promise current policy or the Worker revocation bound.",
+      "source": "src/sdk/verify.ts:19",
+      "candidate": "Do not advertise the offline-only SDK as satisfying current Worker authorization; require an online decision or separately bounded supported contract.",
+      "verification": "tests/integration/worker-revocation.test.mjs",
+      "status": "release capability boundary required"
+    }
+  ],
+  "revocationContract": {
+    "worker": {
+      "status": "confirmed",
+      "maximumSeconds": 60,
+      "clockStarts": "Successful authoritative mutation commit",
+      "events": [
+        "user blocked",
+        "application disabled",
+        "final matching grant removed"
+      ],
+      "boundary": "Any newly authorized protected request at or beyond commit + 60 seconds denies. Already authorized in-flight requests are not recalled.",
+      "cacheProposal": {
+        "status": "proposed",
+        "initial": "No allow cache; primary-authoritative online evaluation",
+        "optimization": "Only after measurement, fixed allow validity at most 30 seconds from evaluation start, capped by every identity/session/MFA deadline; stale response cannot reset it.",
+        "errors": "Fail closed after expiry; never serve stale permission on error",
+        "consistency": "Prove reads observe authoritative committed state across D1 sessions, isolates and regions; avoid unbounded replica lag."
+      },
+      "longLivedConnections": "Design pending: exclude or reauthorize/terminate bounded streams and WebSockets explicitly before claiming coverage."
+    },
+    "oidc": {
+      "status": "confirmed",
+      "checks": [
+        "authorization",
+        "code exchange",
+        "refresh"
+      ],
+      "consistencyProposal": "A fresh authoritative policy evaluation in each grant operation; define the snapshot/linearization point and race tests. Do not claim a transaction spanning a remote app.",
+      "alreadyIssuedTokens": "Separate token expiration/online-check contract; token revocation alone cannot end an arbitrary app-local session."
+    },
+    "externalSessions": {
+      "status": "proposed acceptance target; unverified",
+      "candidateMaximumSeconds": 900,
+      "targets": [
+        "Grafana",
+        "reference web app"
+      ],
+      "requirements": "Pin versions; configure refresh/reauthentication/local session controls; measure last successful protected action after revocation. If 15 minutes cannot be enforced, record the supported limit and obtain an explicit release decision before advertising it.",
+      "workerDeadlineDoesNotApply": true
+    }
+  },
+  "cases": [
+    {
+      "id": "ACCESS-01",
+      "scenario": "Unknown app / missing mapping / missing policy",
+      "setup": "Missing app, client mapping or policy",
+      "action": "Attempt access with an otherwise valid session",
+      "expected": "Deny in every relevant path, including direct endpoints.",
+      "enforcementPaths": [
+        "shared evaluator",
+        "gateway",
+        "binding if shipped",
+        "OIDC authorize/exchange/refresh"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-access.test.mjs",
+        "name": "ACCESS-01: Unknown app / missing mapping / missing policy",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-02",
+      "scenario": "Empty approved list",
+      "setup": "Enabled approved-mode app with zero grants",
+      "action": "Sign in and request access",
+      "expected": "Deny; never interpret it as all authenticated users.",
+      "enforcementPaths": [
+        "shared evaluator",
+        "gateway",
+        "binding if shipped",
+        "OIDC authorize/exchange/refresh"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-access.test.mjs",
+        "name": "ACCESS-02: Empty approved list",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-03",
+      "scenario": "Approved active user",
+      "setup": "Enabled app with direct grant to active user",
+      "action": "Request access, then substitute another app",
+      "expected": "Allow only the named enabled application.",
+      "enforcementPaths": [
+        "shared evaluator",
+        "gateway",
+        "binding if shipped",
+        "OIDC authorize/exchange/refresh"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-access.test.mjs",
+        "name": "ACCESS-03: Approved active user",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-04",
+      "scenario": "Authenticated unapproved user, approved-users/groups mode",
+      "setup": "Approved-mode app without a grant for the active user",
+      "action": "Request access",
+      "expected": "Deny with no upstream protected content or new grant.",
+      "enforcementPaths": [
+        "shared evaluator",
+        "gateway",
+        "binding if shipped",
+        "OIDC authorize/exchange/refresh"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-access.test.mjs",
+        "name": "ACCESS-04: Authenticated unapproved user, approved-users/groups mode",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-05",
+      "scenario": "Application/client disabled",
+      "setup": "Previously allowed app/client",
+      "action": "Disable each and attempt new access/grants",
+      "expected": "Deny new grants and current gateway/binding requests within the documented bound; apply the explicit existing-token/session contract.",
+      "enforcementPaths": [
+        "shared evaluator",
+        "gateway",
+        "binding if shipped",
+        "OIDC authorize/exchange/refresh"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-access.test.mjs",
+        "name": "ACCESS-05: Application/client disabled",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-06",
+      "scenario": "Blocked user in either mode / removed membership in approved-users/groups mode",
+      "setup": "Allowed user with final group grant",
+      "action": "Block user in both modes; separately remove the final membership",
+      "expected": "Deny at relevant current-state checks; bound existing-token and external-session behavior. Removing an application membership alone does not revoke access while that application explicitly allows any active signed-in user.",
+      "enforcementPaths": [
+        "shared evaluator",
+        "gateway",
+        "binding if shipped",
+        "OIDC authorize/exchange/refresh"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-access.test.mjs",
+        "name": "ACCESS-06: Blocked user in either mode / removed membership in approved-users/groups mode",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-07",
+      "scenario": "Policy changed during code exchange or refresh",
+      "setup": "Allowed code and refresh token",
+      "action": "Commit a policy change before exchange and refresh",
+      "expected": "No new authorization based solely on a stale earlier decision.",
+      "enforcementPaths": [
+        "shared evaluator",
+        "gateway",
+        "binding if shipped",
+        "OIDC authorize/exchange/refresh"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-access.test.mjs",
+        "name": "ACCESS-07: Policy changed during code exchange or refresh",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-08",
+      "scenario": "Two-app substitution",
+      "setup": "Two apps with different clients/policies",
+      "action": "Substitute app/client/identity inputs",
+      "expected": "App A’s client, claims, subject association or supplied identifier cannot grant access to app B.",
+      "enforcementPaths": [
+        "shared evaluator",
+        "gateway",
+        "binding if shipped",
+        "OIDC authorize/exchange/refresh"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-access.test.mjs",
+        "name": "ACCESS-08: Two-app substitution",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-09",
+      "scenario": "Backend failure / stale cache / malformed policy",
+      "setup": "Warm allow and malformed/unavailable policy backend",
+      "action": "Inject failures and expired/stale decisions",
+      "expected": "Fail closed. Distinguish unauthenticated, forbidden and unavailable without leaking membership or secrets.",
+      "enforcementPaths": [
+        "shared evaluator",
+        "gateway",
+        "binding if shipped",
+        "OIDC authorize/exchange/refresh"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-access.test.mjs",
+        "name": "ACCESS-09: Backend failure / stale cache / malformed policy",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-10",
+      "scenario": "Realm/batch and direct client registration",
+      "setup": "Normal, realm/batch and direct registration paths",
+      "action": "Create partially linked clients and attempt activation",
+      "expected": "Every newly created client must join the same policy/activation contract; partial creation remains safe and reconcilable.",
+      "enforcementPaths": [
+        "shared evaluator",
+        "gateway",
+        "binding if shipped",
+        "OIDC authorize/exchange/refresh"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-access.test.mjs",
+        "name": "ACCESS-10: Realm/batch and direct client registration",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-11",
+      "scenario": "JWT accepted after grant removal",
+      "setup": "Valid offline JWT and a removed grant",
+      "action": "Compare offline validation with the supported online check",
+      "expected": "Test and document offline lifetime versus online checks; do not assert instantaneous revocation from signature validation alone.",
+      "enforcementPaths": [
+        "live acceptance paths named in scenario"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/integration/worker-revocation.test.mjs",
+        "name": "ACCESS-11: JWT accepted after grant removal",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-12",
+      "scenario": "External app holds its own session",
+      "setup": "An authenticated external app-local session",
+      "action": "Revoke its Nathan entitlement and measure continued access",
+      "expected": "Verify the selected app’s logout/session behavior; distinguish this from Nathan ending new token issuance.",
+      "enforcementPaths": [
+        "live acceptance paths named in scenario"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/integration/external-sessions.test.mjs",
+        "name": "ACCESS-12: External app holds its own session",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-13",
+      "scenario": "Cookie isolation",
+      "setup": "Different IdP and protected-app hostnames",
+      "action": "Complete login and inspect cookie scope/transport",
+      "expected": "Host-only identity cookies remain isolated; Worker login does not require sharing a parent-domain session cookie.",
+      "enforcementPaths": [
+        "shared evaluator",
+        "gateway",
+        "binding if shipped",
+        "OIDC authorize/exchange/refresh"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-access.test.mjs",
+        "name": "ACCESS-13: Cookie isolation",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-14",
+      "scenario": "Explicit any-authenticated mode",
+      "setup": "Explicit any-authenticated app and a non-member",
+      "action": "Access as active, blocked and unauthenticated user",
+      "expected": "Required at launch. After affirmative selection, an active authenticated non-member can access that app after satisfying any configured MFA requirement; unauthenticated or blocked users and disabled apps still deny.",
+      "enforcementPaths": [
+        "shared evaluator",
+        "gateway",
+        "binding if shipped",
+        "OIDC authorize/exchange/refresh"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-access.test.mjs",
+        "name": "ACCESS-14: Explicit any-authenticated mode",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-15",
+      "scenario": "Same user, different application policies",
+      "setup": "App A any-authenticated and app B approved-only",
+      "action": "Access both with the same non-member",
+      "expected": "An active non-member can access app A in any-authenticated mode while app B in approved-users/groups mode denies. App A’s mode cannot change app B’s decision.",
+      "enforcementPaths": [
+        "shared evaluator",
+        "gateway",
+        "binding if shipped",
+        "OIDC authorize/exchange/refresh"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-access.test.mjs",
+        "name": "ACCESS-15: Same user, different application policies",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-16",
+      "scenario": "Change policy mode",
+      "setup": "Active app with existing sessions",
+      "action": "Change access mode and replay older sessions",
+      "expected": "Changes are privileged and audited. Broadening access requires explicit selection; tightening reevaluates existing access under the documented session/revocation contract.",
+      "enforcementPaths": [
+        "shared evaluator",
+        "gateway",
+        "binding if shipped",
+        "OIDC authorize/exchange/refresh"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-access.test.mjs",
+        "name": "ACCESS-16: Change policy mode",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-17",
+      "scenario": "OIDC public-client and signup independence",
+      "setup": "App with a known signup/client-auth configuration",
+      "action": "Change only access mode",
+      "expected": "Changing access mode never changes client secret requirements or enables account signup. Public/confidential clients remain distinct from application admission policy.",
+      "enforcementPaths": [
+        "shared evaluator",
+        "gateway",
+        "binding if shipped",
+        "OIDC authorize/exchange/refresh"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-access.test.mjs",
+        "name": "ACCESS-17: OIDC public-client and signup independence",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-18",
+      "scenario": "Every confirmed sign-in method",
+      "setup": "One stable user and all required enabled methods",
+      "action": "Complete each sign-in and compare app/MFA decisions",
+      "expected": "Google, GitHub, passkey and password authentication, password+TOTP challenge, and enterprise OIDC follow the same membership rules for the same principal/app. Effective access also requires the configured session MFA evidence. Authentication success alone does not create an app grant.",
+      "enforcementPaths": [
+        "shared evaluator",
+        "gateway",
+        "binding if shipped",
+        "OIDC authorize/exchange/refresh"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-access.test.mjs",
+        "name": "ACCESS-18: Every confirmed sign-in method",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-19",
+      "scenario": "Account linking and recovery",
+      "setup": "Existing grants and linked account credentials",
+      "action": "Rename email, link/recover credentials and attempt identity reassignment",
+      "expected": "Linking Google/GitHub, enterprise OIDC or a password credential requires verified ownership and stable identity binding. Password reset, email changes, MFA recovery and enterprise email reassignment cannot transfer membership or administrator privileges to another person.",
+      "enforcementPaths": [
+        "shared evaluator",
+        "gateway",
+        "binding if shipped",
+        "OIDC authorize/exchange/refresh"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-access.test.mjs",
+        "name": "ACCESS-19: Account linking and recovery",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-20",
+      "scenario": "Enterprise OIDC organization boundary",
+      "setup": "Two enterprise tenants/connections",
+      "action": "Substitute issuer/tenant/audience and attempt cross-tenant linking",
+      "expected": "A provider is trusted only for its verified connection and configured identity mapping. Upstream group claims and a matching email domain never automatically grant application membership.",
+      "enforcementPaths": [
+        "shared evaluator",
+        "gateway",
+        "binding if shipped",
+        "OIDC authorize/exchange/refresh"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-access.test.mjs",
+        "name": "ACCESS-20: Enterprise OIDC organization boundary",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-21",
+      "scenario": "Microsoft Entra ID acceptance",
+      "setup": "Real Entra tenant, registered connection and downstream apps",
+      "action": "Complete live sign-in and all required negative journeys",
+      "expected": "The configured Entra connection completes real sign-in through Nathan into the protected Worker, Grafana and reference web app. Wrong tenant/issuer/audience and cross-organization linking deny; verify key rotation and client-secret replacement.",
+      "enforcementPaths": [
+        "live acceptance paths named in scenario"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/integration/entra.test.mjs",
+        "name": "ACCESS-21: Microsoft Entra ID acceptance",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-22",
+      "scenario": "Entra claims and group completeness",
+      "setup": "Entra identities with absent/incomplete/group-overage claims",
+      "action": "Attempt access without inventing verification or group membership",
+      "expected": "Document stable issuer/subject identity binding and the treatment of missing email-verification evidence, renamed/reassigned email and absent/incomplete/overage group claims. Never infer verified ownership from a domain hint or make an incomplete group response authorize membership.",
+      "enforcementPaths": [
+        "shared evaluator",
+        "gateway",
+        "binding if shipped",
+        "OIDC authorize/exchange/refresh"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-access.test.mjs",
+        "name": "ACCESS-22: Entra claims and group completeness",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-23",
+      "scenario": "Default installation admission across methods",
+      "setup": "Invitation-only install with no valid invitation",
+      "action": "Create accounts through every enabled first-login/raw path",
+      "expected": "A new installation is invitation-only. First-time password, Google/GitHub and enterprise OIDC users cannot bypass admission through direct endpoints or callbacks; unknown policy/backend failure cannot admit a new account. Verify the separate initial administrator bootstrap path.",
+      "enforcementPaths": [
+        "password signup",
+        "social callback",
+        "enterprise callback",
+        "direct API"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/account-admission.test.mjs",
+        "name": "ACCESS-23: Default installation admission across methods",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-24",
+      "scenario": "Invitation lifecycle and ownership",
+      "setup": "Eligible invitation and intended verified identity",
+      "action": "Redeem, replay, race, revoke and expire it",
+      "expected": "Expired, revoked, replayed and wrong-identity invitations deny. Concurrent redemption admits at most the intended account once. Do not treat an unverified matching email as ownership. Invitation handling must not implicitly transfer app grants or admin privileges.",
+      "enforcementPaths": [
+        "password signup",
+        "social callback",
+        "enterprise callback",
+        "direct API"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/account-admission.test.mjs",
+        "name": "ACCESS-24: Invitation lifecycle and ownership",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-25",
+      "scenario": "Explicit self-service and signup-mode changes",
+      "setup": "Existing active users and no-grant new user",
+      "action": "Enable self-service and later return to invitation-only",
+      "expected": "An administrator can enable self-service per installation. A newly admitted active user may enter an enabled any-signed-in-user app after satisfying its MFA setting, but is denied an approved-users/groups app without a grant. Switching back to invitation-only blocks new uninvited accounts while preserving existing active-user login and app policies. Changes are privileged and audited.",
+      "enforcementPaths": [
+        "password signup",
+        "social callback",
+        "enterprise callback",
+        "direct API"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/account-admission.test.mjs",
+        "name": "ACCESS-25: Explicit self-service and signup-mode changes",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-26",
+      "scenario": "Local user/group administration",
+      "setup": "Admin and ordinary identities; local groups",
+      "action": "Exercise group/member/grant CRUD through Studio and raw APIs",
+      "expected": "An authorized Studio administrator creates a group, adds/removes members and assigns explicit app grants. Ordinary users, forged requests and raw plugin endpoints cannot self-grant or edit authoritative membership; privileged changes are audited.",
+      "enforcementPaths": [
+        "Studio management API",
+        "raw alternate write paths",
+        "shared policy evaluator"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-groups.test.mjs",
+        "name": "ACCESS-26: Local user/group administration",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-27",
+      "scenario": "Group identity and lifecycle",
+      "setup": "Granted group and stable user IDs",
+      "action": "Rename/delete/recreate group and change user display email",
+      "expected": "Rename preserves stable grant references. Deletion stops grants from that group within the documented bound; recreating its name does not inherit old grants. A missing/deleted group cannot authorize access.",
+      "enforcementPaths": [
+        "Studio management API",
+        "raw alternate write paths",
+        "shared policy evaluator"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-groups.test.mjs",
+        "name": "ACCESS-27: Group identity and lifecycle",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-28",
+      "scenario": "Multiple explicit grants · proposed OR semantics",
+      "setup": "Independent user and two group grants",
+      "action": "Remove grants one by one",
+      "expected": "Removing one membership denies only when no independent explicit user/group grant remains. Removal does not block the account or deny any-signed-in-user apps. The contract must finalize this semantic choice before implementation.",
+      "enforcementPaths": [
+        "Studio management API",
+        "raw alternate write paths",
+        "shared policy evaluator"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-groups.test.mjs",
+        "name": "ACCESS-28: Multiple explicit grants · proposed OR semantics",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-29",
+      "scenario": "Deferred directory synchronization",
+      "setup": "Upstream groups/SCIM staging and local grants",
+      "action": "Change upstream records without changing local authority",
+      "expected": "Entra sign-in, changed upstream group claims and staged SCIM writes do not add/remove Nathan membership or app grants. Reauthentication cannot restore an administratively removed local grant. Documentation must not promise directory-driven deprovisioning.",
+      "enforcementPaths": [
+        "Studio management API",
+        "raw alternate write paths",
+        "shared policy evaluator"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/application-groups.test.mjs",
+        "name": "ACCESS-29: Deferred directory synchronization",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-30",
+      "scenario": "Mandatory administrator MFA",
+      "setup": "Admin enrolled factors, weak and strong sessions",
+      "action": "Use every privileged route and legacy configuration",
+      "expected": "Every supported privileged Studio/API/management path requires sufficient session-bound verified MFA. Enrollment alone, a social/enterprise login, missing evidence or a legacy configuration fallback cannot authorize administration. Sensitive operations enforce the specified reauthentication age.",
+      "enforcementPaths": [
+        "privileged management",
+        "OIDC authorize/exchange/refresh",
+        "Worker authorizer"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/authentication-evidence.test.mjs",
+        "name": "ACCESS-30: Mandatory administrator MFA",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-31",
+      "scenario": "Same user, different app MFA requirements",
+      "setup": "Two entitled apps with different MFA requirements",
+      "action": "Move the same user between apps",
+      "expected": "An otherwise entitled user can enter an app without required MFA, then must satisfy a verified challenge before entering an MFA-required app. Cover both access modes and both launch integrations; app/client substitution or a client-supplied lower requirement cannot bypass the server policy.",
+      "enforcementPaths": [
+        "privileged management",
+        "OIDC authorize/exchange/refresh",
+        "Worker authorizer"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/authentication-evidence.test.mjs",
+        "name": "ACCESS-31: Same user, different app MFA requirements",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-32",
+      "scenario": "MFA enrollment, method evidence and cancellation",
+      "setup": "Enrolled factors and qualifying/nonqualifying ceremonies",
+      "action": "Cancel/fail challenges; use possession-only passkey and valid UV",
+      "expected": "Stored authenticator counts do not establish completed MFA. Verify the actual factor composition, passkey user-verification result, replay protection and binding to the correct session. Missing, failed, cancelled or unsupported evidence denies where required.",
+      "enforcementPaths": [
+        "privileged management",
+        "OIDC authorize/exchange/refresh",
+        "Worker authorizer"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/authentication-evidence.test.mjs",
+        "name": "ACCESS-32: MFA enrollment, method evidence and cancellation",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-33",
+      "scenario": "MFA policy and evidence changes",
+      "setup": "Weak existing session, valid MFA session and refresh token",
+      "action": "Tighten app MFA, expire/revoke evidence and refresh",
+      "expected": "Enabling app MFA reevaluates weaker sessions within the documented bound. Stale evidence, factor revocation and policy changes between authorization, exchange or refresh cannot produce a new grant that violates policy. Background refresh never advances MFA completion time.",
+      "enforcementPaths": [
+        "privileged management",
+        "OIDC authorize/exchange/refresh",
+        "Worker authorizer"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/authentication-evidence.test.mjs",
+        "name": "ACCESS-33: MFA policy and evidence changes",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-34",
+      "scenario": "MFA recovery and upstream login",
+      "setup": "Federated login, recovery and remembered device",
+      "action": "Attempt to satisfy MFA without a fresh accepted ceremony",
+      "expected": "Google/GitHub or Entra authentication cannot silently count as Nathan MFA. Recovery, remembered devices and factor replacement follow the explicitly chosen assurance policy; they cannot accidentally preserve privileged evidence or bypass app MFA.",
+      "enforcementPaths": [
+        "privileged management",
+        "OIDC authorize/exchange/refresh",
+        "Worker authorizer"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/authentication-evidence.test.mjs",
+        "name": "ACCESS-34: MFA recovery and upstream login",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-35",
+      "scenario": "Worker revocation deadline",
+      "setup": "Warm authorized Worker sessions across regions",
+      "action": "Commit user block, app disable and final-grant removal during continuous traffic",
+      "expected": "Keep the session active and exercise both Worker integrations before and after committed user blocking, app disable and final-grant removal. Requests authorized at or beyond commit + 60 seconds deny; continuous traffic, cache refresh, isolate/region changes and stale reads/responses cannot reset the deadline.",
+      "enforcementPaths": [
+        "live acceptance paths named in scenario"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/integration/worker-revocation.test.mjs",
+        "name": "ACCESS-35: Worker revocation deadline",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-36",
+      "scenario": "Revocation during backend failure",
+      "setup": "Cached allow and outstanding old authorizer response",
+      "action": "Fail revalidation and deliver the old response after revocation",
+      "expected": "A revalidation error cannot extend a cached allow past its fixed validity. Missing state or expired evidence fails closed. Test old in-flight policy responses arriving after revocation and document in-flight request and long-lived connection boundaries.",
+      "enforcementPaths": [
+        "live acceptance paths named in scenario"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/integration/worker-revocation.test.mjs",
+        "name": "ACCESS-36: Revocation during backend failure",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-37",
+      "scenario": "Grafana acceptance and local permissions",
+      "setup": "Pinned live Grafana with generic OAuth configuration",
+      "action": "Use guided setup, PKCE, both modes, MFA, rotation and local roles",
+      "expected": "Pin a Grafana version/image digest and use browser-guided setup with exact HTTPS /login/generic_oauth, code + S256 PKCE, refresh and documented ID-token signature validation/JWKS configuration. Verify safe identity linking, both membership modes, MFA, credential/key rotation and a conservative Grafana role mapping; Nathan admin does not imply Grafana server admin.",
+      "enforcementPaths": [
+        "live acceptance paths named in scenario"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/integration/grafana.test.mjs",
+        "name": "ACCESS-37: Grafana acceptance and local permissions",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-38",
+      "scenario": "Reference relying-party acceptance",
+      "setup": "Externally hosted independent OIDC relying app",
+      "action": "Verify protocol, login methods, grants, MFA and replay errors",
+      "expected": "Use a small externally hosted confidential web app with an independent maintained OIDC library. Validate signed claims, issuer/audience/authorized party where applicable, nonce/state, PKCE, exact callback, replay and expiry. Complete each required login method and negative authorization/MFA cases without bypassing standard protocol behavior.",
+      "enforcementPaths": [
+        "live acceptance paths named in scenario"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/integration/reference-rp.test.mjs",
+        "name": "ACCESS-38: Reference relying-party acceptance",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-39",
+      "scenario": "External app sessions after revocation",
+      "setup": "Live Grafana/reference sessions with known token/refresh/logout configuration",
+      "action": "Commit Nathan revocation; measure last successful protected action",
+      "expected": "Measure Grafana and reference-app local-session behavior after Nathan user/app/grant revocation and refresh rejection. Record token lifetimes, refresh settings, local session limits and logout behavior; signing out of Nathan or rejecting refresh alone does not prove an existing app session ended.",
+      "enforcementPaths": [
+        "live acceptance paths named in scenario"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/integration/external-sessions.test.mjs",
+        "name": "ACCESS-39: External app sessions after revocation",
+        "status": "not implemented or executed"
+      }
+    },
+    {
+      "id": "ACCESS-40",
+      "scenario": "Larger directory and concurrent policy load",
+      "setup": "51000 users and the proposed larger workload",
+      "action": "Search/paginate, modify grants and run load/revocation/failure scenarios",
+      "expected": "Use the agreed synthetic data/traffic profile on real Workers/D1; the confirmed 51,000-user population is separate from the proposed app/concurrency/throughput targets. Verify complete Studio directory/grant selection beyond the current hard caps, concurrent membership writes, login/refresh bursts and cold/warm caches. User blocking, app disable and final-grant removal still deny within 60 seconds under the supported load and injected revalidation failures.",
+      "enforcementPaths": [
+        "live acceptance paths named in scenario"
+      ],
+      "freshness": "Worker newly authorized requests deny by authoritative commit + 60 seconds where applicable; new OIDC grants use current policy; external existing sessions have a separate measured bound.",
+      "eventualTest": {
+        "path": "tests/integration/capacity.test.mjs",
+        "name": "ACCESS-40: Larger directory and concurrent policy load",
+        "status": "not implemented or executed"
+      }
+    }
+  ],
+  "openQuestions": [
+    {
+      "id": "DESIGN-01",
+      "status": "executable proof required",
+      "question": "Can supported hooks guard every selected authorize/code/refresh path and fail before usable output?",
+      "next": "Execute plans/002-authentication-enforcement-spike.html under a separate Nathan issue. No provider patch assumed."
+    },
+    {
+      "id": "DESIGN-02",
+      "status": "executable proof required",
+      "question": "Can passkey/TOTP evidence and invitation redemption bind atomically or fail safely with the real D1 adapter?",
+      "next": "HOOK-07 through HOOK-11, then real Workers/D1 integration."
+    },
+    {
+      "id": "DESIGN-03",
+      "status": "design pending",
+      "question": "How does a gateway/binding caller prove its app and local session without sharing IdP cookies or trusting a supplied subject?",
+      "next": "Specify authenticated app-scoped transport, stable pairwise/internal-ID mapping and negative caller tests."
+    },
+    {
+      "id": "DESIGN-04",
+      "status": "proposed defaults",
+      "question": "Confirm or revise candidate token/session/MFA lifetimes and external-session bound after compatibility tests.",
+      "next": "Record supported limits; do not let refresh extend original absolute deadlines."
+    },
+    {
+      "id": "RELEASE-01",
+      "status": "measurement pending",
+      "question": "What cost/resource ceiling and recovery budgets fit the operator’s Cloudflare plan?",
+      "next": "Benchmark real Workers/D1 with rate limits enabled, including shared Grafana IPs. Report achieved valid traffic and legitimate 429s."
+    },
+    {
+      "id": "RELEASE-02",
+      "status": "release decision pending",
+      "question": "Which immutable Grafana/reference-RP versions and standalone CLI publication identity will be supported?",
+      "next": "Pin artifact digests/library versions and verify installation outside this repository; secure namespace before publishing a command."
+    },
+    {
+      "id": "RELEASE-03",
+      "status": "owner input needed before beta",
+      "question": "Who owns release/security/support and the vulnerability disclosure channel?",
+      "next": "Name owners and update cadence before public beta. Candidate pilot is 30 days across at least three installations."
+    }
+  ],
+  "implementationOrder": [
+    "Execute isolated supported-hook proof (Plan 002)",
+    "Finalize production access contract and Plan 003",
+    "Build shared schema/evaluator, privileged groups/grants and complete pagination",
+    "Integrate OIDC, admission and session MFA across all raw/continuation paths",
+    "Integrate authenticated gateway/binding sessions and bounded revocation",
+    "Complete CLI and Studio setup plus email/distribution",
+    "Run real provider/app/security/load gates; publish beta evidence",
+    "Monitor pilot, independently review security and decide production support"
+  ],
+  "verificationLimits": [
+    "No runtime source or manifests changed",
+    "No runtime, load or browser/provider tests executed",
+    "No current CI evidence inspected",
+    "No Cloudflare resources created or deployed",
+    "No independent security/dependency audit performed",
+    "Proposed values are neither confirmed user requirements nor measured capacity"
+  ]
+}

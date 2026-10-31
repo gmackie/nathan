@@ -1,0 +1,422 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="773.484884pt" height="531.971719pt" viewBox="0 0 773.484884 531.971719" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-10-28T20:38:29.789052</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.10.7, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 531.971719 
+L 773.484884 531.971719 
+L 773.484884 0 
+L 0 0 
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 91.866875 208.922034 
+L 689.970875 208.922034 
+L 689.970875 93.6 
+L 91.866875 93.6 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_1">
+    <g id="xtick_1">
+     <g id="line2d_1">
+      <path d="M 91.866875 208.922034 
+L 91.866875 93.6 
+" clip-path="url(#padf85515be)" style="fill: none; stroke-dasharray: 2.59,1.12; stroke-dashoffset: 0; stroke: #d1d5db; stroke-width: 0.7"/>
+     </g>
+     <g id="line2d_2">
+      <defs>
+       <path id="m3ffb87f5da" d="M 0 0 
+L 0 3.5 
+" style="stroke: #000000; stroke-width: 0.8"/>
+      </defs>
+      <g>
+       <use xlink:href="#m3ffb87f5da" x="91.866875" y="208.922034" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_1">
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle" x="91.866875" y="224.280315" transform="rotate(-0 91.866875 224.280315)">$0</text>
+     </g>
+    </g>
+    <g id="xtick_2">
+     <g id="line2d_3">
+      <path d="M 166.402363 208.922034 
+L 166.402363 93.6 
+" clip-path="url(#padf85515be)" style="fill: none; stroke-dasharray: 2.59,1.12; stroke-dashoffset: 0; stroke: #d1d5db; stroke-width: 0.7"/>
+     </g>
+     <g id="line2d_4">
+      <g>
+       <use xlink:href="#m3ffb87f5da" x="166.402363" y="208.922034" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_2">
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle" x="166.402363" y="224.280315" transform="rotate(-0 166.402363 224.280315)">$2,500</text>
+     </g>
+    </g>
+    <g id="xtick_3">
+     <g id="line2d_5">
+      <path d="M 240.937851 208.922034 
+L 240.937851 93.6 
+" clip-path="url(#padf85515be)" style="fill: none; stroke-dasharray: 2.59,1.12; stroke-dashoffset: 0; stroke: #d1d5db; stroke-width: 0.7"/>
+     </g>
+     <g id="line2d_6">
+      <g>
+       <use xlink:href="#m3ffb87f5da" x="240.937851" y="208.922034" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_3">
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle" x="240.937851" y="224.280315" transform="rotate(-0 240.937851 224.280315)">$5,000</text>
+     </g>
+    </g>
+    <g id="xtick_4">
+     <g id="line2d_7">
+      <path d="M 315.473339 208.922034 
+L 315.473339 93.6 
+" clip-path="url(#padf85515be)" style="fill: none; stroke-dasharray: 2.59,1.12; stroke-dashoffset: 0; stroke: #d1d5db; stroke-width: 0.7"/>
+     </g>
+     <g id="line2d_8">
+      <g>
+       <use xlink:href="#m3ffb87f5da" x="315.473339" y="208.922034" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_4">
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle" x="315.473339" y="224.280315" transform="rotate(-0 315.473339 224.280315)">$7,500</text>
+     </g>
+    </g>
+    <g id="xtick_5">
+     <g id="line2d_9">
+      <path d="M 390.008827 208.922034 
+L 390.008827 93.6 
+" clip-path="url(#padf85515be)" style="fill: none; stroke-dasharray: 2.59,1.12; stroke-dashoffset: 0; stroke: #d1d5db; stroke-width: 0.7"/>
+     </g>
+     <g id="line2d_10">
+      <g>
+       <use xlink:href="#m3ffb87f5da" x="390.008827" y="208.922034" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_5">
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle" x="390.008827" y="224.280315" transform="rotate(-0 390.008827 224.280315)">$10,000</text>
+     </g>
+    </g>
+    <g id="xtick_6">
+     <g id="line2d_11">
+      <path d="M 464.544314 208.922034 
+L 464.544314 93.6 
+" clip-path="url(#padf85515be)" style="fill: none; stroke-dasharray: 2.59,1.12; stroke-dashoffset: 0; stroke: #d1d5db; stroke-width: 0.7"/>
+     </g>
+     <g id="line2d_12">
+      <g>
+       <use xlink:href="#m3ffb87f5da" x="464.544314" y="208.922034" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_6">
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle" x="464.544314" y="224.280315" transform="rotate(-0 464.544314 224.280315)">$12,500</text>
+     </g>
+    </g>
+    <g id="xtick_7">
+     <g id="line2d_13">
+      <path d="M 539.079802 208.922034 
+L 539.079802 93.6 
+" clip-path="url(#padf85515be)" style="fill: none; stroke-dasharray: 2.59,1.12; stroke-dashoffset: 0; stroke: #d1d5db; stroke-width: 0.7"/>
+     </g>
+     <g id="line2d_14">
+      <g>
+       <use xlink:href="#m3ffb87f5da" x="539.079802" y="208.922034" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_7">
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle" x="539.079802" y="224.280315" transform="rotate(-0 539.079802 224.280315)">$15,000</text>
+     </g>
+    </g>
+    <g id="xtick_8">
+     <g id="line2d_15">
+      <path d="M 613.61529 208.922034 
+L 613.61529 93.6 
+" clip-path="url(#padf85515be)" style="fill: none; stroke-dasharray: 2.59,1.12; stroke-dashoffset: 0; stroke: #d1d5db; stroke-width: 0.7"/>
+     </g>
+     <g id="line2d_16">
+      <g>
+       <use xlink:href="#m3ffb87f5da" x="613.61529" y="208.922034" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_8">
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle" x="613.61529" y="224.280315" transform="rotate(-0 613.61529 224.280315)">$17,500</text>
+     </g>
+    </g>
+    <g id="xtick_9">
+     <g id="line2d_17">
+      <path d="M 688.150778 208.922034 
+L 688.150778 93.6 
+" clip-path="url(#padf85515be)" style="fill: none; stroke-dasharray: 2.59,1.12; stroke-dashoffset: 0; stroke: #d1d5db; stroke-width: 0.7"/>
+     </g>
+     <g id="line2d_18">
+      <g>
+       <use xlink:href="#m3ffb87f5da" x="688.150778" y="208.922034" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_9">
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle" x="688.150778" y="224.280315" transform="rotate(-0 688.150778 224.280315)">$20,000</text>
+     </g>
+    </g>
+    <g id="text_10">
+     <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle" x="390.918875" y="238.926253" transform="rotate(-0 390.918875 238.926253)">Actual modeled USD/month · both bars use the same dollar scale</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_2">
+    <g id="ytick_1">
+     <g id="line2d_19">
+      <defs>
+       <path id="m86f5f22a21" d="M 0 0 
+L -3.5 0 
+" style="stroke: #000000; stroke-width: 0.8"/>
+      </defs>
+      <g>
+       <use xlink:href="#m86f5f22a21" x="91.866875" y="116.314946" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_11">
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end" x="84.866875" y="120.494087" transform="rotate(-0 84.866875 120.494087)">App + Nathan</text>
+     </g>
+    </g>
+    <g id="ytick_2">
+     <g id="line2d_20">
+      <g>
+       <use xlink:href="#m86f5f22a21" x="91.866875" y="186.207088" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_12">
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end" x="84.866875" y="190.386228" transform="rotate(-0 84.866875 190.386228)">App + Clerk</text>
+     </g>
+    </g>
+   </g>
+   <g id="patch_3">
+    <path d="M 91.866875 98.841911 
+L 112.338792 98.841911 
+L 112.338792 133.787982 
+L 91.866875 133.787982 
+z
+" clip-path="url(#padf85515be)" style="fill: #64748b"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 91.866875 168.734052 
+L 112.338792 168.734052 
+L 112.338792 203.680123 
+L 91.866875 203.680123 
+z
+" clip-path="url(#padf85515be)" style="fill: #64748b"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 112.338792 98.841911 
+L 129.98641 98.841911 
+L 129.98641 133.787982 
+L 112.338792 133.787982 
+z
+" clip-path="url(#padf85515be)" style="fill: #15803d"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 112.338792 168.734052 
+L 625.888304 168.734052 
+L 625.888304 203.680123 
+L 112.338792 203.680123 
+z
+" clip-path="url(#padf85515be)" style="fill: #2563eb"/>
+   </g>
+   <g id="patch_7">
+    <path d="M 91.866875 208.922034 
+L 91.866875 93.6 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_8">
+    <path d="M 91.866875 208.922034 
+L 689.970875 208.922034 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="text_13">
+    <text style="font-weight: 700; font-size: 10.5px; font-family: 'DejaVu Sans'; text-anchor: start" x="136.394668" y="119.21229" transform="rotate(-0 136.394668 119.21229)">$1,278.57</text>
+   </g>
+   <g id="text_14">
+    <text style="font-weight: 700; font-size: 10.5px; font-family: 'DejaVu Sans'; text-anchor: start" x="632.296561" y="189.104432" transform="rotate(-0 632.296561 189.104432)">$17,911.65</text>
+   </g>
+   <g id="text_15">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start" x="91.866875" y="81.6" transform="rotate(-0 91.866875 81.6)">Common app $686.65 + incremental authentication</text>
+   </g>
+  </g>
+  <g id="axes_2">
+   <g id="patch_9">
+    <path d="M 91.866875 433.8 
+L 689.970875 433.8 
+L 689.970875 318.477966 
+L 91.866875 318.477966 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="patch_10">
+    <path d="M 91.866875 323.719877 
+L 413.075813 323.719877 
+L 413.075813 358.665948 
+L 91.866875 358.665948 
+z
+" clip-path="url(#p0016e9c589)" style="fill: #64748b"/>
+   </g>
+   <g id="patch_11">
+    <path d="M 91.866875 393.612018 
+L 114.795422 393.612018 
+L 114.795422 428.558089 
+L 91.866875 428.558089 
+z
+" clip-path="url(#p0016e9c589)" style="fill: #64748b"/>
+   </g>
+   <g id="patch_12">
+    <path d="M 413.075813 323.719877 
+L 689.970875 323.719877 
+L 689.970875 358.665948 
+L 413.075813 358.665948 
+z
+" clip-path="url(#p0016e9c589)" style="fill: #15803d"/>
+   </g>
+   <g id="patch_13">
+    <path d="M 114.795422 393.612018 
+L 689.970875 393.612018 
+L 689.970875 428.558089 
+L 114.795422 428.558089 
+z
+" clip-path="url(#p0016e9c589)" style="fill: #2563eb"/>
+   </g>
+   <g id="matplotlib.axis_3">
+    <g id="xtick_10">
+     <g id="line2d_21">
+      <g>
+       <use xlink:href="#m3ffb87f5da" x="91.866875" y="433.8" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_16">
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle" x="91.866875" y="449.158281" transform="rotate(-0 91.866875 449.158281)">0%</text>
+     </g>
+    </g>
+    <g id="xtick_11">
+     <g id="line2d_22">
+      <g>
+       <use xlink:href="#m3ffb87f5da" x="241.392875" y="433.8" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_17">
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle" x="241.392875" y="449.158281" transform="rotate(-0 241.392875 449.158281)">25%</text>
+     </g>
+    </g>
+    <g id="xtick_12">
+     <g id="line2d_23">
+      <g>
+       <use xlink:href="#m3ffb87f5da" x="390.918875" y="433.8" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_18">
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle" x="390.918875" y="449.158281" transform="rotate(-0 390.918875 449.158281)">50%</text>
+     </g>
+    </g>
+    <g id="xtick_13">
+     <g id="line2d_24">
+      <g>
+       <use xlink:href="#m3ffb87f5da" x="540.444875" y="433.8" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_19">
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle" x="540.444875" y="449.158281" transform="rotate(-0 540.444875 449.158281)">75%</text>
+     </g>
+    </g>
+    <g id="xtick_14">
+     <g id="line2d_25">
+      <g>
+       <use xlink:href="#m3ffb87f5da" x="689.970875" y="433.8" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_20">
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle" x="689.970875" y="449.158281" transform="rotate(-0 689.970875 449.158281)">100%</text>
+     </g>
+    </g>
+    <g id="text_21">
+     <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: middle" x="390.918875" y="463.804219" transform="rotate(-0 390.918875 463.804219)">Share of each stack’s own cash total · these bars have different dollar totals</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_4">
+    <g id="ytick_3">
+     <g id="line2d_26">
+      <g>
+       <use xlink:href="#m86f5f22a21" x="91.866875" y="341.192912" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_22">
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end" x="84.866875" y="345.372053" transform="rotate(-0 84.866875 345.372053)">App + Nathan</text>
+     </g>
+    </g>
+    <g id="ytick_4">
+     <g id="line2d_27">
+      <g>
+       <use xlink:href="#m86f5f22a21" x="91.866875" y="411.085054" style="stroke: #000000; stroke-width: 0.8"/>
+      </g>
+     </g>
+     <g id="text_23">
+      <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: end" x="84.866875" y="415.264195" transform="rotate(-0 84.866875 415.264195)">App + Clerk</text>
+     </g>
+    </g>
+   </g>
+   <g id="patch_14">
+    <path d="M 91.866875 433.8 
+L 91.866875 318.477966 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_15">
+    <path d="M 91.866875 433.8 
+L 689.970875 433.8 
+" style="fill: none; stroke: #000000; stroke-width: 0.8; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="text_24">
+    <text style="font-weight: 700; font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start" x="695.951915" y="344.228225" transform="rotate(-0 695.951915 344.228225)">46.3% auth</text>
+   </g>
+   <g id="text_25">
+    <text style="font-weight: 700; font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start" x="695.951915" y="414.120366" transform="rotate(-0 695.951915 414.120366)">96.2% auth</text>
+   </g>
+   <g id="text_26">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start" x="91.866875" y="306.477966" transform="rotate(-0 91.866875 306.477966)">Nathan auth increment $591.92; Clerk Pro fee $17,225.00</text>
+   </g>
+  </g>
+  <g id="text_27">
+   <text style="font-weight: 700; font-size: 17px; font-family: 'DejaVu Sans'; text-anchor: start" x="37.110875" y="20.117344" transform="rotate(-0 37.110875 20.117344)">What share of the app operating bill is authentication?</text>
+  </g>
+  <g id="text_28">
+   <text style="font-size: 11px; font-family: 'DejaVu Sans'; text-anchor: start" x="37.110875" y="50.4" transform="rotate(-0 37.110875 50.4)">1M active and retained users · read-heavy CRUD app · modeled current-rate cash costs, before labor</text>
+  </g>
+  <g id="text_29">
+   <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #475569" transform="translate(37.110875 502.743938)">Gray = common app. Green = Nathan auth/policy/email increment. Blue = Clerk Pro subscription.</text>
+   <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #475569" transform="translate(37.110875 512.821969)">Increment = combined Cloudflare bill − app-only bill + Nathan auth email; allowances and the $5 base apply once.</text>
+   <text style="font-size: 9px; font-family: 'DejaVu Sans'; fill: #475569" transform="translate(37.110875 522.9)">Illustrative workload, 28 Oct 2026 prices. No measured capacity claim; additional operations/development costs are excluded.</text>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="padf85515be">
+   <rect x="91.866875" y="93.6" width="598.104" height="115.322034"/>
+  </clipPath>
+  <clipPath id="p0016e9c589">
+   <rect x="91.866875" y="318.477966" width="598.104" height="115.322034"/>
+  </clipPath>
+ </defs>
+</svg>
