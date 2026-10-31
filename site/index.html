@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Independent, MIT-licensed auth you run in your own Cloudflare account. Inspect Nathan’s source, cost model and agent changes. Not affiliated with Cloudflare.">
+  <meta name="theme-color" content="#f6821f">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Nathan — You can see everything.">
+  <meta property="og:description" content="Independent open-source auth you run in your own Cloudflare account. Not affiliated with Cloudflare. Clerk’s pricing is public. So is the multiplication.">
+  <meta name="twitter:card" content="summary">
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+  <title>Nathan — You can see everything.</title>
+  <style>/* SITE_STYLES */</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to the proposal</a>
+<div class="site">
+  <div class="topline"><span>INDEPENDENT OPEN-SOURCE AUTH</span><span>PRE-BETA · BAD NEWS INCLUDED</span></div>
+  <header class="nav shell">
+    <a class="wordmark" href="#" aria-label="Nathan home"><span aria-hidden="true">🌭</span> nathan<span class="wordmark-period">.</span></a>
+    <nav aria-label="Main navigation"><a href="#thesis">The evidence</a><a href="#receipts">The Clerk bill</a><a href="#platform">Your account</a><a class="nav-source" href="https://github.com/gmackie/nathan/tree/feat/bootstrap-blueprint">GitHub <span aria-hidden="true">↗</span></a></nav>
+  </header>
+
+  <main id="main">
+    <section class="hero shell" aria-labelledby="hero-heading">
+      <div class="hero-grid">
+        <div class="hero-copy">
+          <p class="eyebrow"><span class="status-dot" aria-hidden="true"></span> NATHAN / AN INDEPENDENT OPEN-SOURCE PROJECT</p>
+          <h1 id="hero-heading"><span>YOU CAN</span><span>SEE</span><mark>EVERYTHING.</mark></h1>
+          <p class="hero-lede">Committed to the truth.<br>This has caused difficulties <em>for the pitch deck.</em></p>
+          <p class="hero-description">Independent, MIT-licensed auth you run in your own Cloudflare account. Read the Nathan source. Inspect the cost model. Review your agents’ changes. You control the installation, identities and keys.</p>
+          <div class="actions"><a class="button button-dark" href="https://github.com/gmackie/nathan/tree/feat/bootstrap-blueprint">See the source <span aria-hidden="true">↗</span></a><a class="text-link" href="#receipts">Follow the money <span aria-hidden="true">↓</span></a></div>
+          <p class="tiny hero-footnote">Not affiliated with or endorsed by Cloudflare. Pre-beta.<br>Keep credentials and user data private. Transparency has a scope.</p>
+        </div>
+        <div class="hero-art">
+          <div class="ownership-sticker"><span>SHOW</span> YOUR WORK<br><small>THE DECK CAN WAIT</small></div>
+          <div class="receipt">
+            <div class="receipt-top"><span>EXHIBIT A / THE ARITHMETIC</span><span>MODEL, NOT INVOICE</span></div>
+            <svg class="hotdog" viewBox="0 0 300 165" role="img" aria-labelledby="dog-title dog-desc">
+              <title id="dog-title">The proposed head of authentication</title><desc id="dog-desc">An illustrated hot dog in sunglasses stands on a server. It is a mascot. Do not give it credentials.</desc>
+              <path d="M67 111 76 125 66 137M221 112 214 125 224 137" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round"/>
+              <path d="M52 67c-5-26 15-42 38-37l151 34c25 6 29 35 10 50-9 7-20 9-32 6L76 88C62 85 54 78 52 67Z" fill="#ffda42" stroke="#1b1d19" stroke-width="3"/>
+              <path d="m77 37 150 34c11 3 17 13 13 23-3 9-14 13-25 10L69 71c-11-3-17-13-14-22 4-10 12-15 22-12Z" fill="#ef6746" stroke="#1b1d19" stroke-width="3"/>
+              <path d="m85 43 9 21 17-14 10 23 20-15 10 24 19-15 11 22 19-13 10 21" fill="none" stroke="#ffdf4b" stroke-width="6" stroke-linejoin="round" stroke-linecap="round"/>
+              <path d="M115 47h26l-3 15h-15Zm34 7h26l-3 16h-15Z" fill="#1b1d19"/><path d="m139 54 12 3" stroke="#1b1d19" stroke-width="4"/>
+              <path d="m130 81 23 5" stroke="#1b1d19" stroke-width="3" stroke-linecap="round"/>
+              <rect x="76" y="133" width="145" height="24" rx="2" fill="#e4e2d6" stroke="#1b1d19" stroke-width="3"/><circle cx="88" cy="145" r="3" fill="#246944"/><path d="M103 145h57m10 0h8m7 0h8m7 0h8" stroke="#1b1d19" stroke-width="2"/>
+              <path d="m34 32-8-6m11-4-3-10m204 19 7-8m-4 20 11-2" stroke="#1b1d19" stroke-width="3" stroke-linecap="round"/>
+            </svg>
+            <p class="receipt-caption">THE MASCOT HAS NOT VERIFIED THE PROTOCOL.</p>
+            <div class="receipt-rule"></div>
+            <p class="receipt-label">APP + NATHAN / MONTH*</p>
+            <p class="receipt-total">$1,278<span>.57</span></p>
+            <div class="receipt-row"><span>Same app + Clerk Pro</span><span>$17,911.65</span></div>
+            <div class="receipt-row"><span>Monthly retained users</span><span>1,000,000</span></div>
+            <div class="receipt-rule"></div>
+            <p class="receipt-note">*Modeled CRUD app + auth. October 2026 list rates. Labor extra. One million users is a projection, not tested capacity.</p>
+            <a class="receipt-link" href="#receipts">INSPECT THE CALCULATION. <span aria-hidden="true">↘</span></a>
+          </div>
+          <p class="art-caption">The spreadsheet is public.<br>It has not signed an NDA.<span>PLEASE READ THE ASSUMPTIONS BEFORE THE HEADLINE.</span></p>
+        </div>
+      </div>
+    </section>
+
+    <div class="manifesto-band" aria-label="What can be inspected"><span>SOURCE AVAILABLE.</span><span>COSTS ITEMIZED.</span><span>DIFFS REVIEWABLE.</span><span class="band-last">TRUTH IN SCOPE.</span></div>
+
+    <section class="section shell" id="thesis" aria-labelledby="thesis-heading">
+      <div class="section-heading"><p class="eyebrow">01 / THE TRUTH HAS SUPPORTING DOCUMENTS</p><h2 id="thesis-heading">The truth.<br><span class="serif">With file paths.</span></h2><p>A convincing explanation is pleasant. An inspectable implementation is more useful. Here is the part where the presentation is asked to produce the thing it is talking about.</p></div>
+      <div class="ownership-grid">
+        <article class="ownership-card"><span class="card-index">01</span><h3>The source.</h3><p>MIT-licensed Nathan code, built on Better Auth. Read it. Fork it. Ask an agent to explain a suspicious line. It should be able to answer without scheduling a founder interview.</p><a class="card-punchline" href="https://github.com/gmackie/nathan/tree/feat/bootstrap-blueprint">OPEN THE REPOSITORY <span aria-hidden="true">↗</span></a></article>
+        <article class="ownership-card"><span class="card-index">02</span><h3>The numbers.</h3><p>Published prices. Explicit workloads. A model you can rerun. Every projected dollar has a calculation behind it. The calculation is allowed to make the pitch less impressive.</p><a class="card-punchline" href="/reports/costs.html">FOLLOW THE CALCULATION <span aria-hidden="true">↗</span></a></article>
+        <article class="ownership-card ownership-highlight"><span class="card-index">03</span><h3>The unfinished work.</h3><p>Nathan is pre-beta. Live protocol, installation and security gates remain open. The roadmap still contains work because removing it from the slide did not complete it.</p><a class="card-punchline" href="https://github.com/gmackie/nathan/blob/feat/bootstrap-blueprint/docs/roadmap.md">INSPECT THE RELEASE GATES <span aria-hidden="true">↗</span></a></article>
+      </div>
+    </section>
+
+    <section class="section platform-section shell" id="platform" aria-labelledby="platform-heading">
+      <div class="section-heading"><p class="eyebrow">02 / THE AUTH DEPARTMENT / WORKERS + D1</p><h2 id="platform-heading">Your auth. Your account.<br><span class="serif">Cloudflare runs the compute.</span></h2><p>Workers run the identity provider. D1 holds identity and session data. Better Auth provides the foundation. It all runs in your Cloudflare account. There is no separate Nathan-hosted auth service to rent.</p></div>
+      <div class="stack-grid">
+        <article class="stack-card"><p class="eyebrow">EXECUTION / CLOUDFLARE WORKERS</p><h3>Run the auth.</h3><p>The IdP runs in your account. Workers charges for requests and active CPU. Waiting around does not become a billable personality trait.</p><a class="text-link" href="https://developers.cloudflare.com/workers/platform/pricing/">Read the Workers rates <span aria-hidden="true">↗</span></a></article>
+        <article class="stack-card"><p class="eyebrow">STORAGE / CLOUDFLARE D1</p><h3>Keep the identities.</h3><p>Users, sessions and policy state live in D1. Database work and storage are metered. The mere existence of a user is not a Nathan license event.</p><a class="text-link" href="https://developers.cloudflare.com/d1/platform/limits/">D1 has limits. Read them. <span aria-hidden="true">↗</span></a></article>
+        <article class="stack-card stack-ownership"><p class="eyebrow">CONTROL / YOUR CLOUDFLARE ACCOUNT</p><h3>Keep the keys.</h3><p>Your account. Full source. Your agents. Inspect the code and the bill. If Nathan disappoints you, the fork button is already the escalation process.</p><span class="stack-tag">NO NATHAN PER-USER LICENSE FEE.</span></article>
+      </div>
+      <p class="tiny platform-note">Cloudflare still sets its prices and limits. Please do not list it as a subsidiary.</p>
+    </section>
+
+    <section class="section receipts-section shell" id="receipts" aria-labelledby="receipts-heading">
+      <div class="section-heading"><p class="eyebrow">03 / CLERK’S PRICING HAS ENTERED THE SPREADSHEET</p><h2 id="receipts-heading">Clerk’s pricing is public.<br><span class="serif">So is the multiplication.</span></h2><p>Clerk Pro bills by monthly retained users. Cloudflare bills for resource usage. Below: published rates and one illustrative CRUD workload. The calculator is allowed to disagree with the sales pitch.</p></div>
+      <div class="cost-workbench">
+        <div class="workbench-top"><span>THE FINANCIAL FORECAST</span><span>ILLUSTRATIVE WORKLOAD · USD / MONTH</span></div>
+        <div class="cost-controls">
+          <label for="audience">Monthly active and retained users<select id="audience"><option value="50000">50,000 people</option><option value="51000">51,000 people</option><option value="100000">100,000 people</option><option value="250000">250,000 people</option><option value="1000000" selected>1,000,000 people</option><option value="2000000">2,000,000 people</option><option value="5000000">5,000,000 people</option></select></label>
+          <label for="activity">CRUD API requests per person / month<select id="activity"><option value="100">100 · they check occasionally</option><option value="1000" selected>1,000 · a read-heavy CRUD app</option><option value="10000">10,000 · they appear to live here</option></select></label>
+          <fieldset class="scope-control"><legend>Compare</legend><label><input type="radio" name="scope" value="crud" checked> Whole app + auth</label><label><input type="radio" name="scope" value="identity"> Just authentication</label></fieldset>
+        </div>
+        <p class="cost-common" id="cost-common">Same application in both stacks: <strong>$686.65/month</strong> before authentication.</p>
+        <div class="comparison-grid" aria-live="polite" aria-atomic="true" id="cost-comparison">
+          <article class="cost-card cost-clerk"><p class="cost-vendor">APP + CLERK PRO</p><p class="cost-amount" id="clerk-total">$17,911.65</p><p class="cost-unit">per month, at published monthly rates</p><div class="cost-item"><span>Common app</span><strong id="clerk-app">$686.65</strong></div><div class="cost-item"><span>Authentication</span><strong id="clerk-auth">$17,225.00</strong></div><div class="share-block"><svg viewBox="0 0 100 5" role="img" aria-labelledby="clerk-share-title"><title id="clerk-share-title">Authentication is 96.2 percent of the Clerk stack total</title><rect width="100" height="5" class="share-app"/><rect id="clerk-share-bar" x="3.83354" width="96.16646" height="5" class="share-clerk"/></svg><p><strong id="clerk-share">96.2%</strong> <span>of this total is auth</span></p></div><p class="cost-joke">Your users came back. Someone has monetized the reunion.</p></article>
+          <article class="cost-card cost-nathan"><p class="cost-vendor">APP + NATHAN <span class="cost-badge">YOUR ACCOUNT</span></p><p class="cost-amount" id="nathan-total">$1,278.57</p><p class="cost-unit">per month, under the modeled workload</p><div class="cost-item"><span>Common app</span><strong id="nathan-app">$686.65</strong></div><div class="cost-item"><span>Incremental auth + email</span><strong id="nathan-auth">$591.92</strong></div><div class="share-block"><svg viewBox="0 0 100 5" role="img" aria-labelledby="nathan-share-title"><title id="nathan-share-title">Authentication is 46.3 percent of the Nathan stack total</title><rect width="100" height="5" class="share-app"/><rect id="nathan-share-bar" x="53.70453" width="46.29547" height="5" class="share-nathan"/></svg><p><strong id="nathan-share">46.3%</strong> <span>of this total is auth</span></p></div><p class="cost-joke">The invoice does not include your time. The plan does.</p></article>
+        </div>
+        <div class="savings-line"><strong id="cost-savings">$16,633.08</strong><span id="savings-copy">less modeled cash spend per month, before incremental labor.</span></div>
+        <div class="receipts-fine-print"><p id="workload-note">1,000 API requests/person/month; 90% indexed reads; 100 kB stored app data/person; one Nathan policy check/API request. The app and Nathan share one set of Cloudflare allowances.</p><p>Every account is assumed active and monthly retained here. Auth assumes 4 sign-ins, 20 refreshes and 0.2 lifecycle emails/person/month. Auth shares allocate app costs first. Prices checked 28 Oct 2026; workloads are estimates. <strong>1M+ capacity is untested.</strong> Frequent refreshes can erase the savings. Operator time, development and unspecified services are extra.</p><div class="receipt-actions"><a class="text-link" href="/reports/costs.html">Read how the number was obtained <span aria-hidden="true">↗</span></a><a href="/reports/crud-total-costs.csv" download>Download the CSV</a></div></div>
+        <noscript><p class="no-script">The default 1M-user comparison above works without JavaScript. Enable JavaScript to change the scenario, or read the full static report.</p></noscript>
+      </div>
+      <p class="tiny sources-line">Public rates: <a href="https://clerk.com/pricing">Clerk</a> · <a href="https://developers.cloudflare.com/workers/platform/pricing/">Workers</a> · <a href="https://developers.cloudflare.com/d1/platform/pricing/">D1</a> · <a href="https://resend.com/pricing">Resend</a>. Clerk uses monthly retained users, not all stored accounts. Managed support and equivalent operational guarantees require their own evaluation.</p>
+      <p class="cost-disclosure"><strong>An inconvenient disclosure:</strong> Low usage or heavy refresh activity can favor Clerk. <a href="/reports/costs.html#sensitivity">Those cases are in the report.</a> The sales presentation has classified them as plot twists.</p>
+    </section>
+
+    <section class="section agents-section shell" id="agents" aria-labelledby="agents-heading">
+      <div class="agent-copy"><p class="eyebrow">04 / CONFIDENCE HAS BEEN REMOVED FROM THE ACCEPTANCE CRITERIA</p><h2 id="agents-heading">The agent said it works.<br><span class="serif">Show the diff.</span></h2><p>Your agents can read the actual source, propose changes, and explain the result. You can inspect their work in your own checkout. A reassuring paragraph is very inexpensive to generate.</p><p>Ask for the change, the checks, and the remaining risks. A second agent may review the first. A human remains responsible for security decisions, upgrades, recovery and incident response.</p><button class="button button-dark" type="button" id="copy-brief">Give the agent its instructions <span aria-hidden="true">↗</span></button><p class="copy-feedback tiny" id="copy-feedback" role="status"></p><a class="text-link" href="https://github.com/gmackie/nathan/blob/feat/bootstrap-blueprint/AGENTS.md">Read the agent operating rules <span aria-hidden="true">↗</span></a></div>
+      <div class="agent-terminal"><div class="terminal-top"><span><i></i><i></i><i></i></span><span>TRUTH_REVIEW.txt</span></div><pre><code><span class="terminal-muted"># Proposed division of responsibilities</span>
+
+01  Agent: read the source and rules.
+02  Agent: propose a small change.
+03  Human: review what actually changed.
+04  Both: verify it in staging.
+05  Agent: explain the remaining risks.
+06  Human: decide what goes live.
+
+<span class="terminal-muted"># On the subject of ownership:</span>
+git clone --branch feat/bootstrap-blueprint \
+  https://github.com/gmackie/nathan
+
+<span class="terminal-signal">&gt; Confidence is not a test result.</span></code></pre><p>A second agent is welcome to review the first agent. This still does not replace an independent security audit.</p></div>
+      <details class="brief-fallback" id="agent-brief-fallback"><summary>The actual instructions, in case the button becomes a project</summary><pre id="agent-brief">Work on Nathan, the independent open-source authentication blueprint that runs in the operator’s Cloudflare account, at https://github.com/gmackie/nathan/tree/feat/bootstrap-blueprint. Read README.md and AGENTS.md first. Work in an isolated branch, explain your plan, and make reviewable changes. Never expose credentials or tokens. Preserve exact redirects, PKCE, verified MFA evidence, explicit application grants and private upstream isolation. Test real authentication journeys in staging and report evidence and remaining limits. Nathan is pre-beta; green unit tests alone do not establish production readiness. Human operators own security decisions and deployment approval.</pre></details>
+    </section>
+
+    <section class="section shell lore-section" aria-labelledby="lore-heading">
+      <div class="lore-header"><div><p class="eyebrow">05 / THE NAMING PROCESS WAS COMPLETED</p><h2 id="lore-heading">How the name<br><span class="serif">was obtained.</span></h2></div><p>The reasoning is documented below. Each step follows from the previous step if you are willing to continue. By the end, the software had a name.<br><strong>Renaming it would require revisiting the process.</strong></p></div>
+      <figure class="lore-figure"><img src="/assets/naming-origin.webp" width="1168" height="445" alt="The original naming chain: Better Auth and Cloudflare, Benjamin Franklin, a hundred-dollar bill, Ball Park Franks, Nathan’s Famous hot dogs, and Nathan Fielder."><figcaption>Original project naming diagram. It explains the name. It does not establish an endorsement from anybody in the diagram.</figcaption></figure>
+    </section>
+
+    <section class="section shell faq-section" aria-labelledby="faq-heading">
+      <div class="section-heading"><p class="eyebrow">06 / QUESTIONS THAT SURVIVED THE PRESENTATION</p><h2 id="faq-heading">There are still<br><span class="serif">some practical matters.</span></h2></div>
+      <div class="faq-list">
+        <details><summary>What does “see everything” actually include?</summary><p>The Nathan source, published price inputs, workload assumptions, cost calculations and the changes your agents propose. Credentials, signing keys and personal data should remain private. Cloudflare’s underlying platform is still Cloudflare’s; this promise covers Nathan’s code and operating model. Open source makes inspection possible. It does not establish security or production readiness by itself.</p></details>
+        <details><summary>Is this ready, or does the website just look ready?</summary><p>The website is ahead of the evidence. Nathan is pre-beta. Initial Worker, gateway, CLI, Studio and SDK implementations exist, but complete live protocol, installation and security acceptance gates are still pending. Evaluate it in staging and contribute. Production support is planned after a monitored pilot. <a href="https://github.com/gmackie/nathan/blob/feat/bootstrap-blueprint/docs/roadmap.md">Read the roadmap</a>.</p></details>
+        <details><summary>Who is in charge when something breaks?</summary><p>You. Your agents can work on the MIT-licensed source, but human operators own upgrades, backups, incident response and security decisions. You control your installation, identities, keys and Cloudflare account. Cloudflare still supplies the underlying platform, sets its prices and imposes its limits. The arrangement gives you code and operational control; it does not give you Cloudflare.</p></details>
+        <details><summary>Does every app need to run on Cloudflare?</summary><p>Nathan itself runs on Cloudflare. Apps hosted elsewhere are intended to connect as explicitly registered OIDC clients, with browser-guided setup in the launch scope. Grafana and a reference web app are acceptance targets alongside the protected Worker. Those live installation and protocol checks remain pending. Your login authority lives in your account; the apps can live elsewhere.</p></details>
+        <details><summary>What am I supposed to be able to do at launch?</summary><p>A CLI installation wizard, browser-guided external OIDC app setup, protected Workers, per-app users/groups or any-signed-in-user policies, and administrator/per-app MFA. Google, GitHub, passkeys, TOTP, email/password and enterprise OIDC are in the launch scope. These are release goals, not a claim that every end-to-end flow is verified. SAML and directory sync come later.</p></details>
+        <details><summary>Does the hot dog make the infrastructure free?</summary><p>The hot dog has no effect on the pricing. Nathan’s MIT-licensed code has no Nathan per-user license fee. Cloudflare infrastructure, auth email and your operating effort are real costs. At 50,000 retained users, the identity-only example and Clerk Pro both model $25/month. Low usage or frequent refreshes can favor Clerk. The <a href="/reports/costs.html">full report</a> shows those cases.</p></details>
+        <details><summary>Where is the sustainable part?</summary><p>In paying for work that is actually done, including maintenance. Keep the core auditable, document the operating model, share improvements upstream, and fund the maintenance you rely on. Lower infrastructure costs create room in that budget. They do not maintain the software. This blueprint promises neither free support, unlimited scale nor permanent vendor prices. Contributions to code, documentation and real-world validation all count.</p></details>
+      </div>
+    </section>
+
+    <section class="closing shell" aria-labelledby="closing-heading"><p class="eyebrow">THE CLAIM HAS BEEN PROVIDED WITH A LINK</p><h2 id="closing-heading">Go on.<br><span class="serif">Check the work.</span></h2><p>The truth can survive a second tab.</p><div class="actions"><a class="button button-dark" href="https://github.com/gmackie/nathan/tree/feat/bootstrap-blueprint">Inspect the blueprint <span aria-hidden="true">↗</span></a><a class="text-link" href="https://github.com/gmackie/nathan/blob/feat/bootstrap-blueprint/CONTRIBUTING.md">Help verify the real thing <span aria-hidden="true">↗</span></a></div></section>
+  </main>
+
+  <footer class="footer shell"><a class="wordmark" href="#">🌭 nathan.</a><p>An independent open-source authentication blueprint.<br>Runs on Workers + D1. Operated by you.</p><nav aria-label="Footer navigation"><a href="https://github.com/gmackie/nathan/blob/feat/bootstrap-blueprint/LICENSE">MIT license</a><a href="https://github.com/gmackie/nathan/blob/feat/bootstrap-blueprint/SECURITY.md">Security</a><a href="/reports/costs.html">Cost report</a><a href="https://github.com/gmackie/nathan/tree/feat/bootstrap-blueprint">Source ↗</a></nav><p class="footer-small">Pre-beta. Independent project. Not affiliated with or endorsed by Cloudflare. Please keep production secrets out of the presentation.</p></footer>
+</div>
+<script>/* SITE_SCRIPT */</script>
+</body>
+</html>

@@ -1,0 +1,63 @@
+name: Nathan CI
+on:
+  push:
+    branches: [main, feat/**]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: package.json
+      - name: Verify the original naming illustration
+        run: echo 'ee83ade5d1023fca1892d0a7c0d86d7348a47b3077106d7f16b97d578f3a9920  assets/naming-origin.png' | sha256sum -c -
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify static marketing site and cost scenarios
+        run: npm run verify:site
+      - name: Install dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Archive resolved dependency lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: nathan-dependency-lockfile
+          path: package-lock.json
+          retention-days: 7
+      - name: Generate Better Auth SQL schema
+        run: npm run schema:generate
+      - name: Archive generated identity schema
+        uses: actions/upload-artifact@v4
+        with:
+          name: nathan-generated-auth-schema
+          path: migrations/0002_better_auth.sql
+          retention-days: 7
+      - name: Verify committed Better Auth schema is in sync
+        run: git diff --exit-code -- migrations/0002_better_auth.sql
+      - name: Unit tests
+        run: npm test
+      - name: Static types
+        run: npm run typecheck
+      - name: Auth Worker bundle (no deployment)
+        run: npm run build:auth
+      - name: Gateway Worker bundle (no deployment)
+        run: npm run build:gateway
+      - name: Pack pinned IdP release into hosted installer
+        run: npm run pack:release
+      - name: Verify release manifest and every package hash
+        run: npm run verify:release
+      - name: Archive installer release manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: nathan-installer-release-manifest
+          path: installer/public/release/manifest.json
+          retention-days: 7
+      - name: Hosted installer Worker bundle (no deployment)
+        run: npm run build:installer

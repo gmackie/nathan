@@ -1,0 +1,52 @@
+Nathan vs Clerk: cost and ownership report
+Pricing snapshot: 2026-10-28 | Currency: USD, before tax
+
+Open report.html for the full report and interactive workload calculator.
+Open report-static.html for the script-free, expanded, printable edition.
+Both reports work without a server or remote assets.
+
+Figures: cost-at-scale.png/svg and one-million-breakdown.png/svg.
+CRUD figures: crud-total-cost-at-scale.png/svg and crud-cost-composition.png/svg.
+Data: model-inputs.json, model-results.json, baseline-costs.csv,
+and sensitivity-costs.csv; crud-total-costs.csv and crud-sensitivity-costs.csv.
+Evidence: source-ledger.json and 12 official page snapshots under sources/.
+SHA256SUMS records the integrity of every other file in this bundle.
+
+Reproduce the calculations from this directory:
+  python3 cost_model.py
+  node verify_model.mjs
+  uv run --with matplotlib==3.10.7 python make_charts.py
+  python3 build_report.py
+
+Python arithmetic uses only the standard library and runs offline. The chart
+step requires matplotlib; uv may download it on the first run. The saved charts
+and reports need no dependencies. Updating official source snapshots with
+fetch_sources.py requires internet and a deliberate review of model-inputs.json;
+fetching pages does not automatically change the model's prices.
+
+Prices and vendor limits are sourced facts. Nathan requests, CPU, rows, storage,
+mail and labor are explicit assumptions, not measured production usage. Costs
+through 1M-5M users are projections and do not establish supported capacity.
+They add no 1M-user load-test requirement; the launch population stays 51,000.
+
+Identity-only results exclude application hosting. CRUD results include the same
+Workers/D1 app on both sides, with one set of Cloudflare account inclusions and
+the $5 base applied once. Authentication's share uses an app-first incremental
+allocation: combined app/Nathan bill minus app-only bill, plus auth email.
+The original identity-only gateway scenarios are not added to CRUD traffic.
+CRUD presets: 100, 1000 or 10000 API requests per active user/month, a write-heavy
+variant, and full diagnostic logging. Activity and MRU can vary independently.
+All values are illustrative rather than a measured typical-usage benchmark.
+
+Savings exclude development and incremental operation/security work until entered;
+unspecified external services need separate budgets. Frequent token refreshes can
+make Nathan cost more than Clerk. The modeled 12 GB at 1M stored accounts exceeds
+one D1 database's 10 GB limit and needs an unimplemented partitioning design.
+The CRUD app adds 100 GB at 1M stored accounts, needing at least ten databases
+in either stack before headroom. Low row prices do not establish throughput.
+Read the report's assumptions, adverse cases and ownership section with its
+headline figures. Recheck vendor prices before public use.
+
+Prepared under NATH-2: https://tasks.gmac.io/gmacko/issue/NATH-2
+CRUD extension: NATH-3: https://tasks.gmac.io/gmacko/issue/NATH-3
+Related launch planning: NATH-1. Runtime source was not changed.

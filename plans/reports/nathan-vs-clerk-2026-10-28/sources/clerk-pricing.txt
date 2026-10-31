@@ -1,0 +1,389 @@
+# Clerk Pricing — Plans for Every Stage
+
+> Clear pricing that scales with your business. Every plan supports unlimited applications. No credit card required to start.
+
+[Start building for free](https://clerk.com/docs/quickstart) | [Talk to sales](https://clerk.com/contact/sales)
+
+## Plans Overview
+
+|  | Hobby | Pro | Business | Enterprise |
+|---|---|---|---|---|
+| Price (monthly) | Free | $25/mo | $300/mo | Custom |
+| Price (annual) | Free | $20/mo | $250/mo | Custom (annual only) |
+| MRUs included | 50,000 per app | 50,000 MRUs included per app, then volume pricing (see below) | 50,000 MRUs included per app, then volume pricing (see below) | Custom |
+| Dashboard seats | Up to 3 | Up to 3 | 10 included (Additional $20/mo each) | Custom |
+| Best for | Everything you need to start building. | Scale with full-featured authentication. | Tackle compliance and growing teams. | Tailored solutions and guarantees. |
+
+## Key Definitions
+
+Clerk bills on retained users, not monthly active users (MAU). These terms are used throughout this page.
+
+- **Monthly Retained User (MRU):** A Monthly Retained User is a user who visits your app in a given month at least one day after signing up. This free day prevents unwelcome fees from users who don't activate.
+- **First Day Free:** Users are not counted as active unless they sign in again after their first 24 hours, so a user who signs up and never returns is never billed.
+- **Grace period:** If you exceed 50,000 monthly retained users on Hobby, or 100 monthly retained organizations without the B2B Authentication add-on, you get a one-month grace period to upgrade so your application keeps running.
+- **Monthly Retained Organization (MRO):** A monthly retained organization is an organization with at least 2 members, where at least one of those members is a monthly retained user for that month.
+- **Enterprise connections:** Enterprise connections provide enterprise SSO with SAML, OIDC, or EASIE. Directory Sync connections attach to an enterprise connection and are counted and billed separately.
+- **SSO connections:** SSO connections, also called enterprise connections, provide single sign-on with SAML, OIDC, or EASIE. Paid plans include one per app.
+- **Directory Sync connections:** Directory Sync connections provision and deprovision users with SCIM or Google Workspace. Each attaches to an SSO connection but is counted and billed on its own. Paid plans include one per app.
+
+## Hobby — Free (No credit card required)
+
+Everything you need to start building. Included in Hobby:
+
+- Up to 3 dashboard seats
+- Unlimited applications
+- 50,000 MRU limit per app
+- Up to 5 user impersonations
+- APIs and prebuilt UIs for sign-up, sign-in, and user profile (+ most authentication features)
+- Custom domain
+- Fixed, 7 day session lifetime
+- Application Logs (1 day retention)
+- Machine Authentication (API Keys & M2M Tokens limit per month; API Keys: 1,000 creations & 100,000 verifications per month; M2M Tokens: 2,500 creations & 100,000 verifications per month)
+- Protect (Brute force prevention and basic protections)
+
+## Pro — $25/mo ($20/mo billed annually)
+
+Scale with full-featured authentication. Everything in Hobby, plus:
+
+- 50,000 MRU included per app (Additional $0.02/mo each; volume discounts available)
+- 1 SSO connection included (Additional $75/mo each; volume discounts available)
+- 1 Directory Sync connection included (Additional $75/mo each from January 1, 2027; volume discounts available)
+- Remove Clerk branding
+- Multi-factor authentication (MFA)
+- Satellite domains (Additional $10/mo each)
+- Custom session lifetime
+- Application Logs (7 day retention)
+- SMS Authentication available (US and Canada, $0.01 per SMS. International: market rate)
+- Machine Authentication (API Keys & M2M Tokens included per month + extra; see API Keys and M2M Tokens under Volume Pricing below)
+
+## Business — $300/mo ($250/mo billed annually)
+
+Tackle compliance and growing teams. Everything in Pro, plus:
+
+- 10 dashboard seats included (Additional $20/mo each)
+- SOC2 Report
+- Enhanced dashboard roles
+- Enterprise SSO for workspace
+- Priority support
+- Application and Admin Logs (30 day retention)
+- Protect (Advanced protections)
+
+## Enterprise — Custom (Only billed annually)
+
+Tailored solutions and guarantees. Everything in Business, plus:
+
+- Annual committed use discounts
+- 99.99% Uptime SLA
+- Premium support SLA + dedicated slack channel
+- Application and Admin Logs (Custom retention)
+- Log sink destinations (Stream logs to your SIEM)
+- HIPAA compliance available with BAA
+- Onboarding & migration support
+- Custom security questionnaires (Most security reviews can be completed using the security documentation we provide, including our SOC2 report and related materials. If your procurement process requires a custom security questionnaire to be completed by our team, an Enterprise plan may be required.)
+
+[Talk to sales](https://clerk.com/contact/sales)
+
+## Feature Comparison
+
+### Platform pricing
+
+| Feature | Hobby | Pro | Business |
+|---|---|---|---|
+| Base price | $0 | $25/mo, $20/mo billed annually | $300/mo, $250/mo billed annually |
+| Included applications. Every plan gets unlimited applications. | Unlimited | Unlimited | Unlimited |
+| Included MRUs. A user is counted as retained when they return 24+ hours after signing up. | 50,000 per app | 50,000 MRUs included per app, then volume pricing (see below) | 50,000 MRUs included per app, then volume pricing (see below) |
+| Dashboard seats. Invite team members to collaborate in the Clerk dashboard. | Up to 3 | Up to 3 | 10 included (Additional $20/mo each) |
+
+### Authentication & user features
+
+| Feature | Hobby | Pro | Business |
+|---|---|---|---|
+| Remove Clerk branding. Remove the "Secured by Clerk" branding from Clerk's prebuilt UIs. | No | Yes | Yes |
+| [Social connections](https://clerk.com/docs/guides/configure/auth-strategies/social-connections/overview). Let users sign in with social providers like Google, GitHub, or Facebook. | Up to 3 | Unlimited | Unlimited |
+| Usernames. A classic, tried and true method of signing in. | Yes | Yes | Yes |
+| Passwords. Automatically checked against leaked password databases for extra security. | Yes | Yes | Yes |
+| Email codes. Authenticate with a six-digit code sent to the user's email. | Yes | Yes | Yes |
+| Email links. Authenticate with a link to the user's email. Also known as "magic links." | Yes | Yes | Yes |
+| SMS codes. Authenticate with a code sent directly to the user's phone via SMS. US and Canada, $0.01 per SMS. International: market rate | No | Per SMS fees apply | Per SMS fees apply |
+| Sign in tokens. Bypass standard sign-in and authenticate with single-use tokens generated by API. | Yes | Yes | Yes |
+| Web3 wallets. Authenticate with MetaMask or Coinbase Wallet. | Yes | Yes | Yes |
+| Automatic account linking. Ensure only one account is created when multiple authentication methods are used, like email codes and Sign in with Google. | Yes | Yes | Yes |
+| [User metadata](https://clerk.com/docs/guides/users/extending#user-metadata). Store custom data with user objects in Clerk. | Yes | Yes | Yes |
+| [Webhooks for data sync](https://clerk.com/docs/guides/development/webhooks/overview#webhooks-overview). Synchronize Clerk user data with external systems. | Yes | Yes | Yes |
+| [Passkeys](https://clerk.com/docs/guides/configure/auth-strategies/sign-up-sign-in-options#passkeys). Authenticate with any form of passkeys. | No | Yes | Yes |
+| [Biometric sign-in](https://clerk.com/docs/guides/development/custom-flows/authentication/biometric-sign-in). Let returning users sign in to native apps with their device's biometrics. | No | Yes | Yes |
+| Custom password requirements. By default, Clerk strictly adheres to NIST 800-63B for password requirements. This feature allows setting custom requirements. | No | Yes | Yes |
+| Custom email templates. Tailor the messages users receive. | No | Yes | Yes |
+| Multifactor authentication (MFA). Allow users to enable multifactor authentication with authenticator applications, SMS codes, and backup codes. | No | Yes | Yes |
+| [SSO connections](https://clerk.com/docs/guides/configure/auth-strategies/enterprise-connections/overview). Enterprise single sign-on with SAML, OIDC, or EASIE. | No | 1 connection included per app, then volume pricing (see below) | 1 connection included per app, then volume pricing (see below) |
+| [Directory Sync connections](https://clerk.com/docs/guides/configure/auth-strategies/enterprise-connections/directory-sync). Provision and deprovision users with SCIM or Google Workspace. Counted separately from SSO connections. Billing for Directory Sync connections starts January 1, 2027. | No | 1 connection included per app, then volume pricing (see below) | 1 connection included per app, then volume pricing (see below) |
+| [Waitlist mode](https://clerk.com/docs/guides/secure/restricting-access#waitlist). Collect sign-up requests in a waitlist and choose who gets access. | Yes | Yes | Yes |
+| [Secret Key IP restrictions](https://clerk.com/docs/guides/secure/secret-key-ip-allowlist). Limit each Secret Key to the IP addresses and ranges your servers use. | No | No | Yes |
+
+### Machine Authentication
+
+| Feature | Hobby | Pro | Business |
+|---|---|---|---|
+| [API Keys](https://clerk.com/docs/guides/development/machine-auth/api-keys). Allow users to create API keys that can delegate access to your application's API on their behalf. | 1,000 creations & 100,000 verifications (limit per month) | Creations: 1,000 included per month; Verifications: 100,000 included per month; then volume pricing (see below) | Creations: 1,000 included per month; Verifications: 100,000 included per month; then volume pricing (see below) |
+| [M2M Tokens](https://clerk.com/docs/guides/development/machine-auth/m2m-tokens). Authenticate requests between different backend services within your own infrastructure. | 2,500 creations & 100,000 verifications (limit per month) | Creations: 2,500 included per month; Verifications: 100,000 included per month; then volume pricing (see below) | Creations: 2,500 included per month; Verifications: 100,000 included per month; then volume pricing (see below) |
+
+### Protect features
+
+| Feature | Hobby | Pro | Business |
+|---|---|---|---|
+| [Brute force prevention](https://clerk.com/docs/guides/protect/user-lockout). Limit repeated failed sign-in attempts. On by default. | Yes | Yes | Yes |
+| [Basic protections](https://clerk.com/docs/guides/protect/protections/overview#included-on-every-plan). Captcha challenges, device checks, and more. | Yes | Yes | Yes |
+| [User bans](https://clerk.com/docs/reference/backend-api/tag/users/POST/users/%7Buser_id%7D/ban). Prevent unwanted users from returning. | No | Yes | Yes |
+| [Blocklist](https://clerk.com/docs/guides/secure/restricting-access#blocklist). Block users based on attributes such as email domain, phone number, or Web3 wallet address. | No | Yes | Yes |
+| [Advanced protections](https://clerk.com/docs/guides/protect/protections/overview#included-in-the-business-plan). Stronger protections for applications under frequent attack, such as rate limits, network-type blocks, country restrictions, and more. | No | No | Yes |
+
+### Session management features
+
+| Feature | Hobby | Pro | Business |
+|---|---|---|---|
+| [Custom session tokens](https://clerk.com/docs/guides/sessions/customize-session-tokens). Add custom data into the default authentication tokens. | Yes | Yes | Yes |
+| [Custom JWT templates](https://clerk.com/docs/guides/sessions/jwt-templates). Completely custom token claims designed for external service integration. | Yes | Yes | Yes |
+| Custom session duration. Set a maximum session duration, from 5 minutes to 10 years. | Fixed to 7 days | Yes | Yes |
+| Device tracking and revocation. Allow users to view and log out the devices actively accessing their account. | Yes | Yes | Yes |
+| Simultaneous sessions. Allow users to sign in to multiple accounts on one device. | No | Yes | Yes |
+| [Satellite domains](https://clerk.com/docs/guides/dashboard/dns-domains/satellite-domains). Use the same session across applications hosted on different domains. | No | $10/mo each | $10/mo each |
+
+### Observability
+
+| Feature | Hobby | Pro | Business |
+|---|---|---|---|
+| Application Logs. An events stream of Clerk-driven activity across your applications — sign-ins, sign-ups, user updates, organization changes, billing events, and more. | 1 day retention | 7 day retention | 30 day retention |
+| Admin Logs. An audit trail of workspace admin actions — instance configuration changes, role and permission edits, secret rotations, and other Dashboard-initiated operations. | No | No | 30 day retention |
+
+### Support & compliance
+
+| Feature | Hobby | Pro | Business |
+|---|---|---|---|
+| Full data exports. No questions asked data exports of Clerk user data. | Yes | Yes | Yes |
+| Community support. Our active Discord with over 10,000 members is supported by Clerk staff and community champions. | Yes | Yes | Yes |
+| Email support. 24/7 access to our expert support staff. | Included (Billing, registration, and abuse queries only) | Yes | Priority Email, Support included |
+| GDPR / DPAs. Our service is built to be compliant with GDPR principles. | Yes | Yes | Yes |
+| SOC2 report. Learn about the safeguards we have in place to protect user data. | No | No | Yes |
+| HIPAA compliance. HIPAA Business Associate Agreement (BAA) available on the Enterprise plan. | No | No | No |
+
+## Add-ons
+
+Add-ons apply to all of your applications.
+
+### B2B Authentication
+
+The easy solution to multi-tenancy with a full suite of B2B SaaS features.
+
+**Included (Free in all plans):**
+- 100 MRO included per app
+- Up to 20 members per Organization
+- Includes Admin & Member roles
+- Custom permissions
+- Invitations
+
+**Enhanced add-on — $100/mo ($85/mo billed annually):**
+- 100 MRO included per app (Additional $1/mo each; volume discounts available)
+- Unlimited members per Organization
+- Link Enterprise connections with Organizations
+- Verified Domains & Automatic Invitations
+- Custom Roles & Rolesets
+
+#### B2B Authentication Feature Comparison
+
+| Feature | Without add-ons | With B2B Authentication add-ons |
+|---|---|---|
+| Organization membership limit. Users who have access to a given organization. | 20 members | Unlimited members |
+| Monthly retained organizations (MROs). An organization is retained when it has at least 2 members and at least one of those members is a monthly retained user for that month. | 100 included per app | 100 MROs included per app, then volume pricing (see below) |
+| Invitation emails. Easily invite users to join an organization from the dashboard or directly in the application. | Yes | Yes |
+| [Basic RBAC with custom permissions](https://clerk.com/docs/guides/organizations/control-access/roles-and-permissions#roles-and-permissions). Assign users to predefined roles (Admin, Member) and define custom permissions for each role. | Yes | Yes |
+| [Custom roles and role sets](https://clerk.com/docs/guides/organizations/control-access/role-sets). Create unlimited custom roles and organize them into RoleSets for advanced access control hierarchies. | No | Yes |
+| [Auto join / request to join](https://clerk.com/docs/guides/organizations/add-members/verified-domains#verified-domains). Streamline enrollment into organizations. | No | Yes |
+| Domain restrictions. Restrict organization members to only specific email domains. | No | Yes |
+
+### Protect
+
+Fraud and abuse protection, built into every sign-up and sign-in.
+
+**Included (Free in all plans):**
+- Brute force prevention (On by default, always free)
+- Basic protections (Captcha challenges, device checks, and more)
+
+**Business plan (Included in Business):**
+- Advanced protections (Rate limits, network-type blocks, country restrictions, and more)
+
+**Usage:** 10,000 protection checks free per month, then $0.002 per protection check. Basic and advanced protections use protection checks. Brute force prevention doesn't count toward them.
+
+| Protection checks per month | Cost per month |
+|---|---|
+| 10,000 | $0 |
+| 25,000 | $30 |
+| 50,000 | $80 |
+| 100,000 | $180 |
+| 250,000 | $480 |
+| 500,000 | $980 |
+| 1,000,000 | $1,980 |
+
+### Administration
+
+Advanced user management and administrative capabilities for larger teams.
+
+**Included (Free in all plans):**
+- 5 impersonations per month
+
+**Enhanced add-on — $100/mo ($85/mo billed annually):**
+- Unlimited impersonations
+
+#### Administration Feature Comparison
+
+| Feature | Without add-ons | With Administration add-ons |
+|---|---|---|
+| User impersonation. Access an application as a user for easy troubleshooting. | 5 free | Unlimited |
+
+### Billing
+
+The easiest way to implement subscriptions for applications. Pay only for what you bill, no upfront costs.
+
+**Included in all plans (0.7% of billing volume):**
+- Stripe 2.9% + Stripe transaction charge $0.30 + Clerk Billing 0.7%
+- All features included for subscription billing (usage and per seat billing coming soon)
+- No payment integration code, UI work, or webhook management required.
+- Unified user and subscription data.
+- Billing-aware authorization for plan-based access control and feature gating.
+- Prebuilt components for pricing pages and customer self-service subscription management.
+
+## Volume Pricing
+
+### Monthly Retained Users (MRUs)
+
+| Range | Price |
+|---|---|
+| 50,000 MRUs | included per app |
+| 50,001 - 100,000 | $0.02/mo each |
+| 100,001 - 1,000,000 | $0.018/mo each |
+| 1,000,001 - 10,000,000 | $0.015/mo each |
+| 10,000,001+ | $0.012/mo each |
+
+### Monthly Retained Organizations (MROs)
+
+| Range | Price |
+|---|---|
+| 100 MROs | included per app |
+| 101 - 1,000 | $1/mo each |
+| 1,001 - 10,000 | $0.90/mo each |
+| 10,001 - 100,000 | $0.75/mo each |
+| 100,001+ | $0.60/mo each |
+
+### Enterprise SSO connections (SAML / OIDC / EASIE)
+
+| Range | Price |
+|---|---|
+| 1 connection | included per app |
+| 2 - 15 | $75/mo each |
+| 16 - 100 | $60/mo each |
+| 101+ | Contact us |
+
+### Directory Sync connections (SCIM / Google Workspace), billing starts January 1, 2027
+
+| Range | Price |
+|---|---|
+| 1 connection | included per app |
+| 2 - 15 | $75/mo each |
+| 16 - 100 | $60/mo each |
+| 101+ | Contact us |
+
+### API Keys
+
+**Creations**
+
+| Range | Price |
+|---|---|
+| 1,000 | Included per month |
+| 1,001+ | $0.001 each |
+
+**Verifications**
+
+| Range | Price |
+|---|---|
+| 100,000 | Included per month |
+| 100,001+ | $0.00001 each |
+
+### M2M Tokens
+
+**Creations**
+
+| Range | Price |
+|---|---|
+| 2,500 | Included per month |
+| 2,501+ | $0.001 each |
+
+**Verifications**
+
+| Range | Price |
+|---|---|
+| 100,000 | Included per month |
+| 100,001+ | $0.00001 each |
+
+## FAQ
+
+### Is Clerk cheaper than Auth0?
+
+For many SaaS teams that need paid auth features, Clerk is often cheaper and more transparent. Clerk Pro is $20/mo billed annually and includes 50K MRUs plus 1 Enterprise connection, with published overage rates. Auth0's free tier is generous at 25K MAU, but its paid plans start at $35/mo for Essentials and $240/mo for Professional, with higher user and SSO tiers moving into custom pricing. The gap is clearest for B2B/SSO-heavy apps: Clerk includes one Enterprise connection on Pro with published pricing for additional connections, while larger Auth0 SSO needs move into custom or Enterprise tiers.
+
+### What happens when I exceed the first 50,000 monthly retained users or 100 monthly retained organizations?
+
+Once you exceed 50,000 monthly retained users you will be required to upgrade to the Pro plan. Once you exceed 100 monthly retained organizations, you will be required to upgrade to the B2B Authentication add-on. Each user or organization beyond the free tier allowance will be added to your monthly bill.
+
+You'll be given a one-month grace period so your application can continue to operate correctly.
+
+### Is there a free trial?
+
+All of our Pro tier features are available to try in the development instance of your application, allowing you to test the full functionality of Clerk without being constrained by a traditional trial period. All features are properly tagged in the Dashboard, so you'll know if a specific feature requires an upgrade to use in production.
+
+### What is "First Day Free"?
+
+"First Day Free" is our way of helping you avoid charges for users that try your app and do not return. Since we don't count users as active unless they sign in at least one more time after the first 24 hour period, the first day the user access your application is free of charge.
+
+### Is Clerk pricing based on MAU or something else?
+
+Clerk pricing is based on Monthly Retained Users (MRU), not traditional MAU. A user only counts as retained if they return to your app at least 24 hours after signing up, so someone who signs up and never comes back does not count toward MRU billing. That means MRU is often lower than raw MAU, especially for apps with lots of one-time signups or trial users, making Clerk's effective cost lower than a simple MAU-to-MAU comparison would suggest.
+
+### What is considered a monthly retained user?
+
+A monthly retained user is a user who visits your app in a given month at least one day after signing up. This free day avoids unwelcome fees from users who don't activate.
+
+### What is considered a monthly retained organization?
+
+A monthly retained organization is an organization with at least 2 members, where at least one of those members is a monthly retained user for that month. Like users, you are only billed for retained organizations.
+
+### Is Clerk good for B2C apps?
+
+It depends on the type of B2C app. Clerk can be a strong fit for paid consumer apps, prosumer tools, marketplaces, communities, and subscription products where retained users are valuable and polished auth/user management matters. But if you're building a free, ad-supported, or very low-ARPU consumer app, Clerk's per-MRU model may feel expensive once you outgrow the free tier. In those cases, alternatives like Supabase Auth, which includes 100K MAU on Pro/Team, or Firebase Auth for basic email/social auth may be cheaper. The simple rule: Clerk is easiest to justify when retention maps to revenue; for massive free audiences, run the unit economics first.
+
+### What happens to my Clerk bill if my app goes viral?
+
+Less than you might fear. Clerk bills on MRU, not raw signups or MAU, so a spike of users who sign up and never return after the first day does not count toward your MRU bill. If returning users push you past 50K MRUs, Clerk gives you a one-month grace period so your app keeps running while you upgrade. From there, you move to Pro ($20/mo billed annually, or $25/mo monthly) and pay published overage rates for MRUs above 50K, starting at $0.02/MRU/mo with volume discounts at higher tiers.
+
+### Does Clerk offer migration assistance?
+
+Migration assistance is included with our enterprise plan. If you have questions about how to migrate your user data, consult [our migration guide](https://clerk.com/docs/guides/development/migrating/overview.md) or reach out to support any time.
+
+### Can I export my data?
+
+Absolutely! We believe your data should always be in your control. You can easily export your user data directly from the dashboard at any time, no assistance needed.
+
+## Startup Discounts
+
+Pre-negotiated startup discounts are available through our partners: Stripe Atlas, Y Combinator, South Park Commons, OnDeck.
+
+- Eligible up to 1 year after launch.
+- Eligible up to $5 million in venture funding.
+
+[Apply to Clerk for Startups](https://clerk.com/startups)
+
+## Related
+
+- [Homepage](https://clerk.com/index.md)
+- [Documentation](https://clerk.com/docs.md)
+- [Blog](https://clerk.com/blog.md)
+- [Changelog](https://clerk.com/changelog.md)
+- [Site index for LLMs (llms.txt)](https://clerk.com/llms.txt)
