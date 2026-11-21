@@ -183,11 +183,12 @@ test("a provisional (password, unverified, never signed in) account is supersede
   await policy.recordPendingAdmission(db, "sid@example.test", "password");
   userRow(db, "u-squat", "sid@example.test");
   await policy.bindPendingAdmission(db, "sid@example.test", "u-squat");
-  assert.equal(await policy.supersedeUnprovenAccount(db, "SID@example.test"), "u-squat");
+  assert.equal(await policy.supersedeUnprovenAccount(db, "SID@example.test", "google"), "u-squat");
   assert.deepEqual(users(db), []);
   assert.equal(uses(db, "i1"), 0, "the invitation is still open for the real person");
   const audit = db.raw.prepare("SELECT actor, action, target, outcome FROM nathan_security_audit WHERE action='account_superseded'").all();
-  assert.deepEqual(audit.map(a => ({ ...a })), [{ actor: "system:admission", action: "account_superseded", target: "u-squat", outcome: "succeeded" }]);
+  assert.deepEqual(audit.map(a => ({ ...a })), [{ actor: "system:admission", action: "account_superseded", target: "u-squat email=sid@example.test provider=google", outcome: "succeeded" }],
+    "the audit row names the address and the provider that proved it");
   // Never: a verified account, an account that is not provisional, one with a session, or without an open invitation.
   userRow(db, "u-ver", "ver@example.test", 1); invite(db, "ver@example.test");
   await policy.recordPendingAdmission(db, "ver@example.test", "password"); await policy.bindPendingAdmission(db, "ver@example.test", "u-ver");
@@ -235,4 +236,17 @@ test("enterprise OIDC creates accounts only for addresses inside the connection'
   assert.equal(await enterpriseOidcUserCreateGuard(db, { email: "ivy@acme.example" }, { path: "/sso/callback", params: {} }), false, "unknown SSO route");
   assert.equal(await enterpriseOidcUserCreateGuard(db, { email: "ivy@acme.example" }, { path: "/sso/saml2/sp/acs/:providerId" }), undefined, "SAML has its own guard");
   assert.equal(await enterpriseOidcUserCreateGuard(db, { email: "ivy@acme.example" }, { path: "/callback/:id" }), undefined, "not enterprise SSO");
+});
+
+test("a second concurrent password sign-up for the same address never unlinks the first provisional account", async () => {
+  const db = database();
+  invite(db, "race@example.test", { id: "i-race" });
+  // Both requests pass Better Auth's "user exists" check, so both record the pending mark.
+  await policy.recordPendingAdmission(db, "race@example.test", "password");
+  userRow(db, "u-first", "race@example.test");
+  await policy.bindPendingAdmission(db, "race@example.test", "u-first");
+  await policy.recordPendingAdmission(db, "race@example.test", "password"); // the second request; its user insert then fails
+  const row = db.raw.prepare("SELECT user_id FROM nathan_admission_pending WHERE email='race@example.test'").get();
+  assert.equal(row.user_id, "u-first", "the provisional mark stays bound to the account that exists");
+  assert.equal(await policy.supersedeUnprovenAccount(db, "race@example.test", "github"), "u-first", "the real invitee can still take the address back");
 });

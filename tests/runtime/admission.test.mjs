@@ -70,6 +70,7 @@ after(() => mf?.dispose());
 
 const one = (sql, ...params) => db.prepare(sql).bind(...params).first();
 const all = async (sql, ...params) => (await db.prepare(sql).bind(...params).all()).results;
+const userRowRaw = (id, email) => db.prepare('INSERT INTO "user"("id","name","email","emailVerified","createdAt","updatedAt") VALUES (?,?,?,0,0,0)').bind(id, id, email).run();
 const userByEmail = email => one('SELECT "id" AS id, "emailVerified" AS verified FROM "user" WHERE lower("email")=?', email);
 const worker = { fetch: (url, init) => mf.dispatchFetch(url, init) };
 const studio = (path, body) => studioPost(worker, ORIGIN, path, body, admin.cookie);
@@ -284,7 +285,7 @@ test("a squatted invitation: the real invitee's verified sign-in supersedes the 
   assert.deepEqual({ ...used }, { uses: 1, used_method: "social:github", used_by_user: account.id });
   assert.equal((await signIn("sid@example.test", "squatter password 1234567")).status, 401, "the squatter's password is gone with it");
   const audit = await all("SELECT actor, target, outcome FROM nathan_security_audit WHERE action='account_superseded'");
-  assert.deepEqual(audit.map(a => ({ ...a })), [{ actor: "system:admission", target: squat.id, outcome: "succeeded" }]);
+  assert.deepEqual(audit.map(a => ({ ...a })), [{ actor: "system:admission", target: squat.id + " email=sid@example.test provider=github", outcome: "succeeded" }]);
 });
 
 test("Studio: reissue an invitation by removing an unverified account (stepped-up administrator, confirmed, audited)", async () => {
@@ -300,6 +301,13 @@ test("Studio: reissue an invitation by removing an unverified account (stepped-u
   const member = await insertSession(db, SECRET, (await userByEmail("founder@example.test")).id);
   assert.equal((await studioPost(worker, ORIGIN, "/studio/api/admission", { op: "reissue", email: "ola@example.test", confirm: "CONFIRM REISSUE INVITATION ola@example.test" }, member.cookie)).status, 403,
     "needs a fresh step-up");
+  // An unverified account that has really been used (an enterprise SSO link from before NATH-16,
+  // whose session ended at sign-out) is never removed, even though it has no current session.
+  await userRowRaw("u-sso-used", "used@example.test");
+  await db.prepare('INSERT INTO "account"("id","accountId","providerId","userId","createdAt","updatedAt") VALUES (\'a-sso\',\'ext-1\',\'acme-oidc\',\'u-sso-used\',0,0)').run();
+  const used = await studio("/studio/api/admission", { op: "reissue", email: "used@example.test", confirm: "CONFIRM REISSUE INVITATION used@example.test" });
+  assert.equal(used.status, 409, "an account with a non-password login is never removed: " + await used.clone().text());
+  assert.ok(await one('SELECT 1 FROM "user" WHERE "id"=?', "u-sso-used"));
   const reissued = await studio("/studio/api/admission", { op: "reissue", email: "ola@example.test", confirm: "CONFIRM REISSUE INVITATION ola@example.test" });
   assert.equal(reissued.status, 200, await reissued.clone().text());
   const result = await reissued.json();

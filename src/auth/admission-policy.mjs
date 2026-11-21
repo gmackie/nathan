@@ -112,8 +112,12 @@ export async function decideAdmission(db, env, { email, emailVerified, method })
 
 /** Marks a password sign-up as provisional (before Better Auth inserts the account). */
 export async function recordPendingAdmission(db, email, method) {
+  // Only an unbound mark is refreshed. A concurrent second sign-up for the same address (both pass
+  // Better Auth's "user exists" check) must not unlink the account the first one created, or the
+  // real invitee could no longer supersede it. A mark for a deleted account goes with it (CASCADE).
   await db.prepare("INSERT INTO nathan_admission_pending(email,user_id,method) VALUES (?,NULL,?) " +
-    "ON CONFLICT(email) DO UPDATE SET user_id=NULL, method=excluded.method, created_at=unixepoch()").bind(email, method).run();
+    "ON CONFLICT(email) DO UPDATE SET method=excluded.method, created_at=unixepoch() WHERE nathan_admission_pending.user_id IS NULL")
+    .bind(email, method).run();
 }
 /** Binds the provisional mark to the account Better Auth created. */
 export async function bindPendingAdmission(db, email, userId) {
@@ -150,7 +154,7 @@ export async function admitOnVerification(db, env, { userId, email }) {
  * it was created by someone who could not prove the address: delete it (audited) so the invitee's
  * sign-in creates their own account. Returns the deleted user id, or null.
  */
-export async function supersedeUnprovenAccount(db, email) {
+export async function supersedeUnprovenAccount(db, email, provider = "unknown") {
   const address = normalizeEmail(email);
   if (!address) return null;
   const row = await db.prepare(
@@ -162,7 +166,9 @@ export async function supersedeUnprovenAccount(db, email) {
   if (!row) return null;
   const deleted = await db.prepare('DELETE FROM "user" WHERE "id"=? AND "emailVerified"=0 RETURNING "id" AS id').bind(row.id).first();
   if (!deleted) return null;
-  await db.prepare(AUDIT + "VALUES (?,'system:admission','account_superseded',?,'succeeded')").bind(crypto.randomUUID(), row.id).run();
+  const via = /^[a-z][a-z0-9-]{0,62}$/.test(String(provider)) ? provider : "unknown";
+  await db.prepare(AUDIT + "VALUES (?,'system:admission','account_superseded',?,'succeeded')")
+    .bind(crypto.randomUUID(), row.id + " email=" + address + " provider=" + via).run();
   return row.id;
 }
 

@@ -86,11 +86,12 @@ function invitationInput(body: any) {
   const days = body?.days === undefined ? INVITATION_DAYS.default : Number(body.days);
   return email && Number.isInteger(days) && days >= 1 && days <= INVITATION_DAYS.max ? { email, days } : null;
 }
-type ExistingAccount = { id: string; verified: number; role: string | null; sessions: number; passkeys: number; directory: number };
+type ExistingAccount = { id: string; verified: number; role: string | null; sessions: number; passkeys: number; directory: number; logins: number };
 function existingAccount(env: AuthEnv, email: string) {
   return env.DB.prepare('SELECT u."id" AS id, u."emailVerified" AS verified, u."role" AS role, ' +
     '(SELECT count(*) FROM "session" s WHERE s."userId"=u."id") AS sessions, (SELECT count(*) FROM "passkey" k WHERE k."userId"=u."id") AS passkeys, ' +
-    "(SELECT count(*) FROM nathan_scim_users d WHERE d.user_id=u.\"id\") AS directory " +
+    "(SELECT count(*) FROM nathan_scim_users d WHERE d.user_id=u.\"id\") AS directory, " +
+    '(SELECT count(*) FROM "account" a WHERE a."userId"=u."id" AND a."providerId"<>\'credential\') AS logins ' +
     'FROM "user" u WHERE lower(u."email")=? LIMIT 1').bind(email).first<ExistingAccount>();
 }
 
@@ -149,14 +150,17 @@ export async function applyAdmissionOperation(env: AuthEnv, body: any, actor: st
     }
     const account = await existingAccount(env, input.email);
     if (!account) return createInvitation(env, input.email, input.days, actor);
-    if (Number(account.verified) === 1 || account.role === "admin" || Number(account.sessions) || Number(account.passkeys) || Number(account.directory)) {
+    if (Number(account.verified) === 1 || account.role === "admin" || Number(account.sessions) || Number(account.passkeys) || Number(account.directory) || Number(account.logins)) {
       await audit(env, actor, "unverified_account_remove", account.id, "rejected");
-      throw Error("An account with this email address is verified, has signed in, or is managed by a directory; it is never removed here");
+      throw Error("An account with this email address is verified, has signed in, has a social or SSO login, or is managed by a directory; it is never removed here");
     }
     const removed = await env.DB.prepare('DELETE FROM "user" WHERE "id"=? AND "emailVerified"=0 AND coalesce("role",\'user\')<>\'admin\' ' +
       'AND NOT EXISTS (SELECT 1 FROM "session" WHERE "userId"=?) AND NOT EXISTS (SELECT 1 FROM "passkey" WHERE "userId"=?) ' +
-      'AND NOT EXISTS (SELECT 1 FROM nathan_scim_users WHERE user_id=?) RETURNING "id" AS id')
-      .bind(account.id, account.id, account.id, account.id).first<{ id: string }>();
+      'AND NOT EXISTS (SELECT 1 FROM nathan_scim_users WHERE user_id=?) ' +
+      // A social or SSO login means the account has been used even if its session ended (sign-out
+      // and expiry delete session rows); only password-only unverified accounts are removable.
+      'AND NOT EXISTS (SELECT 1 FROM "account" WHERE "userId"=? AND "providerId"<>\'credential\') RETURNING "id" AS id')
+      .bind(account.id, account.id, account.id, account.id, account.id).first<{ id: string }>();
     if (!removed) {
       await audit(env, actor, "unverified_account_remove", account.id, "rejected");
       throw Error("Unknown account state; nothing removed");
@@ -264,8 +268,8 @@ export async function admissionBeforeEmailVerification(env: AuthEnv, user: any) 
  */
 const providerEmail = (id: string, profile: any) => (id === "twitter" ? profile?.data?.email : profile?.email);
 export function withInviteeSupersession<T extends Record<string, any>>(env: AuthEnv, providers: T): T {
-  const supersede = async (email: unknown) => {
-    if (typeof email === "string") await supersedeUnprovenAccount(env.DB, email);
+  const supersede = async (email: unknown, provider: string) => {
+    if (typeof email === "string") await supersedeUnprovenAccount(env.DB, email, provider);
   };
   const out: Record<string, any> = {};
   for (const [id, options] of Object.entries(providers ?? {})) {
@@ -273,12 +277,12 @@ export function withInviteeSupersession<T extends Record<string, any>>(env: Auth
     const wrapped = { ...options };
     if (typeof options.getUserInfo === "function") wrapped.getUserInfo = async (token: any) => {
       const info = await options.getUserInfo(token);
-      if (info?.user?.emailVerified === true) await supersede(info.user.email);
+      if (info?.user?.emailVerified === true) await supersede(info.user.email, id);
       return info;
     };
     if (typeof options.mapProfileToUser === "function") wrapped.mapProfileToUser = async (profile: any) => {
       const mapped = await options.mapProfileToUser(profile);
-      if (mapped?.emailVerified === true) await supersede(typeof mapped.email === "string" ? mapped.email : providerEmail(id, profile));
+      if (mapped?.emailVerified === true) await supersede(typeof mapped.email === "string" ? mapped.email : providerEmail(id, profile), id);
       return mapped;
     };
     out[id] = wrapped;
