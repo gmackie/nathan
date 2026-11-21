@@ -43,6 +43,12 @@ export async function samlProtocolGate(request:Request,env:AuthEnv,url:URL):Prom
   const id=samlProviderFromPath(url.pathname);
   if(id!==null){
     if(!await samlConnectionUsable(env.DB,id))return reject(404,"SAML connection unavailable");
+    // better-call parses a body for every method and the ACS accepts GET, so a SAMLResponse in
+    // the body of a GET would reach the plugin without inspection. Only POST may carry a body.
+    if(request.method!=="POST"&&request.body!==null){
+      await auditRejection(env,id,"saml_body_not_allowed");
+      return reject(400,"SAML messages in a request body must use POST","saml_body_not_allowed");
+    }
     const raw=request.method==="POST"?await request.clone().text():"";
     if(raw.length>400_000)return reject(413,"SAML message too large");
     const endpoint=url.pathname.includes("/sp/acs/")?"acs":url.pathname.includes("/sp/slo/")?"slo":"logout";
@@ -60,6 +66,10 @@ export async function samlProtocolGate(request:Request,env:AuthEnv,url:URL):Prom
       await auditRejection(env,id,refused.code);
       return reject(refused.status,refused.message,refused.code);
     }
+    // Single logout is not enabled (no enableSingleLogout in the plugin options), and the SLO
+    // endpoint reads SAMLRequest/SAMLResponse from the query, which this gate does not decode.
+    // Refuse it here so enabling SLO later requires extending the guard first.
+    if(endpoint==="slo")return reject(404,"SAML single logout is not enabled");
     return null;
   }
   if(url.pathname==="/api/auth/sign-in/sso"&&request.method==="POST"){

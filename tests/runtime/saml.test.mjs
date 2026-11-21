@@ -372,6 +372,50 @@ test("a malformed percent-escape cannot smuggle a second SAMLResponse past the g
   assert.equal(await db.prepare('SELECT id FROM "user" WHERE email=?').bind(sha1user).first(), null, "no user created");
 });
 
+/** Sends a raw HTTP/1.1 request to the Miniflare entry (fetch() refuses a GET with a body). */
+async function rawRequest(method, path, headers, body) {
+  const { connect } = await import("node:net");
+  const base = new URL(await mf.ready);
+  const payload = Buffer.from(body ?? "");
+  // MF-Original-URL is how dispatchFetch tells Miniflare's entry the public URL (https issuer origin).
+  const lines = [method + " " + path + " HTTP/1.1", "Host: " + HOST, "Connection: close", "MF-Original-URL: https://" + HOST + path,
+    "Content-Length: " + payload.length, ...Object.entries(headers).map(([k, v]) => k + ": " + v)];
+  return new Promise((resolve, reject) => {
+    const socket = connect(Number(base.port), base.hostname, () => {
+      socket.write(lines.join("\r\n") + "\r\n\r\n"); socket.write(payload);
+    });
+    const chunks = [];
+    socket.on("data", c => chunks.push(c));
+    socket.on("end", () => {
+      const text = Buffer.concat(chunks).toString("utf8");
+      resolve({ status: Number(text.split(" ")[1]), text, sessionSet: /session_token=[^;\s]/.test(text) });
+    });
+    socket.on("error", reject);
+  });
+}
+
+test("a SAML message in the body of a non-POST request never reaches the plugin", async () => {
+  const sha1user = "getbody@" + DOMAIN;
+  for (const [type, encode] of [["application/x-www-form-urlencoded", (r, s) => "SAMLResponse=" + encodeURIComponent(r) + "&RelayState=" + encodeURIComponent(s)],
+                                ["application/json", (r, s) => JSON.stringify({ SAMLResponse: r, RelayState: s })]]) {
+    const { id, relayState } = await startLogin();
+    const weak = samlResponse(good({ inResponseTo: id, email: sha1user, signatureAlgorithm: "rsa-sha1" }));
+    const r = await rawRequest("GET", new URL(ACS).pathname, { "Content-Type": type, Origin: "https://idp.acme.example" }, encode(weak, relayState));
+    assert.equal(r.sessionSet, false, type + ": GET with a body must not sign in");
+    assert.equal(r.status, 400, type + ": " + r.text.slice(0, 300));
+    assert.match(r.text, /saml_body_not_allowed/, type);
+  }
+  assert.equal(await db.prepare('SELECT id FROM "user" WHERE email=?').bind(sha1user).first(), null, "no user created");
+});
+
+test("SAML single logout is refused at the gate while single logout is not enabled", async () => {
+  const slo = "/api/auth/sso/saml2/sp/slo/" + PID;
+  const get = await mf.dispatchFetch(ORIGIN + slo + "?SAMLRequest=abc", { redirect: "manual" });
+  assert.equal(get.status, 404, await get.clone().text());
+  const post = await postForm([["SAMLRequest", "abc"]], ORIGIN + slo);
+  assert.ok([400, 404].includes(post.status), "refused by the gate: " + post.status);
+});
+
 test("rejected SAML messages write at most one audit row per connection, reason and minute", async () => {
   await db.prepare("DELETE FROM nathan_security_audit WHERE action='saml_message_rejected'").run();
   for (let i = 0; i < 12; i++)
