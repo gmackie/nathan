@@ -7,6 +7,7 @@ import {bootstrapStatus,completeBootstrap,mayAdminister} from "./bootstrap";
 import {effectiveAdminPolicy,tightenAdminPolicy} from "./security-policy";
 import {handleScim} from "./scim/gateway";
 import {listScimConnections,createScimConnection,setScimConnectionEnabled,rotateScimToken} from "./scim/admin";
+import {samlProtocolGate,handleSamlRoutes} from "./saml-routes";
 export {NathanScimDirectory} from "./scim/directory";
 import { signInPage, consentPage, studioPage } from "./ui";
 import { securityPage } from "./security-ui";
@@ -42,6 +43,8 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
   if (url.pathname === "/mcp") return handleMcp(request,env,auth);
   if (url.pathname.startsWith("/api/auth/") || url.pathname.startsWith("/.well-known/")) {
     if(isRawManagementEndpoint(url.pathname))return reject(404,"Management route unavailable; use the protected Identity Studio");
+    const samlGate=await samlProtocolGate(request,env,url);
+    if(samlGate)return samlGate;
     return auth.handler(request);
   }
   if (url.pathname === "/") return Response.redirect(issuer.origin + "/sign-in", 302);
@@ -321,6 +324,9 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
       return reject(400,"Client creation rejected; verify exact redirect URI, permitted scopes and provider configuration");
     }
   }
+
+  const saml=await handleSamlRoutes(request,env,auth,url);
+  if(saml)return saml;
 
   return reject(404, "Not found");
 }
