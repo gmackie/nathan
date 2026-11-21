@@ -52,6 +52,15 @@ After login, the gateway calls `NATHAN.resolveAccess({applicationId, subject})` 
 
 The identity Worker reads the pin from `ctx.props`, which the caller's code cannot change at runtime. It answers `resolveAccess`, `access`, `authorize`, `getPrincipal` and the remote MCP grant check `mcpGrant` (NATH-14) only for that application. A request for another application gets `{allowed: false, reason: "application_mismatch"}` with no roles, permissions or email; a binding without a valid pin gets `reason: "binding_not_pinned"`. The gateway turns either reason into a 503, because it means the binding is misconfigured. `nathan protect` and the gateway template (`wrangler.gateway.jsonc`) set the pin to `APPLICATION_ID`. The directory is **not** reachable over this binding. It is served only by the authenticated directory API below, so a compromised or buggy app Worker cannot enumerate other users' groups, grants or the change feed.
 
+**Cookie methods disclose nothing beyond the app's own decision (NATH-18).** Some Workers hold a Nathan session cookie. For them:
+
+- `getPrincipal(cookie)` returns `{sub, email, applicationId, roles, permissions}` for the pinned application **only when the evaluator allows that user for it**, and `null` otherwise, including for an unknown or expired session. It never returns the user's global Better Auth role (`admin`/`user`): an app sees only its own roles and permissions.
+- `access({cookie})` returns the decision, with `sub` only when it is allowed. `authorize({cookie})` returns the boolean.
+
+Before NATH-18, `getPrincipal` returned the id, email and global role of anyone signed in to Nathan, to any app Worker holding their cookie. A Worker that needs a user's identity for an app it does not serve must not get it. Use the gateway, or `resolveAccess` with an OIDC subject. All of this is workerd-tested (`tests/runtime/binding-trust.test.mjs`).
+
+**Only the identity Worker may bind the SCIM Durable Object.** `NathanScimDirectory` (binding `SCIM_DIRECTORY`) holds each connection's staged directory, its outbox and the administrator operations. Never bind its namespace from another Worker (a `durable_objects` binding with `script_name` pointing at the identity Worker). The object enforces this itself too: it serves only `fetch`, with no RPC methods, and refuses any request without the identity Worker's caller proof (403). See [scim.md](scim.md#trust-boundary).
+
 **Why a service binding rather than a signed internal HTTP endpoint:** the gateway and the identity Worker are deployed to the same customer account. A binding exposes no public route, needs no extra shared secret or replay protection, and only Workers the account owner binds to it can call it. The cost is that a gateway in another Cloudflare account cannot resolve roles; such gateways are not supported.
 
 Subjects are Nathan user ids. Gateway OIDC clients must use the default public subject type; a pairwise subject resolves to no user and is denied.

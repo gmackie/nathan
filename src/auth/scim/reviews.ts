@@ -16,6 +16,7 @@
  * confirmation string naming its target, and every attempt is audited: succeeded, failed or rejected.
  */
 import type { AuthEnv } from "../env";
+import { scimCallerHeaders } from "./caller.ts";
 import { changeStatement, auditStatement } from "../../shared/rbac-store.mjs";
 import { guarded, reject, requireConnection } from "./lifecycle-admin.ts";
 import { otherActiveAdmins, recordError, scimBanReason } from "./lifecycle.ts";
@@ -36,8 +37,8 @@ async function directory(env: AuthEnv, connection: string, op: "requeue" | "outb
   const response = await env.SCIM_DIRECTORY.getByName("connection:" + connection).fetch(new Request("https://scim.internal/__nathan/" + op, {
     method: op === "outbox" ? "GET" : "POST",
     body: body === undefined ? undefined : JSON.stringify(body),
-    headers: { "X-Nathan-SCIM-Base": new URL(env.NATHAN_ISSUER).origin + "/scim/v2/" + connection, "X-Nathan-SCIM-Admin": op,
-      ...(body === undefined ? {} : { "Content-Type": "application/json" }) }
+    headers: await scimCallerHeaders(env, { "X-Nathan-SCIM-Base": new URL(env.NATHAN_ISSUER).origin + "/scim/v2/" + connection, "X-Nathan-SCIM-Admin": op,
+      ...(body === undefined ? {} : { "Content-Type": "application/json" }) })
   }));
   return { ok: response.ok, status: response.status, body: await response.json().catch(() => ({})) as any };
 }

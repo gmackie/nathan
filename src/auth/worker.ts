@@ -28,6 +28,8 @@ import { isMcpOAuthPath, handleMcpOAuth, mcpReturnRedirect, mcpGrantStatus, mcpO
 import { updateScimSettings, changeScimMapping, scimConnectionView, SCIM_ADMIN_ERRORS } from "./scim/lifecycle-admin";
 import { deliverLogouts } from "./logout-queue";
 import { scimUserOperation, scimOutboxView, skipScimOutbox, SCIM_REVIEW_ERRORS } from "./scim/reviews";
+import { admissionOverview, applyAdmissionOperation, ADMISSION_ERRORS } from "./admission";
+import { healthResponse } from "./health";
 
 function reject(status: number, reason: string) {
   return Response.json({ error: reason }, { status, headers: { "Cache-Control": "no-store" } });
@@ -40,7 +42,8 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
   const issuer = new URL(env.NATHAN_ISSUER);
   const url = new URL(request.url);
   if (url.origin !== issuer.origin || url.protocol !== "https:") return reject(421, "Misdirected request");
-  if (url.pathname === "/healthz") return Response.json({ ok: true, system: "nathan", active: env.NATHAN_INSTALL_ACTIVE !== "false" });
+  // NATH-17: also reports unusable social providers (id and reason only); see ./health.ts.
+  if (url.pathname === "/healthz") return healthResponse(env);
   // The hosted installer uploads inactive code before it creates a public route.
   if (env.NATHAN_INSTALL_ACTIVE === "false") return reject(503, "Installation not active");
   if (url.pathname === "/.well-known/oauth-protected-resource" ||
@@ -496,6 +499,27 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
       return reject(409,message);
     }
   }
+  // NATH-16: account admission mode and invitations (admin + step-up; writes same-origin, confirmed and audited).
+  if (url.pathname === "/studio/api/admission" && (request.method === "GET" || request.method === "POST")) {
+    if(request.method==="POST"){
+      if(request.headers.get("Origin")!==issuer.origin ||
+         request.headers.get("Sec-Fetch-Site")==="cross-site")return reject(403,"Cross-origin request denied");
+      if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")
+        return reject(415,"JSON required");
+    }
+    const session=await auth.api.getSession({headers:request.headers});
+    if(!await isAdminPrincipal(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id))
+      return reject(403,"Admin enrollment incomplete");
+    if(request.method==="GET")return Response.json(await admissionOverview(env),{headers:{"Cache-Control":"no-store"}});
+    const raw=await request.text();
+    if(raw.length>4096)return reject(413,"Request too large");
+    let body:any;try{body=JSON.parse(raw)}catch{return reject(400,"Invalid JSON")}
+    try{
+      return Response.json(await applyAdmissionOperation(env,body,session!.user.id),{headers:{"Cache-Control":"no-store"}});
+    }catch(error){
+      return reject(409,error instanceof Error&&ADMISSION_ERRORS.test(error.message)?error.message:"Admission change rejected");
+    }
+  }
   const saml=await handleSamlRoutes(request,env,auth,url);
   if(saml)return saml;
 
@@ -518,24 +542,45 @@ export default {
  * its application in props ({ applicationId }); every method answers only for that application.
  * Directory reads are not offered here: use the authenticated GET /directory/v1/* API.
  */
+/**
+ * The user behind a Nathan session cookie. Deliberately a module function, not a NathanVerifier
+ * method: every method of a WorkerEntrypoint (TypeScript `private` included) is callable over RPC,
+ * and this answer must never reach an app Worker without the per-app access decision.
+ */
+async function cookieSubject(env: AuthEnv, cookie: unknown): Promise<string | null> {
+  if (typeof cookie !== "string" || cookie.length > 8192) return null;
+  const auth = createAuth(env, await loadSocialCredentials(env));
+  const session = await auth.api.getSession({ headers: new Headers({ Cookie: cookie }) });
+  return typeof session?.user?.id === "string" ? session.user.id : null;
+}
+
 export class NathanVerifier extends WorkerEntrypoint<AuthEnv, BindingProps> {
-  async getPrincipal(cookie: string): Promise<{ sub: string; email: string; role: string } | null> {
-    if (!scopedApplication(this.ctx.props, undefined).ok) return null;
-    if (typeof cookie !== "string" || cookie.length > 8192) return null;
-    const auth = createAuth(this.env, await loadSocialCredentials(this.env));
-    const session = await auth.api.getSession({ headers: new Headers({ Cookie: cookie }) });
-    if (!session?.user?.id) return null;
-    return { sub: session.user.id, email: session.user.email, role: (session.user as any).role ?? "user" };
+  /**
+   * NATH-18: the signed-in user behind a Nathan session cookie, for the binding's pinned application
+   * only. Returns null unless the evaluator allows that user for that application, so an app Worker
+   * holding a cookie learns nothing about people who may not use it. The global Better Auth role is
+   * never returned: use `roles`/`permissions`, which are the app's own.
+   */
+  async getPrincipal(cookie: string): Promise<{ sub: string; email: string | null; applicationId: string; roles: string[]; permissions: string[] } | null> {
+    const scope = scopedApplication(this.ctx.props, undefined);
+    if (!scope.ok) return null;
+    const sub = await cookieSubject(this.env, cookie);
+    if (!sub) return null;
+    const decision = await resolveAccess(this.env, scope.app, sub);
+    if (!decision.allowed) return null;
+    return { sub, email: decision.email, applicationId: scope.app, roles: decision.roles, permissions: decision.permissions };
   }
   /** Cookie-based check for Workers that hold a Nathan session cookie. Same evaluator as every other path. */
   async authorize(input: { applicationId?: string; cookie: string }): Promise<boolean> {
     return (await this.access(input)).allowed;
   }
+  /** The access decision for a cookie's user; `sub` only when allowed (NATH-18). */
   async access(input: { applicationId?: string; cookie: string }) {
     const scope = scopedApplication(this.ctx.props, input?.applicationId);
     if (!scope.ok) return { ...outOfScope(scope.reason), sub: null };
-    const principal = await this.getPrincipal(input?.cookie);
-    return { ...await resolveAccess(this.env, scope.app, principal?.sub ?? null), sub: principal?.sub ?? null };
+    const sub = await cookieSubject(this.env, input?.cookie);
+    const decision = await resolveAccess(this.env, scope.app, sub);
+    return { ...decision, sub: decision.allowed ? sub : null };
   }
   /**
    * NATH-13 gateway and SDK path: effective roles and permissions of an OIDC subject for the pinned

@@ -474,13 +474,40 @@ test("just-in-time creation is off by default and creates an unverified, linked 
   await ok(await scim("acme", "POST", "/Users", dave), 201);
   assert.equal((await link("acme", "00u-dave")).user_id, null);
   assert.equal(await one('SELECT 1 FROM "user" WHERE "email"=\'dave@acme.example\''), null);
+  // NATH-16: the installation is invitation-only (the default), so JIT alone creates nobody.
+  await ok(await studio("/studio/api/scim/settings", { id: "acme", linking: true, jit: true, confirm: "CONFIRM SCIM SETTINGS acme" }));
+  assert.equal((await link("acme", "00u-dave")).user_id, null);
+  assert.match((await link("acme", "00u-dave")).link_note, /invitation/);
+  assert.equal(await one('SELECT 1 FROM "user" WHERE "email"=\'dave@acme.example\''), null, "no user row without an invitation");
+  // An invitation for the address admits it; the resync that saving settings runs creates the account.
+  const invitation = await ok(await studio("/studio/api/admission", { op: "invite", email: "dave@acme.example" }));
   await ok(await studio("/studio/api/scim/settings", { id: "acme", linking: true, jit: true, confirm: "CONFIRM SCIM SETTINGS acme" }));
   const row = await link("acme", "00u-dave");
   assert.equal(row.link_method, "jit", "enabling JIT reconciles staged users");
   const created = await one('SELECT "email" AS email, "emailVerified" AS verified FROM "user" WHERE "id"=?', row.user_id);
   assert.equal(created.email, "dave@acme.example");
   assert.ok(!created.verified, "a directory record does not verify an email address");
+  const used = await one("SELECT uses, used_method AS method, used_by_user AS userId FROM nathan_invitations WHERE id=?", invitation.id);
+  assert.deepEqual({ ...used }, { uses: 1, method: "scim:acme", userId: row.user_id });
+  // Self-service admits any address in the connection's verified domain while JIT is on.
+  await ok(await studio("/studio/api/admission", { op: "mode", mode: "self-service", confirm: "CONFIRM ADMISSION self-service" }));
+  const fay = { ...okta.createUser, userName: "fay@acme.example", externalId: "00u-fay", emails: [{ value: "fay@acme.example", primary: true, type: "work" }] };
+  await ok(await scim("acme", "POST", "/Users", fay), 201);
+  assert.equal((await link("acme", "00u-fay")).link_method, "jit");
+  await ok(await studio("/studio/api/admission", { op: "mode", mode: "invitation-only", confirm: "CONFIRM ADMISSION invitation-only" }));
   await ok(await studio("/studio/api/scim/settings", { id: "acme", linking: true, jit: false, confirm: "CONFIRM SCIM SETTINGS acme" }));
+});
+
+test("NATH-16: an invitation used or revoked while a just-in-time batch is in flight rolls the account back", async () => {
+  // The invitation claim and the account insert are one D1 batch; a stale claim fails the CHECK.
+  const statement = (await import("../../src/auth/admission-policy.mjs")).claimInvitationStatement;
+  await sql("INSERT INTO nathan_invitations(id,email,created_by,expires_at,revoked_at,revoked_by) VALUES ('inv-stale','stale@acme.example','t',unixepoch()+60,unixepoch(),'t')");
+  const claim = statement("inv-stale", "scim:acme", "u-stale");
+  await assert.rejects(db.batch([
+    db.prepare(claim.sql).bind(...claim.params),
+    db.prepare('INSERT INTO "user"("id","name","email","emailVerified","createdAt","updatedAt") VALUES (\'u-stale\',\'s\',\'stale@acme.example\',0,?,?)').bind(now(), now())
+  ]), /CHECK/);
+  assert.equal(await one('SELECT 1 FROM "user" WHERE "id"=\'u-stale\''), null);
 });
 
 test("Studio connection view: link status, mappings, last sync and error log (admin only)", async () => {

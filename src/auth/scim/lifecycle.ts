@@ -29,6 +29,7 @@
  */
 import type { AuthEnv } from "../env";
 import { changeStatement, auditStatement } from "../../shared/rbac-store.mjs";
+import { admissionMode, openInvitation, claimInvitationStatement } from "../admission-policy.mjs";
 
 type Statement = { sql: string; params: unknown[] };
 export type ConnectionPolicy = {
@@ -206,18 +207,33 @@ async function reviewStatements(env: AuthEnv, connection: string, scimId: string
 }
 
 /**
- * Admission hook for just-in-time account creation. NATH-16 (invitation-only admission) must make
- * this require a pending invitation for `email` when the installation is invitation-only; until
- * then the connection's explicit JIT toggle (default off) is the only gate.
+ * Admission for just-in-time account creation (NATH-16). The connection's explicit JIT toggle
+ * (default off) must be on, and the installation's admission policy must admit the address: in
+ * self-service mode any address in the connection's verified domain; in invitation-only mode (the
+ * default) only an address with an open invitation. The returned statements claim that invitation
+ * and audit the admission in the same D1 batch that creates the account, so an invitation used,
+ * revoked or expired meanwhile rolls the whole batch back. Never admits on an error (fail closed).
  */
-export async function admitJustInTime(_env: AuthEnv, policy: ConnectionPolicy, _email: string): Promise<boolean> {
-  return policy.jit;
+export async function admitJustInTime(env: AuthEnv, policy: ConnectionPolicy, email: string, userId: string):
+  Promise<{ admitted: false; reason: string } | { admitted: true; statements: Statement[] }> {
+  if (!policy.jit) return { admitted: false, reason: "No verified Nathan user with this email; just-in-time creation is off" };
+  const method = "scim:" + policy.id;
+  try {
+    if (await admissionMode(env.DB) === "self-service")
+      return { admitted: true, statements: [auditStatement(actorOf(policy.id), "account_admission", method, "admitted_self_service")] };
+    const invitation = await openInvitation(env.DB, email);
+    if (!invitation) return { admitted: false, reason: "Admission policy refused just-in-time creation: this installation is invitation-only and the address has no open invitation" };
+    return { admitted: true, statements: [claimInvitationStatement(invitation.id, method, userId),
+      auditStatement(actorOf(policy.id), "account_admission", method, "admitted_invitation")] };
+  } catch {
+    return { admitted: false, reason: "Admission policy unavailable; just-in-time creation refused" };
+  }
 }
 
 type Transfer = { scimId: string; banned: boolean; state: string };
 type LinkDecision =
   | { userId: string; method: "email" | "approved"; email: string; reviewId?: string; transfer?: Transfer }
-  | { create: { id: string; email: string; name: string } }
+  | { create: { id: string; email: string; name: string; admission: Statement[] } }
   | { review: { userId: string; reason: string } }
   | { note: string };
 async function decideLink(env: AuthEnv, policy: ConnectionPolicy, snap: UserSnapshot, row: any): Promise<LinkDecision> {
@@ -269,9 +285,10 @@ async function decideLink(env: AuthEnv, policy: ConnectionPolicy, snap: UserSnap
   if (!snap.active) return { note: "Inactive directory user; no account created" };
   if (candidates.some(email => adminEmails(env).includes(email)))
     return { note: "Administrator email (NATHAN_ADMIN_EMAILS); never created just in time" };
-  if (!await admitJustInTime(env, policy, candidates[0]))
-    return { note: policy.jit ? "Admission policy refused just-in-time creation" : "No verified Nathan user with this email; just-in-time creation is off" };
-  return { create: { id: crypto.randomUUID(), email: candidates[0], name: (snap.displayName || candidates[0]).slice(0, 256) } };
+  const id = crypto.randomUUID();
+  const admission = await admitJustInTime(env, policy, candidates[0], id);
+  if (!admission.admitted) return { note: admission.reason };
+  return { create: { id, email: candidates[0], name: (snap.displayName || candidates[0]).slice(0, 256), admission: admission.statements } };
 }
 
 /** Mapped Nathan group ids for a set of SCIM groups. */
@@ -342,7 +359,7 @@ export async function applyUser(env: AuthEnv, policy: ConnectionPolicy, snap: Us
       } else {
         if ("create" in decision) {
           // Just-in-time: the directory record does not prove the email, so it stays unverified.
-          statements.push(statement('INSERT INTO "user"("id","name","email","emailVerified","createdAt","updatedAt","role","banned") VALUES (?,?,?,0,?,?,\'user\',0)',
+          statements.push(...decision.create.admission, statement('INSERT INTO "user"("id","name","email","emailVerified","createdAt","updatedAt","role","banned") VALUES (?,?,?,0,?,?,\'user\',0)',
             decision.create.id, decision.create.name, decision.create.email, now, now));
           userId = decision.create.id; method = "jit"; created = true; linkedEmail = decision.create.email; state = "linked";
         } else {

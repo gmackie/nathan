@@ -15,7 +15,9 @@ import { nathanAccessTokenExtension, guardAuthorizationScopes, MAX_ACCESS_TOKEN_
 
 // NATH-15: the provider's scopes, also Better Auth's default for an authorization request without `scope`.
 const OAUTH_SCOPES = ["openid", "profile", "email", "offline_access", "nathan:read", "nathan:admin", "nathan:directory.read", API_SCOPE];
-import {ssoPluginOptions,samlUserCreateGuard} from "./saml-policy.mjs";
+import {ssoPluginOptions} from "./saml-policy.mjs";
+import { nathanDatabaseHooks } from "./database-hooks";
+import { admissionBeforeEmailVerification, withInviteeSupersession } from "./admission";
 
 export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredentials) {
   const issuer = new URL(env.NATHAN_ISSUER);
@@ -44,8 +46,9 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
     account: { encryptOAuthTokens: true, storeStateStrategy: "database", accountLinking: { ...ACCOUNT_LINKING, trustedProviders: [...ACCOUNT_LINKING.trustedProviders] } },
     disabledPaths: ["/token"],
     // SAML sign-in never creates accounts unless the connection allows
-    // just-in-time provisioning for its verified domain (NATH-10).
-    databaseHooks: { user: { create: { before: (user, ctx) => samlUserCreateGuard(env.DB, user, ctx) } } },
+    // just-in-time provisioning for its verified domain (NATH-10); no method creates an account the
+    // installation's admission policy refuses (NATH-16). Both compose in ./database-hooks.ts.
+    databaseHooks: nathanDatabaseHooks(env),
     hooks: {
       // NATH-15: a client not marked agent may not have a user delegate nathan:api.
       before: createAuthMiddleware(async (ctx) => guardAuthorizationScopes(env, ctx, OAUTH_SCOPES)),
@@ -81,7 +84,8 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
       }
     },
     trustedOrigins: [issuer.origin],
-    socialProviders: resolvedSocialProviders ?? socialProviders,
+    // NATH-16: a verified provider address supersedes a squatted provisional password account.
+    socialProviders: withInviteeSupersession(env, resolvedSocialProviders ?? socialProviders),
     emailAndPassword: {
       enabled: env.ENABLE_PASSWORD === "true",
       requireEmailVerification: true,
@@ -90,7 +94,9 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
     },
     emailVerification: {
       sendVerificationEmail: async ({ user, url }) =>
-        sendAuthEmail(env, user.email, "Verify your Nathan email", url)
+        sendAuthEmail(env, user.email, "Verify your Nathan email", url),
+      // NATH-16: a provisional password sign-up claims its invitation only now, or stays unverified.
+      beforeEmailVerification: async (user) => admissionBeforeEmailVerification(env, user)
     },
     advanced: {
       // The IdP's session is strictly host-only on login.<domain>.

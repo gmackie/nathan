@@ -90,6 +90,8 @@ Disable with `CONFIRM DISABLE SAML <id>`. A disabled connection's ACS and SSO ro
 
 ## Account provisioning and linking
 
+These connection settings come on top of the installation's account admission policy ([admission.md](admission.md), NATH-16). A just-in-time connection creates an account only when the installation admits it: in self-service mode, or for an address with an open invitation (the default, invitation-only). Otherwise the sign-in returns to `/sign-in?error=ACCOUNT_NOT_ADMITTED`.
+
 - **Invitation only** (default): SAML sign-in works only for people who already have a Nathan account with an address in the verified domain. No account is created. "Invited" means the account exists: an existing account in the domain that has never used SAML (for example one an administrator created, or a social sign-up) is linked to the connection on its first SAML sign-in. An existing account outside the domain is refused and not linked.
 - **Just-in-time**: Nathan creates an account on first sign-in, only for an address inside the connection's verified domain (or its subdomains). Its email is marked verified, because the domain owner proved DNS control and its IdP signed the address.
 - An IdP can never create or link an account for an address outside its verified domain.
@@ -131,7 +133,7 @@ Enforced by the Better Auth SSO plugin (samlify) and Nathan, and tested in worke
 - Each assertion ID is accepted once (replay protection).
 - Only one assertion per response; at most 256 KiB.
 
-Raw Better Auth SSO management endpoints (`/api/auth/sso/register`, `update-provider`, `delete-provider`, `providers`, `get-provider`, `verify-domain`, `request-domain-verification`) stay blocked. `/api/auth/sign-in/sso` only accepts an explicit `providerId` that names a usable connection. The sign-in page uses `/sign-in/sso/start`, which routes an email domain to its most specific enabled SAML connection (or else a verified enterprise OIDC provider).
+Raw Better Auth SSO management endpoints (`/api/auth/sso/register`, `update-provider`, `delete-provider`, `providers`, `get-provider`, `verify-domain`, `request-domain-verification`) stay blocked. `/api/auth/sign-in/sso` only accepts an explicit `providerId` that names a usable connection. The sign-in page uses `/sign-in/sso/start`, which routes an email domain to its most specific enabled SAML connection (or else a verified enterprise OIDC provider). Enterprise OIDC follows the same domain rule as SAML (NATH-16): an OIDC sign-in creates an account only for an address inside that connection's verified domain, never on the IdP's `email_verified` claim alone, and only when the installation admits it ([admission.md](admission.md)).
 
 ## Not supported (yet)
 
@@ -153,4 +155,5 @@ Raw Better Auth SSO management endpoints (`/api/auth/sso/register`, `update-prov
 | ACS answers 400 `saml_encrypted_assertion` | The IdP encrypts assertions. Turn assertion encryption off for Nathan. |
 | Redirect with `error=invalid_saml_response` or `unsolicited_response` | Wrong audience/ACS values in the IdP, an IdP-initiated login, or a sign-in older than 5 minutes. |
 | Redirect with `error=unable_to_create_user` | Invitation-only connection and the person has no Nathan account, or the address is outside the verified domain. |
+| Redirect with `error=ACCOUNT_NOT_ADMITTED` | Just-in-time connection, but the installation is invitation-only and the address has no open invitation. Invite it in Studio, or switch the installation to self-service ([admission.md](admission.md)). |
 | `sso_provider_changed_during_authentication` | A certificate was rotated during the sign-in; start again. |

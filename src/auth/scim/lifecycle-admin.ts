@@ -5,6 +5,7 @@
  * same-origin JSON request. Every attempt is audited: succeeded, failed, or rejected before writing.
  */
 import type { AuthEnv } from "../env";
+import { scimCallerHeaders } from "./caller.ts";
 import { audit } from "../admin-service.ts";
 import { isGroupId } from "../../shared/policy.mjs";
 import { changeStatement, auditStatement } from "../../shared/rbac-store.mjs";
@@ -36,7 +37,7 @@ export async function resyncConnection(env: AuthEnv, connectionId: string): Prom
   try {
     const response = await env.SCIM_DIRECTORY.getByName("connection:" + connectionId).fetch(new Request("https://scim.internal/__nathan/resync", {
       method: "POST",
-      headers: { "X-Nathan-SCIM-Base": new URL(env.NATHAN_ISSUER).origin + "/scim/v2/" + connectionId, "X-Nathan-SCIM-Admin": "resync" }
+      headers: await scimCallerHeaders(env, { "X-Nathan-SCIM-Base": new URL(env.NATHAN_ISSUER).origin + "/scim/v2/" + connectionId, "X-Nathan-SCIM-Admin": "resync" })
     }));
     const body: any = await response.json().catch(() => ({}));
     // `pending` > 0 with 200: a large directory continues in the background (the connection's alarm).

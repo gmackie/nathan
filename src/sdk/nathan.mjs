@@ -24,6 +24,15 @@ import { isPermissionKey, isRoleKey } from "../shared/policy.mjs";
 /**
  * @typedef {{ allowed: boolean, reason?: string, roles: string[], permissions: string[], email?: string|null }} AccessDecision
  * @typedef {{ resolveAccess(input: { applicationId: string, subject: string }): Promise<AccessDecision> }} NathanAccessBinding
+ * Cookie methods of the same app-pinned NathanVerifier binding (NATH-18): `getPrincipal` answers only
+ * for a user the pinned application allows, never with the global Better Auth role; `access` gives
+ * `sub` only when allowed.
+ * @typedef {{ sub: string, email: string|null, applicationId: string, roles: string[], permissions: string[] }} NathanCookiePrincipal
+ * @typedef {NathanAccessBinding & {
+ *   getPrincipal(cookie: string): Promise<NathanCookiePrincipal|null>,
+ *   access(input: { applicationId?: string, cookie: string }): Promise<AccessDecision & { sub: string|null }>,
+ *   authorize(input: { applicationId?: string, cookie: string }): Promise<boolean>
+ * }} NathanVerifierBinding
  * @typedef {{
  *   NATHAN_PRINCIPAL_KEY?: string, NATHAN_APPLICATION_ID?: string, NATHAN_GATEWAY_ORIGIN?: string,
  *   NATHAN_ISSUER?: string, NATHAN_AUDIENCE?: string, NATHAN?: NathanAccessBinding
