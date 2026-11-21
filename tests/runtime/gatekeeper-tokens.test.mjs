@@ -141,8 +141,13 @@ test("an administrator registers the Gatekeeper audience, bound to an app, and t
   const registered = await post("/studio/api/tokens", { op: "audience.register", identifier: AUDIENCE, app: "billing" }, admin.cookie);
   assert.equal(registered.status, 200, await registered.clone().text());
   assert.equal((await post("/studio/api/tokens", { op: "audience.register", identifier: OTHER_AUDIENCE }, admin.cookie)).status, 200);
-  const resource = await db.prepare('SELECT "accessTokenTtl" AS ttl FROM "oauthResource" WHERE "identifier"=?').bind(AUDIENCE).first();
+  // Re-registering updates Better Auth's resource policy back to Nathan's, even after an out-of-band edit.
+  await sql('UPDATE "oauthResource" SET "accessTokenTtl"=3600, "customClaims"=? WHERE "identifier"=?', JSON.stringify({ principal_kind: "user" }), AUDIENCE);
+  assert.equal((await post("/studio/api/tokens", { op: "audience.register", identifier: AUDIENCE, app: "billing" }, admin.cookie)).status, 200);
+  const resource = await db.prepare('SELECT "accessTokenTtl" AS ttl, "customClaims" AS claims FROM "oauthResource" WHERE "identifier"=?').bind(AUDIENCE).first();
   assert.equal(resource.ttl, 900);
+  // Better Auth stores a cleared JSON column as null or "null"; tokens below prove nothing overrides principal_kind.
+  assert.ok([null, "null"].includes(resource.claims), String(resource.claims));
 
   const created = await post("/studio/api/clients", { name: "Billing web", kind: "external", redirectUri: REDIRECT }, admin.cookie);
   assert.equal(created.status, 200, await created.clone().text());
@@ -245,7 +250,10 @@ test("(c) an administrator-marked agent client is an agent, for client credentia
   const [, delegated] = decode((await authorizationCode(alice)).access_token);
   assert.equal(delegated.principal_kind, "agent", "an agent acting for Alice is never classified as Alice");
   assert.equal(delegated.sub, "u-alice");
-  assert.equal((await post("/studio/api/tokens", { op: "client.kind", clientId: webClient.client_id, kind: "auto" }, admin.cookie)).status, 200);
+  const unconfirmed = await post("/studio/api/tokens", { op: "client.kind", clientId: webClient.client_id, kind: "auto" }, admin.cookie);
+  assert.equal(unconfirmed.status, 409, "classifying an agent by grant again widens it and needs confirmation");
+  assert.equal((await post("/studio/api/tokens", { op: "client.kind", clientId: webClient.client_id, kind: "auto",
+    confirm: "CONFIRM CLASSIFY BY GRANT " + webClient.client_id }, admin.cookie)).status, 200);
   assert.equal(decode((await authorizationCode(alice)).access_token)[1].principal_kind, "user");
   assert.equal(await count("SELECT count(*) AS n FROM nathan_security_audit WHERE action='client_principal_kind' AND target LIKE ?", webClient.client_id + "%"), 2);
 });
@@ -307,4 +315,20 @@ test("Gatekeeper's own resolver accepts Nathan's user, machine and agent tokens 
   assert.equal((await resolveToken(tokens.machine)).kind, "service");
   assert.equal((await resolveToken(tokens.agent)).kind, "agent");
   await assert.rejects(resolveToken(tokens.id), e => e.code === "InvalidCredentials");
+});
+
+test("unlinking a client and removing an audience stop new tokens for it", async () => {
+  assert.equal((await post("/studio/api/tokens", { op: "audience.unlink", identifier: OTHER_AUDIENCE, clientId: otherClient.client_id }, admin.cookie)).status, 200);
+  assert.equal((await clientCredentials(otherClient, OTHER_AUDIENCE)).status, 400, "an unlinked client gets invalid_target");
+  assert.equal((await post("/studio/api/tokens", { op: "audience.remove", identifier: OTHER_AUDIENCE }, admin.cookie)).status, 409, "needs confirmation");
+  const removed = await post("/studio/api/tokens", { op: "audience.remove", identifier: OTHER_AUDIENCE, confirm: "CONFIRM REMOVE AUDIENCE " + OTHER_AUDIENCE }, admin.cookie);
+  assert.equal(removed.status, 200, await removed.clone().text());
+  const query = new URLSearchParams({ response_type: "code", client_id: webClient.client_id, redirect_uri: REDIRECT, scope: "openid",
+    state: "s", code_challenge: "x".repeat(43), code_challenge_method: "S256", resource: OTHER_AUDIENCE });
+  const refused = await mf.dispatchFetch(ISSUER + "/oauth2/authorize?" + query, { redirect: "manual", headers: { Cookie: alice.cookie, Accept: "text/html" } });
+  const where = refused.status === 200 ? (await refused.json()).url ?? "" : refused.headers.get("Location") ?? "";
+  assert.doesNotMatch(where, /[?&]code=/, "no authorization code for a removed audience");
+  assert.equal(await count("SELECT count(*) AS n FROM nathan_token_audiences WHERE identifier=?", OTHER_AUDIENCE), 0);
+  for (const action of ["token_audience_unlink", "token_audience_remove"])
+    assert.equal(await count("SELECT count(*) AS n FROM nathan_security_audit WHERE action=? AND outcome='succeeded'", action), 1, action);
 });

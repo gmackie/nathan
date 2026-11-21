@@ -43,7 +43,8 @@ export const TOKENS_STUDIO_SCRIPT = `
       el('tok-link').onclick=()=>op({op:'audience.link',identifier:aud(),clientId:el('tok-link-client').value.trim()});
       el('tok-unlink').onclick=()=>op({op:'audience.unlink',identifier:aud(),clientId:el('tok-link-client').value.trim()});
       el('tok-kind-save').onclick=()=>{const kind=el('tok-kind').value,id=el('tok-kind-client').value.trim();
-        op({op:'client.kind',clientId:id,kind},kind==='auto'?'Classify '+id+' by grant again? Its user-delegated tokens will say user.':null)};
+        op({op:'client.kind',clientId:id,kind,confirm:kind==='auto'?'CONFIRM CLASSIFY BY GRANT '+id:undefined},
+          kind==='auto'?'Classify '+id+' by grant again? Its user-delegated tokens will say user.':null)};
       el('tok-m-create').onclick=()=>{const name=el('tok-m-name').value.trim();
         op({op:'machine.create',name,kind:el('tok-m-kind').value,audience:aud(),confirm:'CONFIRM MACHINE CLIENT '+name},
           'Create client '+name+' for '+aud()+'? Its secret is shown once.')};

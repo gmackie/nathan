@@ -65,7 +65,8 @@ export function audienceApp(rows) {
  * credentials, query or fragment, and not one of Nathan's own resources or endpoints.
  */
 export function validateAudience(value, issuerOrigin) {
-  if (typeof value !== "string" || value.length < 9 || value.length > 512 || /[\s\x00-\x1f\x7f]/.test(value))
+  // No percent-encoding: Better Auth decodes the identifier when it is a path parameter.
+  if (typeof value !== "string" || value.length < 9 || value.length > 512 || /[\s\x00-\x1f\x7f%]/.test(value))
     throw Error("Invalid audience: use an exact https URL");
   let url;
   try { url = new URL(value); } catch { throw Error("Invalid audience: use an exact https URL"); }

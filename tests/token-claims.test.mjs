@@ -54,7 +54,7 @@ test("token audiences are exact HTTPS resource identifiers that cannot shadow Na
   for (const bad of ["http://gatekeeper.example.com/api", "https://gatekeeper.example.com/api#x", "https://u:p@gatekeeper.example.com/",
     "https://gatekeeper.example.com/api?x=1", "gatekeeper", "", "https://" + "a".repeat(600) + ".com",
     origin + "/mcp", origin + "/directory", origin + "/api/auth", origin + "/api/auth/oauth2/userinfo", "https://Gatekeeper.example.com/api",
-    "https://gatekeeper.example.com/a b", 42, null])
+    "https://gatekeeper.example.com/a b", "https://gatekeeper.example.com/a%2Fb", 42, null])
     assert.throws(() => validateAudience(bad, origin), /audience/i, String(bad));
 });
 

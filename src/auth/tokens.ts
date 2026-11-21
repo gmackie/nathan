@@ -170,6 +170,8 @@ export async function applyTokenOperation(auth: any, env: AuthEnv, headers: Head
   if (op === "client.kind") {
     const clientId = await existingClient(env, body.clientId);
     if (!["agent", "auto"].includes(body.kind)) throw Error("Invalid principal kind: agent or auto");
+    // Back to classify-by-grant widens the client: its user-delegated tokens then say `user`.
+    if (body.kind === "auto" && body.confirm !== "CONFIRM CLASSIFY BY GRANT " + clientId) throw Error("Explicit confirmation required");
     const change = body.kind === "agent"
       ? env.DB.prepare("INSERT INTO nathan_client_principals(client_id,principal_kind,set_by) VALUES (?,'agent',?) " +
         "ON CONFLICT(client_id) DO UPDATE SET principal_kind='agent', set_by=excluded.set_by, updated_at=unixepoch()").bind(clientId, actor)

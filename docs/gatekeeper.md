@@ -69,14 +69,14 @@ The standard `amr`, `acr` and `auth_time` names cannot be emitted on Better Auth
 
 In Identity Studio, under **Access tokens for Gatekeeper and APIs** (all writes are admin-only, need the current step-up, are same-origin and audited):
 
-1. **Register audience** with Gatekeeper's API URL (an exact `https` URL without query or fragment), for example `https://gatekeeper.example.com/api`. To get a `roles` hint, bind it to an application (optional). Registering creates a Better Auth resource with a 900 s lifetime, the scopes `openid profile email offline_access nathan:api`, and no resource-level custom claims (which would outrank Nathan's). Nathan's own `/mcp`, `/directory` and `/api/auth` identifiers are refused.
+1. **Register audience** with Gatekeeper's API URL (an exact `https` URL without query, fragment or percent-encoding), for example `https://gatekeeper.example.com/api`. To get a `roles` hint, bind it to an application (optional). Registering creates a Better Auth resource with a 900 s lifetime, the scopes `openid profile email offline_access nathan:api`, and no resource-level custom claims (which would outrank Nathan's). Nathan's own `/mcp`, `/directory` and `/api/auth` identifiers are refused.
 2. **Allow client to request this audience** for every web, SPA or agent client whose users call Gatekeeper. A client that is not linked gets `invalid_target`.
 3. For services, **create a machine or agent client** for the audience. It is a confidential client-credentials client with scope `nathan:api`, and its secret is shown once.
 4. **Set principal kind** to `agent` for agent and MCP clients.
 
 Removing an audience disables its Better Auth resource. New tokens are refused, and issued tokens expire within 900 s.
 
-API: `GET /studio/api/tokens` returns audiences, their linked clients and every client's kind. `POST /studio/api/tokens` takes an `op`: `audience.register` `{identifier, app?}`, `audience.remove` `{identifier, confirm: "CONFIRM REMOVE AUDIENCE <identifier>"}`, `audience.link` or `audience.unlink` `{identifier, clientId}`, `client.kind` `{clientId, kind: "agent" | "auto"}`, and `machine.create` `{name, audience, kind?: "machine" | "agent", confirm: "CONFIRM MACHINE CLIENT <name>"}`.
+API: `GET /studio/api/tokens` returns audiences, their linked clients and every client's kind. `POST /studio/api/tokens` takes an `op`: `audience.register` `{identifier, app?}`, `audience.remove` `{identifier, confirm: "CONFIRM REMOVE AUDIENCE <identifier>"}`, `audience.link` or `audience.unlink` `{identifier, clientId}`, `client.kind` `{clientId, kind: "agent" | "auto", confirm}` (`"auto"` needs `confirm: "CONFIRM CLASSIFY BY GRANT <clientId>"` because it widens the client), and `machine.create` `{name, audience, kind?: "machine" | "agent", confirm: "CONFIRM MACHINE CLIENT <name>"}`.
 
 Token requests:
 
