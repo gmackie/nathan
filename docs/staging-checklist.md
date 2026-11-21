@@ -7,7 +7,10 @@
 - [ ] Verify the exact Git commit, lockfile, migration checksums, plugin versions and release manifest.
 - [ ] Use an isolated Cloudflare account with Workers and D1, a managed active test zone and no overlapping DNS records.
 - [ ] Register a Cloudflare OAuth client for the hosted installer with only the documented required scopes, code + PKCE and exact callback.
-- [ ] Register separate test Google and GitHub OAuth apps with exact Nathan callback URLs.
+- [ ] Register separate test Google, GitHub, Apple, Discord, Twitch and X OAuth apps with exact Nathan callback URLs (see providers.md).
+- [ ] Run a Studio test sign-in for each provider with a real test account; confirm unverified/absent emails (Discord unverified, X without email access) get placeholder emails and do not link.
+- [ ] Run a Studio test sign-in as an administrator for the provider administrators will keep; confirm disabling the other providers is refused until then, and that `providers add <id> --apply` with a new secret takes effect immediately and voids the provider's previous test.
+- [ ] Apple: confirm domain registration, form_post callback and the runtime-minted client secret are accepted by appleid.apple.com.
 - [ ] Set up test email and a password manager for one-time OAuth secrets.
 
 ## Hosted installer acceptance
@@ -70,7 +73,7 @@
 - [ ] Confirm enrollment and recovery codes, then require a recent session-bound passkey login for Business-profile privileged admin changes.
 - [ ] Add a second verified administrator, test their MFA and permissions, revoke their grant and verify session invalidation; never permit web revocation of root owner.
 - [ ] Block raw Better Auth admin/SSO management endpoints; test CSRF and authorized Studio checks.
-- [ ] Encrypt initial Google/GitHub credentials in D1 and verify rotation/disable in Studio without stale Worker-secret fallback.
+- [ ] Encrypt the installer's first provider credentials in D1 and verify rotation/disable in Studio without stale Worker-secret fallback.
 - [ ] Verify enterprise OIDC remains untrusted before DNS TXT domain proof; test same-domain account linking and signed upstream tokens.
 - [ ] Validate SCIM Durable Object Users/Groups transactions, immutable externalId, PATCH active, ETags, bearer revocation and no automatic login authorization.
 - [ ] Ensure audit records never reveal credentials, recovery codes or OAuth tokens.
@@ -90,7 +93,7 @@
 
 - [ ] D1 database restore test using Cloudflare backup/restore mechanisms.
 - [ ] Protect encrypted installer tokens from the app UI and user logs, then rotate installer encryption key.
-- [ ] Rotate Google/GitHub OAuth secrets and user-facing app client secrets; revoke compromised sessions.
+- [ ] Rotate social provider OAuth secrets (and the Apple .p8 key) and user-facing app client secrets; revoke compromised sessions.
 - [ ] Test Cloudflare API 403/429/5xx, D1 failures and service-binding outage with fail-closed behavior.
 - [ ] Run OWASP ASVS Level 2-aligned review, dependency audit, SAST and independent protocol pentest.
 - [ ] Record staging results with timestamps, commit SHA, severity, and remediation PRs.

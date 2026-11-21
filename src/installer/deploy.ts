@@ -2,9 +2,11 @@ import type { InstallerEnv } from "./env";
 import type { InstallerTokens } from "./oauth";
 import { cloudflareRequest, cloudflareWrite } from "./cloudflare";
 import { loadRelease, releaseFile, type NathanRelease, type ReleaseFile } from "./release";
-import { validateInstallPlan, validateHostname, EMPTY_DATABASE_SQL } from "./validation.mjs";
+import { validateInstallPlan, validateHostname, EMPTY_DATABASE_SQL, INSTALLER_PROVIDER_STATE_SQL, INSTALLER_PROVIDER_AUDIT_SQL } from "./validation.mjs";
 import { realmIssuerHostname } from "../shared/realm.mjs";
-import { generateConfigKey,encryptProviderSecret } from "../auth/config-crypto.mjs";
+import { generateConfigKey,sealProviderCredentials } from "../auth/config-crypto.mjs";
+import { PROVIDER_IDS, validateProviderCredentials } from "../shared/providers.mjs";
+import { mintAppleClientSecret } from "../auth/apple-secret.mjs";
 import {sha256} from "../gateway/crypto";
 import { verifyIdentityHostname } from "./verify-idp";
 import { findD1Database } from "./d1";
@@ -181,16 +183,22 @@ function b64url(count:number) {
   let raw="";for(const b of crypto.getRandomValues(new Uint8Array(count)))raw+=String.fromCharCode(b);
   return btoa(raw).replaceAll("+","-").replaceAll("/","_").replace(/=+$/,"");
 }
-function validateProvider(payload:any) {
-  if(!payload||!["google","github"].includes(payload.provider))throw Error("Select Google or GitHub for first administrator login");
-  if(typeof payload.clientId!=="string"||payload.clientId.length<8||payload.clientId.length>512||
-     typeof payload.clientSecret!=="string"||payload.clientSecret.length<12||payload.clientSecret.length>4096)
-    throw Error("OAuth client ID and secret are required at initial upload");
-  return {name:payload.provider,id:payload.clientId,secret:payload.clientSecret};
+/** First-admin login provider, validated by the shared registry (NATH-9). Never echoes values. */
+async function validateProvider(payload:any) {
+  if(!payload||!PROVIDER_IDS.includes(payload.provider))
+    throw Error("Select a supported login provider (Google, GitHub, Apple, Discord, Twitch or X) for first administrator login");
+  let values:Record<string,string>;
+  try{values=validateProviderCredentials(payload.provider,payload) as Record<string,string>}
+  catch(e){throw Error((e as {publicMessage?:string}).publicMessage||"Provider credentials are required at initial upload")}
+  if(payload.provider==="apple"){
+    try{await mintAppleClientSecret(values as {clientId:string;teamId:string;keyId:string;privateKey:string})}
+    catch{throw Error("Apple private key is not a valid ES256 (P-256) PKCS#8 .p8 key")}
+  }
+  return {name:payload.provider as string,values};
 }
 async function uploadWorker(
   env:InstallerEnv,write:Write,release:NathanRelease,job:InstallJob,active:boolean,
-  provider?:ReturnType<typeof validateProvider>, configKey?:string, firstDeploy=false
+  provider?:Awaited<ReturnType<typeof validateProvider>>, configKey?:string, firstDeploy=false
 ){
   if(!job.database_id)throw Error("Database ID missing");
   const bindings:any[]=[
@@ -241,7 +249,7 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
   if(job.stage==="complete")return describe(job);
   const release=await loadRelease(env);
   if(job.release_id!==release.release)throw Error("This installation is pinned to another release. Resume with the original installer.");
-  if(job.stage==="upload")validateProvider(input); // Fail before claiming lock and touching Cloudflare
+  if(job.stage==="upload")await validateProvider(input); // Fail before claiming lock and touching Cloudflare
   // Claim a lease for the stage this request observed. RETURNING * re-reads the job under
   // the lease, so a request that waited behind another one never re-runs a finished stage.
   const lease=crypto.randomUUID();
@@ -319,21 +327,26 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
           throw Error("Existing domain realm does not match approved account, zone and issuer");
       }
     }else if(job.stage==="upload"){
-      const initialProvider=validateProvider(input);
+      const initialProvider=await validateProvider(input);
       // Both wizard and ongoing Identity Studio use the same encrypted D1 provider store.
       // This inactive IdP can be retried safely before the public route exists.
       const configKey=generateConfigKey();
-      const cipher=await encryptProviderSecret(initialProvider.name,initialProvider.secret,configKey);
+      const sealed=await sealProviderCredentials(initialProvider.name,initialProvider.values,configKey);
       const scripts=await api<Array<{id:string;tags?:string[];migration_tag?:string}>>("/accounts/"+job.account_id+"/workers/scripts");
       const workerName=job.worker_name;
       const existing=scripts.find(s=>s.id===workerName);
       if(existing && (!Array.isArray(existing.tags)||!existing.tags.includes("nathan")))
         throw Error("Worker name was claimed by an unrelated deployment after planning; refusing to overwrite it");
       await query(write,job,
-        "INSERT INTO nathan_oauth_providers(id,client_id,secret_cipher,enabled,updated_by) "+
-        "VALUES (?,?,?,1,?) ON CONFLICT(id) DO UPDATE SET client_id=excluded.client_id,"+
-        "secret_cipher=excluded.secret_cipher,enabled=1,updated_at=unixepoch(),updated_by=excluded.updated_by",
-        [initialProvider.name,initialProvider.id,cipher,"installer:"+user.id]);
+        "INSERT INTO nathan_oauth_providers(id,client_id,secret_cipher,config,secret_fields,updated_by) "+
+        "VALUES (?,?,NULL,?,?,?) ON CONFLICT(id) DO UPDATE SET client_id=excluded.client_id,secret_cipher=NULL,"+
+        "config=excluded.config,secret_fields=excluded.secret_fields,"+
+        "updated_at=unixepoch(),updated_by=excluded.updated_by",
+        [initialProvider.name,sealed.clientId,sealed.config,sealed.secretFields,"installer:"+user.id]);
+      // New credentials start untested; a first install enables the provider, a re-run keeps an
+      // administrator's disable. Every installer credential write is audited (NATH-9 provider state).
+      await query(write,job,INSTALLER_PROVIDER_STATE_SQL,[initialProvider.name,"installer:"+user.id]);
+      await query(write,job,INSTALLER_PROVIDER_AUDIT_SQL,[crypto.randomUUID(),"installer:"+user.id,initialProvider.name]);
       await uploadWorker(env,write,release,job,false,initialProvider,configKey,!existing?.migration_tag);
       // An uploaded Worker must never be reachable at workers.dev or preview URLs.
       await write("POST","/accounts/"+job.account_id+"/workers/scripts/"+job.worker_name+"/subdomain",

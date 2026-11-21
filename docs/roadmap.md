@@ -25,6 +25,8 @@
 
 - [x] Cloudflare OAuth owner-bound initial administrator, email verification, verified-user claim, enrollment and completed bootstrap.
 - [x] Encrypted D1-managed Google/GitHub provider credentials; add/rotate/enable/disable in Identity Studio without a deployment.
+- [x] Guided social login for Google, GitHub, Apple, Discord, Twitch and X from one registry across Studio, hosted installer and CLI: console deep links, exact callbacks, validated credentials, field-bound encrypted storage, runtime-minted Apple client secret, verified-email-only account linking and recorded test sign-in (NATH-9, workerd-tested against mocked providers; live provider accounts pending).
+- [x] One credential source per provider (CLI Worker secret, then Studio D1 row, then legacy secrets) with no copying between them, so a CLI rotation always takes effect. Tests are bound to a credential version. The last-login-method rule requires an administrator's test and is one atomic D1 write. Provider updates, denials and validation failures are audited (NATH-9 security review).
 - [x] Enterprise OIDC registration, DNS TXT domain ownership challenge and verification in the privileged UI.
 - [x] Block direct raw Better Auth admin/SSO management endpoints to avoid bypassing Nathan's admin policy.
 - [x] Per-connection SCIM 2.0 Users/Groups SQLite Durable Object, strict bearer validation, disabled-by-default connection and token rotation.
@@ -47,6 +49,7 @@
 - [ ] Add integration suite for OAuth/OIDC, malformed callbacks, replay, concurrency and D1 state transitions.
 - [ ] Run installer end-to-end against a real Cloudflare OAuth client; validate D1 API batch semantics, domain propagation, script binding retention, retries and safe recovery on failure.
 - [ ] Implement full installer rollback/reconciliation for interrupted upload states. Interrupted D1 creation, stale/concurrent stage execution and CLI secret reconciliation are handled and runtime-tested (NATH-8); other ambiguous states still fail closed.
+- [ ] Verify each social provider with real test accounts in staging (Apple domain/form_post, X email access, Twitch email_verified claim).
 - [ ] Verify end-to-end Enterprise SSO provider registration, passkey/TOTP enrollment and policy enforcement. Plugin runtime installation remains a reviewed redeploy operation.
 - [ ] Validate rollback, key rotation, backups, logs and incident response under staging load.
 - [ ] Independent security review, SBOM, signed release provenance and staged operational audit.

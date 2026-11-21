@@ -17,6 +17,13 @@ export interface AuthEnv {
   GOOGLE_CLIENT_SECRET?: string;
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
+  // NATH-9: optional JSON credential bundles written by `nathan providers add <id> --apply`.
+  NATHAN_PROVIDER_GOOGLE?: string;
+  NATHAN_PROVIDER_GITHUB?: string;
+  NATHAN_PROVIDER_APPLE?: string;
+  NATHAN_PROVIDER_DISCORD?: string;
+  NATHAN_PROVIDER_TWITCH?: string;
+  NATHAN_PROVIDER_TWITTER?: string;
   RESEND_API_KEY?: string;
   EMAIL_FROM?: string;
   NATHAN_PAIRWISE_SECRET?: string;

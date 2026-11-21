@@ -5,12 +5,15 @@ import { gatewayChecklist } from "../scripts/lib/protect-wizard.mjs";
 import { validateAdminPromotion } from "../scripts/lib/admin-wizard.mjs";
 
 const cfg={hostname:"auth.example.com",adminEmails:["Admin@Example.com"]};
-test("Google and GitHub callback guides derive from configured hostname",()=>{
+test("provider callback guides derive from configured hostname",()=>{
   const g=providerGuide("google","login.example.com");
   const gh=providerGuide("github","login.example.com");
   assert.equal(g.callback,"https://login.example.com/api/auth/callback/google");
   assert.equal(gh.callback,"https://login.example.com/api/auth/callback/github");
-  assert.equal(g.secretBindings[1],"GOOGLE_CLIENT_SECRET");
+  // NATH-9: the CLI stores one JSON credential bundle per provider as a Worker secret.
+  assert.deepEqual(g.secretBindings,["NATHAN_PROVIDER_GOOGLE"]);
+  assert.equal(providerGuide("twitter","login.example.com").callback,"https://login.example.com/api/auth/callback/twitter");
+  assert.equal(providerGuide("apple","login.example.com").responseMode,"form_post");
   assert.throws(()=>providerGuide("fake","login.example.com"));
 });
 test("gateway wizard uses exact callback and never targets the IdP itself",()=>{

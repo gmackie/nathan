@@ -7,6 +7,8 @@ import { sso } from "@better-auth/sso";
 import { sendAuthEmail } from "./email";
 import type { AuthEnv } from "./env";
 import type { SocialCredentials } from "./provider-store";
+import { recordProviderSignIn } from "./provider-store";
+import { ACCOUNT_LINKING, buildSocialProviders } from "../shared/providers.mjs";
 import {mayAdminister} from "./bootstrap";
 import {isAdminPrincipal} from "./admin-service";
 import {ssoPluginOptions,samlUserCreateGuard} from "./saml-policy.mjs";
@@ -18,12 +20,14 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
   if (!env.BETTER_AUTH_SECRET || env.BETTER_AUTH_SECRET.length < 32)
     throw new Error("BETTER_AUTH_SECRET must have at least 32 characters");
 
-  const socialProviders = {
+  // Legacy Worker-secret providers, built through the shared registry so they get the same
+  // verified-email mapping as managed providers (NATH-9).
+  const socialProviders: SocialCredentials = buildSocialProviders({
     ...(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET
       ? { google: { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET } } : {}),
     ...(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET
       ? { github: { clientId: env.GITHUB_CLIENT_ID, clientSecret: env.GITHUB_CLIENT_SECRET } } : {})
-  };
+  });
 
   return betterAuth({
     baseURL: issuer.origin,
@@ -31,13 +35,23 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
     secret: env.BETTER_AUTH_SECRET,
     database: env.DB,
     // Federated tokens are sensitive; encrypt them in D1 and keep OAuth state server-side.
-    account: { encryptOAuthTokens: true, storeStateStrategy: "database" },
+    // NATH-9: implicit account linking only on a provider-verified email matching a verified
+    // Nathan user; no provider is trusted by name (see docs/providers.md).
+    account: { encryptOAuthTokens: true, storeStateStrategy: "database", accountLinking: { ...ACCOUNT_LINKING, trustedProviders: [...ACCOUNT_LINKING.trustedProviders] } },
     disabledPaths: ["/token"],
     // SAML sign-in never creates accounts unless the connection allows
     // just-in-time provisioning for its verified domain (NATH-10).
     databaseHooks: { user: { create: { before: (user, ctx) => samlUserCreateGuard(env.DB, user, ctx) } } },
     hooks: {
       after: createAuthMiddleware(async (ctx) => {
+        // NATH-9: remember which social provider created a session, so a Studio test
+        // sign-in can prove the provider round trip.
+        if(ctx.path==="/callback/:id"){
+          const created=ctx.context.newSession;
+          if(created?.session?.id && created.user?.id && typeof ctx.params?.id==="string")
+            await recordProviderSignIn(env,{providerId:ctx.params.id,sessionId:created.session.id,userId:created.user.id});
+          return;
+        }
         // Passkey enrollment never grants admin assurance. Only a newly
         // verified passkey sign-in with a freshly issued session does.
         if(ctx.path!=="/passkey/verify-authentication")return;

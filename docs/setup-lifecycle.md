@@ -10,7 +10,7 @@ The installer connects to a Cloudflare account with authorization-code + PKCE, c
 
 The installer identity is the **root bootstrap authority**. The initial admin email must match its verified Cloudflare OAuth account email. There is no public "first visitor becomes admin" endpoint, default password or invitation link.
 
-The wizard collects Google or GitHub OAuth credentials, creating exact \`https://login.example.com/api/auth/callback/google\` or \`/github\` callback instructions. The first provider credentials are encrypted using AES-256-GCM in the customer's D1 database; \`NATHAN_CONFIG_KEY\` is generated and stored as a Worker secret. It is not written to the installer database or a source file.
+The wizard collects credentials for one of six social providers (Google, GitHub, Apple, Discord, Twitch or X), with exact \`https://login.example.com/api/auth/callback/<id>\` callback instructions from the shared registry. The first provider credentials are encrypted using AES-256-GCM in the customer's D1 database; \`NATHAN_CONFIG_KEY\` is generated and stored as a Worker secret. It is not written to the installer database or a source file.
 
 The optional selections at initial install:
 - **Domain-wide SSO:** one OIDC issuer for the root and approved subdomains.
@@ -24,7 +24,7 @@ The Worker is uploaded privately and starts with an inactive flag. The installer
 
 The installer writes \`nathan_bootstrap_status\` with the Cloudflare account's user ID and approved email. After deploying, the intended administrator:
 
-1. Signs into Nathan using the configured Google/GitHub upstream provider (or a supported enterprise IdP once verified).
+1. Signs into Nathan using the configured social provider (or a supported enterprise IdP once verified).
 2. Completes verified email authentication using **exactly the Cloudflare-verified bootstrap email**.
 3. Returns to the wizard. It checks the verified Better Auth user, binds its stable user ID to the original Cloudflare installer identity, and promotes only that account to the initial admin role.
 4. Opens \`https://login.example.com/security?setup=admin\`, enrolls a passkey and TOTP authenticator, saves backup codes privately, and confirms setup. For Standard, one enrolled method is acceptable; Business requires both.
@@ -44,7 +44,7 @@ Visit \`https://login.example.com/studio\` as a fully enrolled administrator. Se
 | Cloudflare account and DNS discovery | Yes | Read-only realm inventory after setup |
 | IdP hostname, Worker and D1 provisioning | Yes | Deployment CLI / reviewed infrastructure change |
 | Initial administrator | Cloudflare owner and verified account | See bootstrap status; add/revoke additional verified admins |
-| Google/GitHub OAuth | Setup guides; encrypted first provider | Add/rotate/enable/disable, encrypted runtime configuration |
+| Social login (Google, GitHub, Apple, Discord, Twitch, X) | Setup guides; encrypted first provider | Guided setup, add/rotate/enable/disable, test sign-in, encrypted runtime configuration |
 | OIDC provider and RP clients | Enabled with initial Worker | Register individual external/Worker/gateway clients, including reviewed subdomain batches |
 | Enterprise OIDC federation | SSO plugin opt-in | Register provider, obtain DNS TXT challenge, verify domain before login |
 | Enterprise SAML federation | SSO plugin opt-in | Create from validated IdP metadata (disabled), verify domain, enable, choose provisioning, rotate certificates ([saml.md](saml.md)) |
@@ -56,7 +56,7 @@ Visit \`https://login.example.com/studio\` as a fully enrolled administrator. Se
 
 ### OAuth providers and encryption
 
-Social credentials are encrypted in \`nathan_oauth_providers\`. Once there is a database record, it takes precedence over older Worker secrets. Disabling a provider must not silently fall back to its old credentials. A server-side check prevents disabling the last configured sign-in path unless another fallback exists.
+Each provider has one credential source: the CLI's \`NATHAN_PROVIDER_<ID>\` Worker secret, else credentials encrypted in \`nathan_oauth_providers\` (Studio or installer), else legacy Worker secrets. Credentials are never copied between sources, and Studio reports any that are present but unused. Disabling a provider never falls back to other credentials. A single conditional D1 write prevents disabling a provider unless another enabled provider has a test sign-in by a current administrator against its current credentials (or password/enterprise SSO is enabled and usable by an administrator). Changing credentials by any path voids the test. See [providers.md](providers.md).
 
 \`NATHAN_CONFIG_KEY\` is held in Cloudflare Workers Secrets; losing it renders managed provider credentials undecryptable. Operators must back up the key in a separate secure secrets manager and rotate credentials deliberately. Encryption at rest does not eliminate the need for access controls, database backups, key rotation, and incident handling.
 
@@ -99,7 +99,7 @@ Before upgrades, back up D1, Worker secrets (through a proper secret-management 
 See [staging-checklist.md](staging-checklist.md). Integration tests must cover:
 - Cloudflare OAuth identity → Better Auth verified user → secure bootstrap → MFA enrollment → recent passkey reauthentication.
 - Wrong Cloudflare owner, email mismatch, replayed installer job, forged session cookie and MFA-bypass attempts.
-- Google/GitHub setup and rotation from both wizard and Studio without leaking client secrets.
+- Setup and rotation of all six social providers from wizard, Studio and CLI without leaking client secrets or the Apple key.
 - Enterprise OIDC registration, TXT ownership verification, untrusted-provider rejection and account-linking safety.
 - SCIM group/user CRUD, duplicate externalId rejection, disabled connection, token rotation/revocation, PATCH and concurrency, with no automatic auth access.
 - Added admin grant and revocation, including online authorization checks and expired bearer tokens.
