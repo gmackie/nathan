@@ -75,6 +75,8 @@
 - [ ] Encrypt initial Google/GitHub credentials in D1 and verify rotation/disable in Studio without stale Worker-secret fallback.
 - [ ] Verify enterprise OIDC remains untrusted before DNS TXT domain proof; test same-domain account linking and signed upstream tokens.
 - [ ] Validate SCIM Durable Object Users/Groups transactions, immutable externalId, PATCH active, ETags, bearer revocation and no automatic login authorization.
+- [ ] NATH-11 with live Okta and Entra tenants: verified-domain linking, deactivation revoking Nathan and gateway sessions within 60 s, reactivation without restored sessions, group push into a mapped group, a D1 outage answered with 503 and later applied, and back-channel logout reaching the gateway.
+- [ ] NATH-11 review fixes on staging: a directory deactivation of a Nathan administrator is held for review (no ban, sessions intact) and applies once when another administrator approves; keep active survives a resync; a rehire after DELETE gets 201; a resync of a large directory drains through the Durable Object alarm; a poisoned outbox entry is skipped from Studio.
 - [ ] Ensure audit records never reveal credentials, recovery codes or OAuth tokens.
 - [ ] Confirm UI can tighten but never lower effective deployment MFA requirements.
 - [ ] Test NATHAN_CONFIG_KEY loss/restore and managed-provider ciphertext decryption.

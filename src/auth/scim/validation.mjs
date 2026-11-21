@@ -24,7 +24,10 @@ export function validateScimUser(body){
   if(typeof externalId!=="string"||externalId.length<3||externalId.length>256||
      /[\x00-\x1f\x7f]/.test(externalId))
     throw Error("A stable directory-owned externalId is required for safe identity matching");
-  if(body.active!==undefined && typeof body.active!=="boolean")throw Error("active must be a boolean");
+  // Entra may send active as the string "True"/"False" (NATH-11).
+  const active=body.active===undefined?true:typeof body.active==="boolean"?body.active:
+    typeof body.active==="string"&&/^(true|false)$/i.test(body.active)?body.active.toLowerCase()==="true":null;
+  if(active===null)throw Error("active must be a boolean");
   if(body.displayName!==undefined&&(typeof body.displayName!=="string"||body.displayName.length>256))
     throw Error("Invalid displayName");
   const emails=Array.isArray(body.emails)?body.emails:[{value:userName,primary:true}];
@@ -32,7 +35,7 @@ export function validateScimUser(body){
      e.value.length>254||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e.value)))
     throw Error("Invalid SCIM emails");
   const displayName=(body.displayName||body.name?.formatted||userName).slice(0,256);
-  return {userName,externalId,active:body.active!==false,displayName,
+  return {userName,externalId,active,displayName,
     emails:emails.map(e=>({value:e.value.toLowerCase(),type:e.type==="work"?"work":"other",primary:e.primary===true}))};
 }
 export function validateScimGroup(body){
@@ -40,10 +43,13 @@ export function validateScimGroup(body){
   if(typeof body.displayName!=="string"||body.displayName.length<1||body.displayName.length>256)
     throw Error("SCIM group requires displayName");
   const members=body.members??[];
-  if(!Array.isArray(members)||members.length>200||
+  if(!Array.isArray(members)||members.length>1000||
      members.some(m=>!m||typeof m.value!=="string"||!/^[0-9a-f-]{36}$/i.test(m.value)))
     throw Error("Invalid SCIM group member IDs");
-  return {displayName:body.displayName,members:[...new Set(members.map(m=>m.value))]};
+  const externalId=body.externalId??null;
+  if(externalId!==null&&(typeof externalId!=="string"||externalId.length<1||externalId.length>256||/[\x00-\x1f\x7f]/.test(externalId)))
+    throw Error("Invalid SCIM group externalId");
+  return {displayName:body.displayName,externalId,members:[...new Set(members.map(m=>m.value.toLowerCase()))]};
 }
 export function parseFilter(value){
   if(value==null||value==="")return null;

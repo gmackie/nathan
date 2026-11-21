@@ -48,7 +48,26 @@
 - [x] Identity Studio Roles and access (admin-only, step-up, audited, change-fed), permissions as code (`nathan rbac plan|sync`), principal key setup in `nathan protect`. [Quickstart](quickstart-rbac.md), [reference](rbac.md).
 - [ ] Follow the quickstart end to end against a staging Cloudflare account (gateway + upstream + Studio grants).
 - [ ] Contract test with Gatekeeper's PIP adapter (GATE-9) against a Nathan fixture.
-- [ ] Access-token role claims as hints (NATH-15), MCP scopes capped by permissions (NATH-14), SCIM group mapping (NATH-11).
+- [ ] Access-token role claims as hints (NATH-15), MCP scopes capped by permissions (NATH-14).
+
+## Inbound SCIM lifecycle (NATH-11; implemented source, staging pending)
+
+- [x] Identity linking by (connection, externalId); first link by email only on the connection's verified domain and a verified Nathan email; a link never moves across connections (migration 0016, workerd-tested).
+- [x] Optional just-in-time account creation per connection (default off, unverified email), with an admission hook for NATH-16.
+- [x] Fail-closed deprovisioning: `active=false` or DELETE bans, deletes sessions, revokes all access and refresh tokens and queues back-channel logout in one D1 transaction; the SCIM request gets 503 until it commits; the Durable Object alarm retries (workerd-tested with real logout delivery to the gateway).
+- [x] Reactivation lifts only Nathan's SCIM ban and restores no sessions; administrator bans are never lifted by the directory.
+- [x] Back-channel logout delivery queue (signed `logout+jwt`, `sub` tokens, backoff retries, failures audited).
+- [x] Explicit SCIM group → Nathan group mapping (`source = 'scim'`); idempotent membership; mapping grants nothing.
+- [x] Replay-safe reconciliation (per-resource revisions, ordered outbox, applied-revision guard) and RFC 7644 PATCH with Okta and Entra request shapes (fixtures in `tests/fixtures/scim/`).
+- [x] Identity Studio lifecycle section: settings, mappings, link status, last sync, error log (admin-only, step-up, audited). Setup guide: [scim.md](scim.md).
+- [ ] Provision from a live Okta tenant and a live Entra tenant against staging (create, update, deactivate, reactivate, group push), and check the vendors' current payloads against the fixtures.
+- [x] Security review fixes: Nathan administrators (admin role, admin grant, bootstrap owner, `NATHAN_ADMIN_EMAILS`) are never linked or deprovisioned automatically; held changes become audited review items approved or dismissed in Studio with step-up and exact confirmation; the last administrator is never deprovisioned by SCIM (unit- and workerd-tested).
+- [x] Administrator overrides: keep active (recorded with actor and time, kept through replays and resyncs until a new deprovision change), out-of-band unbans detected and recorded, and a Studio unlink action.
+- [x] Rehires: deleted SCIM resources move to tombstone tables in the Durable Object (migrated in place on existing data), live-only uniqueness in D1, and a rehire with the same externalId takes over the deleted identity's link. A deleted Nathan account's link is never re-made automatically.
+- [x] Bounded reconciliation per invocation (100 statements per batch, 500 per invocation, alarm continuation, removals before additions; 1,200 JIT links and 3,000 memberships in workerd), and a Studio outbox view with skip-after-review for a poisoned entry.
+- [x] Race-safe application: compare-and-set on `apply_seq` in every batch; duplicate outbox rows, late revisions and racing appliers tested directly.
+- [x] Re-review fixes: deprovisioning takes over expiring bans (a lapsed suspension never ends a deprovisioning or counts as an override); only lifting Nathan's own SCIM ban is an override, recorded by a D1 trigger on every path; every batch of a large group starts with the compare-and-set; the last-administrator check is inside the deprovisioning batch (atomic across connections); approve/dismiss audit `rejected` when the item was decided meanwhile; review creation is rate-limited per connection and Studio pages reviews pending first, oldest first, with counts.
+- [ ] Per-user directory profile sync (name only) if needed.
 
 ## Required before first actual production-ready release
 
@@ -58,7 +77,7 @@
 - [ ] Complete the fail-closed provisioning sequence and all gateway deployment workflows.
 - [ ] Verify that `workers.dev`, previews, extra routes and direct origin paths cannot bypass gateways.
 - [ ] Add assurance claim support; do not report AAL2/AAL3 without verification.
-- [x] Implement signed back-channel logout receiver. Revocation and JTI replay record commit atomically, storage failures return 503 so the IdP retries (NATH-8, workerd-tested); IdP-side delivery remains pending.
+- [x] Implement signed back-channel logout receiver. Revocation and JTI replay record commit atomically, storage failures return 503 so the IdP retries (NATH-8, workerd-tested). IdP-side delivery with retries exists for SCIM deprovisioning (NATH-11); delivery on interactive sign-out still relies on Better Auth's single attempt.
 - [ ] Add integration suite for OAuth/OIDC, malformed callbacks, replay, concurrency and D1 state transitions.
 - [ ] Run installer end-to-end against a real Cloudflare OAuth client; validate D1 API batch semantics, domain propagation, script binding retention, retries and safe recovery on failure.
 - [ ] Implement full installer rollback/reconciliation for interrupted upload states. Interrupted D1 creation, stale/concurrent stage execution and CLI secret reconciliation are handled and runtime-tested (NATH-8); other ambiguous states still fail closed.
@@ -78,6 +97,6 @@
 - [ ] Design an explicitly opt-in, fail-closed `example.com/*` + `*.example.com/*` gateway with a verified upstream map and a login-host exclusion. Domain-wide OIDC alone does not intercept or secure HTTP traffic.
 - [ ] Support high-scale tenant subdomains through an explicitly authorized canonical callback app plus cryptographically bound tenant return state rather than wildcard redirects.
 
-## SCIM production-lifecycle limitation
+## SCIM lifecycle status
 
-Current SCIM support stages transactional directory Users and Groups but deliberately **does not** link external IDs to Better Auth login identities or immediately deprovision sessions. Production SCIM identity synchronization, role/group mapping, replay-safe reconciliation and fail-closed revocation need a separate tested milestone. The official Better Auth SCIM plugin cannot simply be enabled against D1 because it needs interactive transaction semantics.
+Since NATH-11, SCIM links directory users to Nathan accounts (opt-in per connection), deprovisions them fail-closed, and feeds explicitly mapped groups; see [scim.md](scim.md). It is not yet verified against live Okta or Entra tenants. The official Better Auth SCIM plugin still cannot be enabled against D1, because it needs interactive transactions; Nathan's per-connection Durable Object plus single-batch D1 reconciliation replaces it.
