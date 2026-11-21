@@ -1,4 +1,4 @@
-import { RBAC_STUDIO_HTML, RBAC_STUDIO_SCRIPT } from "./rbac-ui";
+import { RBAC_STUDIO_HTML, RBAC_STUDIO_SCRIPT } from "./rbac-ui.ts";
 const htmlEscape = (s: string) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 
 function page(title: string, body: string, script = ""): Response {
