@@ -672,3 +672,85 @@ test("a rehire after DELETE reuses userName and externalId (and a group its disp
   await ok(await scim("acme", "DELETE", "/Groups/" + group.id), 204);
   await ok(await scim("acme", "POST", "/Groups", { ...okta.createGroup, displayName: "Rehire group" }), 201);
 });
+
+// ---- re-review fixes ---------------------------------------------------------------------------
+
+const banOf = userId => one('SELECT "banned" AS banned, "banReason" AS reason, "banExpires" AS expires FROM "user" WHERE "id"=?', userId);
+const SCIM_BAN = connection => "SCIM deprovisioned (connection " + connection + ")";
+
+test("a 7-day suspension does not end a directory deprovisioning: Nathan takes the ban over; expiry and resync keep it", async () => {
+  await user("u-sus", "sus@acme.example");
+  const sus = await ok(await scim("acme", "POST", "/Users", directoryUser("sus@acme.example", "00u-sus")), 201);
+  // An administrator suspends the user for 7 days (Better Auth banUser writes reason and expiry).
+  await sql('UPDATE "user" SET "banned"=1, "banReason"=\'Suspended\', "banExpires"=? WHERE "id"=\'u-sus\'', new Date(Date.now() + 7 * 86400_000).toISOString());
+  await ok(await scim("acme", "PATCH", "/Users/" + sus.id, okta.deactivateUser));
+  assert.deepEqual({ ...(await banOf("u-sus")) }, { banned: 1, reason: SCIM_BAN("acme"), expires: null });
+  // Better Auth lifts an expired ban at sign-in; there is no expiry left to lapse, and a resync keeps the block.
+  await sql('UPDATE "user" SET "banned"=0, "banReason"=NULL, "banExpires"=NULL WHERE "id"=\'u-sus\' AND "banExpires" IS NOT NULL');
+  await ok(await resync("acme"));
+  assert.equal(await banned("u-sus"), true);
+  assert.equal((await link("acme", "00u-sus")).override_cause, null, "no override recorded");
+});
+
+test("an administrator's expiring re-ban over the SCIM ban lapses at sign-in; the next resync bans again, with no override", async () => {
+  await user("u-cool", "cool@acme.example");
+  const cool = await ok(await scim("acme", "POST", "/Users", directoryUser("cool@acme.example", "00u-cool")), 201);
+  await ok(await scim("acme", "PATCH", "/Users/" + cool.id, okta.deactivateUser));
+  assert.equal((await banOf("u-cool")).reason, SCIM_BAN("acme"));
+  const overrides = (await one("SELECT count(*) AS n FROM nathan_security_audit WHERE action='scim_override_detected'")).n;
+  // Re-banned with an expiry (Better Auth banUser over the SCIM ban), then lifted at sign-in once expired.
+  await sql('UPDATE "user" SET "banned"=1, "banReason"=\'Cooling off\', "banExpires"=? WHERE "id"=\'u-cool\'', new Date(Date.now() - 1000).toISOString());
+  assert.equal((await link("acme", "00u-cool")).scim_banned, 0, "workerd D1 ran the trigger: the ban is no longer Nathan's");
+  await sql('UPDATE "user" SET "banned"=0, "banReason"=NULL, "banExpires"=NULL WHERE "id"=\'u-cool\'');
+  await ok(await resync("acme"));
+  assert.deepEqual({ ...(await banOf("u-cool")) }, { banned: 1, reason: SCIM_BAN("acme"), expires: null });
+  assert.equal((await link("acme", "00u-cool")).override_cause, null);
+  assert.equal((await one("SELECT count(*) AS n FROM nathan_security_audit WHERE action='scim_override_detected'")).n, overrides);
+});
+
+test("two administrators in different connections approving each other's deprovisioning: at least one stays", async () => {
+  const sessions = {};
+  for (const connection of ["acme", "acme2"]) await ok(await resync(connection));   // linking on
+  for (const [id, connection] of [["u-ra", "acme"], ["u-rb", "acme2"]]) {
+    const email = id.slice(2) + "@acme.example";
+    sessions[id] = await otherAdmin(id, email);
+    const created = await ok(await scim(connection, "POST", "/Users", directoryUser(email, "00" + id)), 201);
+    const review = (await view(connection)).reviews.find(r => r.userId === id && r.action === "link");
+    assert.equal((await ok(await studio("/studio/api/scim/users", { op: "approve", connection, review: review.id, confirm: "CONFIRM APPROVE LINK " + email }))).state, "applied");
+    await ok(await scim(connection, "PATCH", "/Users/" + created.id, okta.deactivateUser));
+    assert.equal(await banned(id), false, "held for review");
+  }
+  // Every other administrator is blocked, so u-ra and u-rb are each other's only remaining administrator.
+  const others = await all("SELECT u.\"id\" AS id FROM \"user\" u WHERE u.\"id\" NOT IN ('u-ra','u-rb') AND ifnull(u.\"banned\",0)=0 AND (" +
+    "EXISTS(SELECT 1 FROM nathan_bootstrap_status b WHERE b.admin_user_id=u.\"id\") OR EXISTS(SELECT 1 FROM nathan_admin_grants g WHERE g.user_id=u.\"id\" AND g.enabled=1))");
+  for (const o of others) await sql('UPDATE "user" SET "banned"=1, "banReason"=\'test: out of the way\' WHERE "id"=?', o.id);
+  try {
+    const pending = async (connection, id) => (await view(connection)).reviews.find(r => r.userId === id && r.action === "deprovision" && r.state === "pending");
+    const [ra, rb] = [await pending("acme", "u-ra"), await pending("acme2", "u-rb")];
+    const results = await Promise.all([
+      studio("/studio/api/scim/users", { op: "approve", connection: "acme2", review: rb.id, confirm: "CONFIRM APPROVE DEPROVISION rb@acme.example" }, sessions["u-ra"].cookie),
+      studio("/studio/api/scim/users", { op: "approve", connection: "acme", review: ra.id, confirm: "CONFIRM APPROVE DEPROVISION ra@acme.example" }, sessions["u-rb"].cookie)
+    ]);
+    for (const r of results) assert.ok(r.status === 200 || r.status === 409 || r.status === 403, String(r.status));
+    // Let both connections' Durable Objects finish applying (alarms included).
+    for (let i = 0; i < 20 && (await one("SELECT count(*) AS n FROM nathan_scim_reviews WHERE user_id IN ('u-ra','u-rb') AND action='deprovision' AND state='approved'")).n; i++) await sleep(100);
+    const active = [];
+    for (const id of ["u-ra", "u-rb"]) if (!await banned(id)) active.push(id);
+    assert.equal(active.length, 1, "exactly one of the two administrators remains: " + JSON.stringify(await all("SELECT user_id, state FROM nathan_scim_reviews WHERE user_id IN ('u-ra','u-rb') AND action='deprovision'")));
+  } finally {
+    for (const o of others) await sql('UPDATE "user" SET "banned"=0, "banReason"=NULL WHERE "id"=?', o.id);
+  }
+});
+
+test("Studio review list: pending first and oldest first, counts per state, filter and paging; bad filters are refused", async () => {
+  const v = await view();
+  assert.ok(v.reviewCounts && typeof v.reviewCounts === "object");
+  assert.equal(v.reviewPage.limit, 100);
+  const order = v.reviews.map(r => r.state === "pending" ? 0 : r.state === "approved" ? 1 : 2);
+  assert.deepEqual(order, [...order].sort((a, b) => a - b), "open items first");
+  const filtered = await ok(await auth.fetch(AUTH_ORIGIN + "/studio/api/scim/connection?id=acme&reviewState=applied", { headers: { Cookie: admin.cookie } }));
+  assert.ok(filtered.reviews.every(r => r.state === "applied"));
+  assert.equal(filtered.reviewPage.total, v.reviewCounts.applied ?? 0);
+  const bad = await auth.fetch(AUTH_ORIGIN + "/studio/api/scim/connection?id=acme&reviewOffset=-5", { headers: { Cookie: admin.cookie } });
+  assert.equal(bad.status, 400);
+});
