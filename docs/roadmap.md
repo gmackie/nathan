@@ -48,7 +48,17 @@
 - [x] Identity Studio Roles and access (admin-only, step-up, audited, change-fed), permissions as code (`nathan rbac plan|sync`), principal key setup in `nathan protect`. [Quickstart](quickstart-rbac.md), [reference](rbac.md).
 - [ ] Follow the quickstart end to end against a staging Cloudflare account (gateway + upstream + Studio grants).
 - [ ] Contract test with Gatekeeper's PIP adapter (GATE-9) against a Nathan fixture.
-- [ ] Access-token role claims as hints (NATH-15), MCP scopes capped by permissions (NATH-14), SCIM group mapping (NATH-11).
+- [ ] MCP scopes capped by permissions (NATH-14), SCIM group mapping (NATH-11).
+
+## Gatekeeper-ready access tokens (NATH-15; implemented source, staging pending)
+
+- [x] RFC 9068 JWT access tokens (`typ: at+jwt`, `client_id`, `jti`) with `principal_kind` (user / machine / agent), capped at 900 s for every access token.
+- [x] Token audiences registered in Identity Studio (migration 0014), optionally bound to an app for a `roles` hint from the NATH-13 evaluator. Clients are linked per audience. Machine and agent client-credentials clients use scope `nathan:api`.
+- [x] Administrator-set `agent` kind per client (admin-only, audited). Without a user session a token is never `user`.
+- [x] `nathan_amr`/`nathan_acr`/`nathan_auth_time` only from verified passkey sign-in evidence for the token's session. Better Auth 1.7.14 reserves and strips `acr`/`amr`/`auth_time` on access tokens, so Gatekeeper `mfa` is never set by Nathan tokens.
+- [x] Ready-to-paste Gatekeeper provider entry ([gatekeeper.md](gatekeeper.md)), workerd-tested with user (authorization code + PKCE), machine and agent tokens, against a mirror of Gatekeeper's adapter and Gatekeeper's own resolver.
+- [ ] Verify against a deployed Nathan and Gatekeeper on staging, including a live passkey sign-in.
+- [ ] Standard `acr`/`amr`/`auth_time` on access tokens once Better Auth offers a supported way, and verified provider evidence.
 
 ## Required before first actual production-ready release
 
@@ -57,7 +67,7 @@
 - [ ] Complete real-account end-to-end tests for initial-admin claim, passkey/TOTP enrollment, session step-up, SSO linking and administrator recovery.
 - [ ] Complete the fail-closed provisioning sequence and all gateway deployment workflows.
 - [ ] Verify that `workers.dev`, previews, extra routes and direct origin paths cannot bypass gateways.
-- [ ] Add assurance claim support; do not report AAL2/AAL3 without verification.
+- [ ] Add assurance claim support; do not report AAL2/AAL3 without verification. (NATH-15 reports passkey sign-in evidence under `nathan_*` claims only; it is not AAL2.)
 - [x] Implement signed back-channel logout receiver. Revocation and JTI replay record commit atomically, storage failures return 503 so the IdP retries (NATH-8, workerd-tested); IdP-side delivery remains pending.
 - [ ] Add integration suite for OAuth/OIDC, malformed callbacks, replay, concurrency and D1 state transitions.
 - [ ] Run installer end-to-end against a real Cloudflare OAuth client; validate D1 API batch semantics, domain propagation, script binding retention, retries and safe recovery on failure.

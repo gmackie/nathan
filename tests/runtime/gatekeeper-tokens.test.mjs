@@ -200,6 +200,9 @@ test("(a) a user token from authorization code + PKCE carries the Gatekeeper pro
   assert.equal(typeof claims.nathan_auth_time, "number");
   for (const reserved of ["acr", "amr", "auth_time", "nonce", "cnf", "act", "token_use"]) assert.ok(!(reserved in claims), reserved);
 
+  const discovery = await (await mf.dispatchFetch(ISSUER + "/.well-known/openid-configuration")).json();
+  assert.equal(discovery.issuer, PROVIDER.issuer, "the documented issuer is the discovered one");
+  assert.equal(discovery.jwks_uri, PROVIDER.jwksUri, "the documented jwksUri is the discovered one");
   const principal = await verifyLikeGatekeeper(body.access_token, PROVIDER, await jwks());
   assert.equal(principal.kind, "human");
   assert.equal(principal.subject, "u-alice");

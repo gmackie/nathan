@@ -8,6 +8,8 @@ Nathan exposes a stateless, OAuth-protected Model Context Protocol endpoint at \
 
 From Identity Studio register a **MCP administrator** application with an exact HTTPS redirect URI, such as an agent's OAuth callback. Public clients require PKCE and do not receive a client secret. Ask for the \`resource=https://login.example.com/mcp\` authorization parameter and the \`nathan:read\` scope.
 
+In **Access tokens for Gatekeeper and APIs**, set each agent's client to principal kind **agent**. Its tokens then say `principal_kind: agent` even while acting for an administrator. The MCP endpoint still checks the administrator behind the token on every call.
+
 This initial implementation uses Nathan's own strict stateless JSON-RPC adapter with MCP protocol version **2026-07-28**. It supports \`server/discover\`, \`tools/list\`, and \`tools/call\`. The client must send \`MCP-Protocol-Version\`, \`Mcp-Method\`, \`Mcp-Name\` (when invoking tools), and matching \`params._meta\`. Production client-compatibility tests against the official MCP SDK are still required.
 
 ## Read tools

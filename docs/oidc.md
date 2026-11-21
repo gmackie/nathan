@@ -10,6 +10,8 @@ Nathan's Better Auth OAuth Provider issues tokens and owns discovery, client reg
 
 Client secrets are displayed once. Callback URIs must be exact, HTTPS except explicitly permitted native loopback forms. JWTs are resource-bound and validated for issuer, audience, signature, and required scope.
 
+**Access tokens (NATH-15):** a token request that names a configured RFC 8707 `resource` gets an RFC 9068 JWT (`typ: at+jwt`) with `principal_kind` (`user`, `machine` or `agent`). Otherwise the token is opaque. No access token lives longer than 900 s, so use refresh tokens (`offline_access`) for long sessions. Register APIs and Gatekeeper as token audiences in Identity Studio. See [gatekeeper.md](gatekeeper.md) for the claims, the evidence-only `nathan_amr`/`nathan_acr` claims and the Gatekeeper provider entry.
+
 **Assurance limitation:** Better Auth's OAuth Provider currently advertises ACR `0` by default. Nathan must not invent an AAL2 claim because a TOTP or passkey plugin was enabled. High-assurance gateway requests fail closed until real assurance claims are verified.
 
 **Logout:** Gateway code verifies signed OIDC back-channel Logout Tokens and deletes sessions by `sid` or subject. Client registration must enable `backchannel_logout_uri` for the gateway to receive them.
