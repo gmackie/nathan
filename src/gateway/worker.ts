@@ -3,7 +3,7 @@ import { randomId, seal, unseal, sha256 } from "./crypto";
 import { discover, authorizeUrl, exchangeCode, verifyIdToken } from "./oidc";
 import type { GatewayEnv } from "./env";
 import { handleBackchannelLogout } from "./backchannel";
-import { signPrincipal, PRINCIPAL_HEADER } from "../shared/principal.mjs";
+import { signPrincipal, principalKey, PRINCIPAL_HEADER } from "../shared/principal.mjs";
 import type { AccessDecision } from "./env";
 
 const SESSION_COOKIE = "__Host-nathan-session";
@@ -133,9 +133,11 @@ async function resolveAccess(env: GatewayEnv, session: StoredSession): Promise<A
   return decision;
 }
 async function upstream(request: Request, env: GatewayEnv, session: StoredSession): Promise<Response> {
+  // Configuration is checked before any decision, so a misconfigured gateway is a 503 for everyone.
+  if (!env.NATHAN_PRINCIPAL_KEY) throw Error("NATHAN_PRINCIPAL_KEY missing");
+  principalKey(env.NATHAN_PRINCIPAL_KEY);
   const access = await resolveAccess(env, session);
   if (!access.allowed) return errorResponse(403, "Access denied. Ask an administrator for a role in this application.");
-  if (!env.NATHAN_PRINCIPAL_KEY) throw Error("NATHAN_PRINCIPAL_KEY missing");
   const principal = await signPrincipal({
     sub: session.subject, email: session.email, app: env.APPLICATION_ID, roles: access.roles, permissions: access.permissions
   }, { key: env.NATHAN_PRINCIPAL_KEY, issuer: origin(env) });
