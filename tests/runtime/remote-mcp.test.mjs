@@ -664,6 +664,15 @@ test("registration: only successful registrations count globally, unused clients
   // The per-address limit still applies to every attempt, valid or not.
   assert.equal((await register({ redirect_uris: [REDIRECT] }, "192.0.2.10")).status, 429);
 
+  // One address may store at most MCP_DAILY_REGISTRATIONS_PER_ADDRESS (50) registrations a day, so a
+  // single address cannot keep the unused-client pool full by itself.
+  assert.equal((await register({ redirect_uris: [REDIRECT] }, "192.0.2.50")).status, 201);
+  await sql("UPDATE nathan_mcp_limits SET request_count=50 WHERE id LIKE 'mcp-oauth:register-day:%' AND expires_at>unixepoch()");
+  const daily = await register({ redirect_uris: [REDIRECT] }, "192.0.2.50");
+  assert.equal(daily.status, 429, "the address's daily registrations are used up: " + JSON.stringify(daily.body));
+  assert.equal((await register({ redirect_uris: [REDIRECT] }, "192.0.2.51")).status, 201, "other addresses are unaffected");
+  await sql("UPDATE nathan_mcp_limits SET request_count=0 WHERE id LIKE 'mcp-oauth:register-day:%'");
+
   // The global limit on successful registrations (300 a minute).
   await sql("UPDATE nathan_mcp_limits SET request_count=300 WHERE id LIKE 'mcp-oauth:register-all:%' AND expires_at>unixepoch()");
   const overall = await register({ redirect_uris: [REDIRECT] }, "192.0.2.20");

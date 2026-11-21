@@ -140,7 +140,7 @@ The consent page runs no script. It shows the client's self-reported name and id
 Registration is anonymous, so it is bounded so that it cannot fill D1:
 
 - **Unused registrations are short-lived.** A client that has not completed a code exchange within 24 hours of registering is deleted, by the scheduled handler and opportunistically (up to 100 at a time) on every registration. From its first grant on (`first_grant_at`), a registration lives its full 180 days, even if that grant is later revoked.
-- **At most 1,000 unused registrations exist at once.** Beyond that, registration answers `503 temporarily_unavailable` with `Retry-After: 3600` until pruning makes room, and Nathan writes one `mcp_client_register` audit row with outcome `refused` per hour. Registered clients keep working.
+- **At most 1,000 unused registrations exist at once.** Beyond that, registration answers `503 temporarily_unavailable` with `Retry-After: 3600` until pruning makes room, and Nathan writes one `mcp_client_register` audit row with outcome `refused` per hour. Registered clients keep working. One address may store at most 50 registrations a day, so a single address cannot hold the pool full; an attacker spread over 20 or more addresses still can, until slots age out after 24 hours (accepted risk, threat model T21).
 - **Rate limits.** Every attempt, valid or not, counts toward 20 per minute per address. Only registrations that are about to be stored count toward the global 300 per minute, so a flood of invalid requests cannot lock out real clients.
 
 These clients exist only for the MCP authorization server. They are not Better Auth OAuth clients and cannot use `/api/auth` or get OIDC scopes.
@@ -176,7 +176,7 @@ Nathan stays authentication plus roles: servers that need conditions, approvals 
 
 ## Operations
 
-- **Rate limits** (fixed windows in `nathan_mcp_limits`, keyed by hashes): registration 20/min per address (all attempts) and 300/min overall (stored registrations only), at most 1,000 registrations without a grant; token and revocation 120/min per address; consent pages and answers 30/min per user; connection changes 30/min per user; grant checks 600/min per address.
+- **Rate limits** (fixed windows in `nathan_mcp_limits`, keyed by hashes): registration 20/min per address (all attempts), 50/day per address and 300/min overall (stored registrations only), at most 1,000 registrations without a grant; token and revocation 120/min per address; consent pages and answers 30/min per user; connection changes 30/min per user; grant checks 600/min per address.
 - **Audit** (`nathan_security_audit`): client registration, consent, grant creation, grant edits, revocation with its reason (`user_disconnect`, `client_revocation`, `refresh_reuse`, `code_replay`, `admin_revocation`), and every Studio change.
 - **Storage** (migration 0015): `nathan_mcp_resources`, `nathan_mcp_scopes`, `nathan_mcp_clients`, `nathan_mcp_grants`, `nathan_mcp_artifacts`. Deleting a grant removes its tokens; removing the server, the app, the client or the user removes the grants. The scheduled handler prunes expired rows and registrations that never obtained a grant within 24 hours; expiry is enforced on every read.
 - No CORS is granted, so browser-based MCP clients cannot call the token endpoint cross-origin.

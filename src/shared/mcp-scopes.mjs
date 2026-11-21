@@ -29,6 +29,8 @@ export const MCP_CLIENT_SECONDS = 180 * 24 * 3600;
 export const MCP_UNUSED_CLIENT_SECONDS = 24 * 3600;
 /** At most this many registrations without a grant exist at once; registration answers 503 beyond it. */
 export const MCP_UNUSED_CLIENT_LIMIT = 1000;
+/** Registrations one address may store per day, so one address cannot hold the unused pool full. */
+export const MCP_DAILY_REGISTRATIONS_PER_ADDRESS = 50;
 /** Stored metadata bounds: one registration row stays under 4 KB. */
 const MAX_CLIENT_NAME = 64;
 const MAX_REDIRECT_URIS = 5;

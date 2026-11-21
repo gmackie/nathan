@@ -34,7 +34,7 @@ import {
   buildCatalog, parseRequestedScopes, concreteScopes, parseGrant, offeredScopes, selectScopes, effectiveScopes,
   scopeString, narrowScopes, parseRegistration, validateResourceConfig, ScopeError,
   MCP_ACCESS_TOKEN_SECONDS, MCP_GRANT_SECONDS, MCP_CODE_SECONDS, MCP_TICKET_SECONDS, MCP_CLIENT_SECONDS,
-  MCP_UNUSED_CLIENT_SECONDS, MCP_UNUSED_CLIENT_LIMIT
+  MCP_UNUSED_CLIENT_SECONDS, MCP_UNUSED_CLIENT_LIMIT, MCP_DAILY_REGISTRATIONS_PER_ADDRESS
 } from "../shared/mcp-scopes.mjs";
 import { consentPage, connectionsPage, mcpErrorPage } from "./mcp-ui";
 
@@ -536,7 +536,9 @@ async function register(request: Request, env: AuthEnv) {
     return oauthJson({ error: "temporarily_unavailable", error_description: "Too many registered MCP clients are waiting for a first connection; try again later" },
       503, { "Retry-After": "3600" });
   }
-  // The global ceiling counts only registrations that are about to be stored.
+  // The global ceiling and the per-address daily cap count only registrations about to be stored.
+  // With unused clients pruned after a day, one address can hold at most 50 of the 1,000 slots.
+  if (!await allow(env, "register-day", clientIp(request), MCP_DAILY_REGISTRATIONS_PER_ADDRESS, 86400)) return tooMany();
   if (!await allow(env, "register-all", "all", 300)) return tooMany();
   const clientId = "nmcp_" + randomToken();
   const issuedAt = nowSeconds();
