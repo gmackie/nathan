@@ -186,7 +186,7 @@ test("an administrator registers the Gatekeeper audience, bound to an app, and t
   agentWeb = await webClientNamed("Support agent web");
   for (const identifier of [AUDIENCE, OTHER_AUDIENCE, BILLING_API]) await link(identifier, webClient);
   await link(AUDIENCE, agentWeb);
-  assert.equal((await tokensApi({ op: "client.kind", clientId: agentWeb.client_id, kind: "agent" })).status, 200);
+  assert.equal((await tokensApi({ op: "client.kind", clientId: agentWeb.client_id, kind: "agent", confirm: "CONFIRM MARK AGENT " + agentWeb.client_id })).status, 200);
 
   const machineResponse = await tokensApi({ op: "machine.create", name: "Billing jobs", audience: AUDIENCE });
   assert.equal(machineResponse.status, 409, "needs explicit confirmation");
@@ -284,7 +284,9 @@ test("(c) an administrator-marked agent client is an agent, for client credentia
   assert.equal(decode(tokens.agent)[1].principal_kind, "agent");
   assert.equal((await gk(tokens.agent)).kind, "agent");
 
-  assert.equal((await tokensApi({ op: "client.kind", clientId: webClient.client_id, kind: "agent" })).status, 200);
+  assert.equal((await tokensApi({ op: "client.kind", clientId: webClient.client_id, kind: "agent" })).status, 409,
+    "marking a client agent widens its grants (offline refresh, nathan:api) and needs confirmation");
+  assert.equal((await tokensApi({ op: "client.kind", clientId: webClient.client_id, kind: "agent", confirm: "CONFIRM MARK AGENT " + webClient.client_id })).status, 200);
   const [, delegated] = decode((await authorizationCode(alice)).access_token);
   assert.equal(delegated.principal_kind, "agent", "an agent acting for Alice is never classified as Alice");
   assert.equal(delegated.sub, "u-alice");
@@ -427,7 +429,7 @@ test("nathan:api is never delegated by a user through a client not marked agent"
   const refreshed = await refresh(delegated.refresh_token, { client: agentWeb });
   assert.equal(refreshed.status, 400, JSON.stringify(refreshed.body));
   assert.equal(await count('SELECT count(*) AS n FROM "oauthRefreshToken" WHERE "clientId"=? AND instr("scopes",\'nathan:api\')>0', agentWeb.client_id), 0);
-  assert.equal((await tokensApi({ op: "client.kind", clientId: agentWeb.client_id, kind: "agent" })).status, 200);
+  assert.equal((await tokensApi({ op: "client.kind", clientId: agentWeb.client_id, kind: "agent", confirm: "CONFIRM MARK AGENT " + agentWeb.client_id })).status, 200);
 });
 
 test("every access token Nathan issues is capped at 900 seconds", async () => {
@@ -497,4 +499,41 @@ test("removing an audience drops its client links, so re-registering it does not
   assert.equal(again.body.error, "invalid_target");
   const oldRefresh = await refresh(grant.refresh_token, { resource: JOBS });
   assert.equal(oldRefresh.status, 400, "the old user grant cannot refresh into the re-registered audience: " + JSON.stringify(oldRefresh.body));
+});
+
+test("padding the resource list cannot skip the live-session check or leak roles", async () => {
+  const USERINFO = ISSUER + "/oauth2/userinfo";
+  const signedIn = await session("u-alice");
+  // No resource at sign-in: the refresh token stores no resource list, so refresh may name any.
+  const started = await authorize(signedIn, { resource: undefined, scope: "openid profile offline_access" });
+  assert.ok(started.code, "authorization code without a resource");
+  const first = await exchange(started, { resource: undefined });
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  assert.ok(first.body.refresh_token);
+  await sql('DELETE FROM "session" WHERE "id"=?', signedIn.id);
+  const padded = await refresh(first.body.refresh_token, { resource: [...Array(16).fill(USERINFO), AUDIENCE] });
+  assert.equal(padded.status, 400, "padding must not hide the registered audience: " + JSON.stringify(padded.body));
+  assert.ok(["invalid_grant", "invalid_target"].includes(padded.body.error), JSON.stringify(padded.body));
+
+  // Repeating a bound audience must not carry its roles to an unbound one.
+  const repeated = await authorizationCode(alice, { resource: [...Array(16).fill(AUDIENCE), OTHER_AUDIENCE] });
+  const [, claims] = decode(repeated.access_token);
+  assert.ok(!("roles" in claims), "billing roles must not reach " + OTHER_AUDIENCE);
+
+  // Too many distinct resources are refused rather than truncated.
+  const many = Array.from({ length: 17 }, (_, i) => "https://api" + i + ".example.com/");
+  const refused = await exchange(await authorize(alice, { resource: AUDIENCE }), { resource: [AUDIENCE, ...many] });
+  assert.equal(refused.status, 400, JSON.stringify(refused.body));
+});
+
+test("marking a client agent revokes the user grants it already holds", async () => {
+  const client = await webClientNamed("Converted to agent");
+  await link(AUDIENCE, client);
+  const signedIn = await session("u-alice");
+  const grant = await authorizationCode(signedIn, { client, scope: "openid profile offline_access" });
+  assert.ok(grant.refresh_token);
+  assert.equal((await tokensApi({ op: "client.kind", clientId: client.client_id, kind: "agent", confirm: "CONFIRM MARK AGENT " + client.client_id })).status, 200);
+  await sql('DELETE FROM "session" WHERE "id"=?', signedIn.id);
+  const afterSignOut = await refresh(grant.refresh_token, { client });
+  assert.equal(afterSignOut.status, 400, "a grant issued as session-bound must not become offline: " + JSON.stringify(afterSignOut.body));
 });

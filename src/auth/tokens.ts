@@ -37,7 +37,8 @@ type ClaimInput = {
 };
 
 /** An OAuth token-endpoint error (RFC 6749 §5.2) that Better Auth returns as a 400 JSON body. */
-const tokenError = (error: "invalid_grant" | "invalid_scope", description: string) =>
+const MAX_TOKEN_RESOURCES = 16;
+const tokenError = (error: "invalid_grant" | "invalid_scope" | "invalid_target", description: string) =>
   new APIError("BAD_REQUEST", { error, error_description: description });
 
 /**
@@ -57,7 +58,12 @@ const tokenError = (error: "invalid_grant" | "invalid_scope", description: strin
  */
 export async function accessTokenClaims(env: AuthEnv, input: ClaimInput): Promise<Record<string, unknown>> {
   const userId = typeof input.user?.id === "string" ? input.user.id : null;
-  const resources = Array.isArray(input.resources) ? input.resources.filter(r => typeof r === "string").slice(0, 16) : [];
+  // Every distinct resource Better Auth will put in `aud` is checked. Better Auth neither dedupes
+  // nor caps the list, so truncating it would let padding hide a registered audience from the
+  // live-session check and the roles rule; too many distinct resources are refused instead.
+  const resources = Array.isArray(input.resources) ? [...new Set(input.resources.filter(r => typeof r === "string"))] : [];
+  if (resources.length > MAX_TOKEN_RESOURCES)
+    throw tokenError("invalid_target", "At most " + MAX_TOKEN_RESOURCES + " distinct resources per token");
   const sessionId = typeof input.sessionId === "string" && input.sessionId ? input.sessionId : null;
   const statements = [env.DB.prepare("SELECT principal_kind FROM nathan_client_principals WHERE client_id=? LIMIT 1").bind(input.client.clientId)];
   if (userId) {
@@ -231,6 +237,10 @@ export async function applyTokenOperation(auth: any, env: AuthEnv, headers: Head
   if (op === "client.kind") {
     const clientId = await existingClient(env, body.clientId);
     if (!["agent", "auto"].includes(body.kind)) throw Error("Invalid principal kind: agent or auto");
+    // Marking a client agent widens it (offline refresh without a live session, API_SCOPE), so it
+    // needs confirmation, and the user grants it already holds were issued as session-bound: they
+    // are revoked so they cannot become offline grants.
+    if (body.kind === "agent" && body.confirm !== "CONFIRM MARK AGENT " + clientId) throw Error("Explicit confirmation required");
     // Back to classify-by-grant widens the client: its user-delegated tokens then say `user`.
     if (body.kind === "auto" && body.confirm !== "CONFIRM CLASSIFY BY GRANT " + clientId) throw Error("Explicit confirmation required");
     const change = body.kind === "agent"
@@ -239,7 +249,10 @@ export async function applyTokenOperation(auth: any, env: AuthEnv, headers: Head
       : env.DB.prepare("DELETE FROM nathan_client_principals WHERE client_id=?").bind(clientId);
     // Classified by grant again, the client may no longer hold user-delegated API_SCOPE grants:
     // its refresh and opaque access tokens that carry it are revoked with the change.
-    const revoke = body.kind === "auto" ? [
+    const revoke = body.kind === "agent" ? [
+      env.DB.prepare('DELETE FROM "oauthRefreshToken" WHERE "clientId"=? AND "userId" IS NOT NULL').bind(clientId),
+      env.DB.prepare('DELETE FROM "oauthAccessToken" WHERE "clientId"=? AND "userId" IS NOT NULL').bind(clientId)
+    ] : body.kind === "auto" ? [
       env.DB.prepare('DELETE FROM "oauthRefreshToken" WHERE "clientId"=? AND instr("scopes",?)>0').bind(clientId, API_SCOPE),
       env.DB.prepare('DELETE FROM "oauthAccessToken" WHERE "clientId"=? AND "userId" IS NOT NULL AND instr("scopes",?)>0').bind(clientId, API_SCOPE)
     ] : [];
@@ -247,7 +260,9 @@ export async function applyTokenOperation(auth: any, env: AuthEnv, headers: Head
     await env.DB.batch([change, ...revoke, env.DB.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) VALUES (?,?,?,?,?)")
       .bind(crypto.randomUUID(), actor, "client_principal_kind", clientId + " kind=" + body.kind, "succeeded")]);
     return { clientId, principalKind: body.kind,
-      note: "Applies to tokens issued from now on; tokens already issued keep their kind until they expire (at most 900 s)." };
+      note: body.kind === "agent"
+        ? "Existing user grants for this client were revoked; users must authorize it again. Issued access tokens expire within 900 s."
+        : "Applies to tokens issued from now on; tokens already issued keep their kind until they expire (at most 900 s)." };
   }
 
   // machine.create: a confidential client-credentials client for one registered audience.
