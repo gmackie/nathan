@@ -9,6 +9,7 @@ import type { AuthEnv } from "./env";
 import type { SocialCredentials } from "./provider-store";
 import {mayAdminister} from "./bootstrap";
 import {isAdminPrincipal} from "./admin-service";
+import {ssoPluginOptions,samlUserCreateGuard} from "./saml-policy.mjs";
 
 export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredentials) {
   const issuer = new URL(env.NATHAN_ISSUER);
@@ -32,6 +33,9 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
     // Federated tokens are sensitive; encrypt them in D1 and keep OAuth state server-side.
     account: { encryptOAuthTokens: true, storeStateStrategy: "database" },
     disabledPaths: ["/token"],
+    // SAML sign-in never creates accounts unless the connection allows
+    // just-in-time provisioning for its verified domain (NATH-10).
+    databaseHooks: { user: { create: { before: (user, ctx) => samlUserCreateGuard(env.DB, user, ctx) } } },
     hooks: {
       after: createAuthMiddleware(async (ctx) => {
         // Passkey enrollment never grants admin assurance. Only a newly
@@ -102,14 +106,8 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
         },
         ...(env.NATHAN_PAIRWISE_SECRET ? { pairwiseSecret: env.NATHAN_PAIRWISE_SECRET } : {})
       }),
-      ...(env.ENTERPRISE_SSO === "true" ? [sso({
-        domainVerification: { enabled: true },
-        saml: {
-          enableInResponseToValidation: true,
-          allowIdpInitiated: false,
-          requireTimestamps: true
-        }
-      })] : [])
+      // Hardened SAML/OIDC enterprise SSO options: see src/auth/saml-policy.mjs.
+      ...(env.ENTERPRISE_SSO === "true" ? [sso(ssoPluginOptions())] : [])
     ]
   });
 }
