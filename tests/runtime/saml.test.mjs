@@ -273,3 +273,17 @@ test("disabling closes the ACS and SSO routing again", async () => {
   assert.equal(start.status, 404);
   assert.equal(await auditCount("saml_connection_disable", "succeeded"), 1);
 });
+
+test("Studio and sign-in pages carry the SAML UI with valid inline scripts", async () => {
+  const scriptOf = html => /<script nonce="[^"]+">([\s\S]*)<\/script>/.exec(html)[1];
+  const studioPage = await studio("/studio");
+  assert.equal(studioPage.status, 200);
+  const html = await studioPage.text();
+  for (const id of ["saml-create", "saml-enable", "saml-add-cert", "saml-retire-cert", "saml-sp-acs"])
+    assert.ok(html.includes('id="' + id + '"'), id);
+  assert.doesNotThrow(() => new Function(scriptOf(html)), "Studio script parses");
+  const signIn = await (await mf.dispatchFetch(ORIGIN + "/sign-in")).text();
+  assert.ok(signIn.includes("Sign in with SSO"));
+  assert.ok(signIn.includes("/sign-in/sso/start"));
+  assert.doesNotThrow(() => new Function(scriptOf(signIn)), "sign-in script parses");
+});
