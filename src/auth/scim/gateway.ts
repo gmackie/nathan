@@ -35,7 +35,7 @@ export async function handleScim(request:Request,env:AuthEnv):Promise<Response>{
     if(request.headers.has("If-Match"))h.set("If-Match",request.headers.get("If-Match")!);
     h.set("X-Nathan-SCIM-Base",issuer.origin+"/scim/v2/"+connId);
     const forwarded=new Request("https://scim.internal"+relative+url.search,{
-      method:request.method,headers:h,body,redirect:"error"
+      method:request.method,headers:h,body,redirect:"manual"
     });
     const stub=env.SCIM_DIRECTORY.getByName("connection:"+connId);
     const response=await stub.fetch(forwarded);

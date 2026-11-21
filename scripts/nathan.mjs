@@ -2,7 +2,7 @@
 import { readFile, writeFile, access } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { loadConfig, validateConfig, buildPlan } from "./lib/config.mjs";
-import { CloudflareClient, inspectDeployment } from "./lib/cloudflare.mjs";
+import { CloudflareClient, inspectDeployment, missingIdpSecrets } from "./lib/cloudflare.mjs";
 import { ask, yesNo, secretPrompt } from "./lib/prompts.mjs";
 import { discoverWrangler, runCli, createGeneratedConfig } from "./lib/wrangler.mjs";
 import { providerCommand } from "./lib/provider-wizard.mjs";
@@ -157,19 +157,24 @@ async function provision(forceApply=false) {
        rows[0].account_id!==cfg.accountId || rows[0].zone_id!==snapshot.zone.id)
       throw Error("Existing domain realm does not match the verified account, zone, or issuer");
   }
+  // Bootstrap without an ingress route. Only expose the hostname after its secrets are installed.
+  // A previous run may have stopped between the private deploy and its secrets, so always
+  // reconcile secrets by name. Existing secrets are never replaced (that would end sessions).
+  const stagingPath = ".nathan/generated/" + liveConfig.name + ".staging.json";
+  const stagingConfig = { ...liveConfig, routes:[], workers_dev:false, preview_urls:false };
+  await writeFile(stagingPath,JSON.stringify(stagingConfig,null,2)+"\n",{mode:0o600});
   if (!snapshot.existingAuthWorker) {
-    // Bootstrap without an ingress route. Only expose the hostname after its secret is installed.
-    const stagingPath = ".nathan/generated/" + liveConfig.name + ".staging.json";
-    const stagingConfig = { ...liveConfig, routes:[], workers_dev:false, preview_urls:false };
-    await writeFile(stagingPath,JSON.stringify(stagingConfig,null,2)+"\n",{mode:0o600});
     await runCli("npx",["wrangler","deploy","--config",stagingPath,"--dry-run"]);
     await runCli("npx",["wrangler","deploy","--config",stagingPath]);
-    const secret = await secretPrompt("BETTER_AUTH_SECRET (blank to generate securely)");
-    const value = secret || randomBytes(48).toString("base64url");
-    await runCli("npx",["wrangler","secret","put","BETTER_AUTH_SECRET","--config",stagingPath],{input:value});
-    await runCli("npx",["wrangler","secret","put","NATHAN_CONFIG_KEY","--config",stagingPath],{input:randomBytes(32).toString("base64url")});
   }
-  // Existing installations retain their current secret, avoiding accidental session invalidation.
+  for (const name of missingIdpSecrets(await client.workerSecretNames(liveConfig.name))) {
+    const value = name === "BETTER_AUTH_SECRET"
+      ? (await secretPrompt("BETTER_AUTH_SECRET (blank to generate securely)")) || randomBytes(48).toString("base64url")
+      : randomBytes(32).toString("base64url");
+    await runCli("npx",["wrangler","secret","put",name,"--config",stagingPath],{input:value});
+  }
+  const stillMissing = missingIdpSecrets(await client.workerSecretNames(liveConfig.name));
+  if (stillMissing.length) throw Error("Refusing to publish the identity hostname: missing Worker secrets " + stillMissing.join(", "));
   await runCli("npx",["wrangler","deploy","--config",configPath]);
   console.log("Identity Worker published. Configure a trusted login provider and verify OIDC discovery.");
 }

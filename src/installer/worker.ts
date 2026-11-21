@@ -1,5 +1,5 @@
 import { randomId, sha256 } from "../gateway/crypto";
-import { parseCookie, makeCookie, constantTimeEqual } from "../shared/security.mjs";
+import { parseCookie, makeCookie, constantTimeEqual, redirectWithCookies } from "../shared/security.mjs";
 import { validateAccountId, validateHostname, validateInstallPlan, isAllowedOrigin } from "./validation.mjs";
 import { oauthAuthorizeUrl, oauthExchange } from "./oauth";
 import { beginOAuthState, consumeOAuthState, createInstallerSession, installerSession, deleteInstallerSession, pruneInstallerState } from "./storage";
@@ -46,9 +46,7 @@ async function dashboard(request:Request,env:InstallerEnv){
     const verifier=randomId();
     const state=await beginOAuthState(env,verifier);
     const authorize=await oauthAuthorizeUrl(env,state,verifier);
-    const r=Response.redirect(authorize,302);
-    r.headers.append("Set-Cookie",makeCookie(STATE_COOKIE,state,{maxAge:300}));
-    return r;
+    return redirectWithCookies(authorize,302,[makeCookie(STATE_COOKIE,state,{maxAge:300})]);
   }
   if(path==="/api/callback"&&request.method==="GET"){
     const state=url.searchParams.get("state");
@@ -60,10 +58,10 @@ async function dashboard(request:Request,env:InstallerEnv){
     if(!code||code.length>4096)return error(400,"Authorization code missing");
     const tokens=await oauthExchange(env,code,verifier);
     const handle=await createInstallerSession(env,tokens);
-    const response=Response.redirect(env.PUBLIC_ORIGIN+"/",303);
-    response.headers.append("Set-Cookie",makeCookie(SESSION_COOKIE,handle,{maxAge:1800}));
-    response.headers.append("Set-Cookie",makeCookie(STATE_COOKIE,"",{deleteCookie:true}));
-    return response;
+    return redirectWithCookies(env.PUBLIC_ORIGIN+"/",303,[
+      makeCookie(SESSION_COOKIE,handle,{maxAge:1800}),
+      makeCookie(STATE_COOKIE,"",{deleteCookie:true})
+    ]);
   }
   if(path==="/api/health"&&request.method==="GET")return Response.json({ok:true,service:"nathan-installer"});
   if(path.startsWith("/api/")&&request.method==="POST"){

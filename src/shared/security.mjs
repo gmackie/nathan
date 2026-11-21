@@ -45,3 +45,26 @@ export function isAllowedUnsafeRequest(method, originHeader, expectedOrigin, fet
   if (["GET", "HEAD", "OPTIONS"].includes(method)) return true;
   return originHeader === expectedOrigin && fetchSite !== "cross-site";
 }
+
+/**
+ * fetch() that never follows redirects. Workers rejects `redirect: "error"`,
+ * so request "manual" and fail closed on any 3xx or opaque redirect.
+ * @param {string | URL} input @param {RequestInit} [init] @returns {Promise<Response>}
+ */
+export async function fetchNoRedirect(input, init = {}) {
+  const response = await fetch(input, { ...init, redirect: "manual" });
+  if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400))
+    throw Error("Unexpected redirect from " + new URL(String(input)).origin);
+  return response;
+}
+
+/**
+ * A redirect whose headers stay mutable. `Response.redirect()` returns immutable
+ * headers in Workers, so appending Set-Cookie to it throws.
+ * @param {string} location @param {number} [status] @param {string[]} [cookies]
+ */
+export function redirectWithCookies(location, status = 302, cookies = []) {
+  const headers = new Headers({ Location: new URL(location).href });
+  for (const cookie of cookies) headers.append("Set-Cookie", cookie);
+  return new Response(null, { status, headers });
+}

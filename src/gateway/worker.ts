@@ -1,4 +1,4 @@
-import { parseCookie, makeCookie, safeReturnPath, constantTimeEqual, validateIssuer, isAllowedUnsafeRequest } from "../shared/security.mjs";
+import { parseCookie, makeCookie, safeReturnPath, constantTimeEqual, validateIssuer, isAllowedUnsafeRequest, redirectWithCookies } from "../shared/security.mjs";
 import { randomId, seal, unseal, sha256 } from "./crypto";
 import { discover, authorizeUrl, exchangeCode, verifyIdToken } from "./oidc";
 import type { GatewayEnv } from "./env";
@@ -40,8 +40,8 @@ async function beginLogin(url: URL, env: GatewayEnv) {
     expiresAt: Date.now() + 5 * 60_000
   };
   const loginUrl = await authorizeUrl(env, meta, flow.state, flow.nonce, flow.verifier);
-  const response = Response.redirect(loginUrl, 302);
-  response.headers.append("Set-Cookie", makeCookie(FLOW_COOKIE, await seal(flow, env.SESSION_ENCRYPTION_KEY), { maxAge: 300 }));
+  const response = redirectWithCookies(loginUrl, 302,
+    [makeCookie(FLOW_COOKIE, await seal(flow, env.SESSION_ENCRYPTION_KEY), { maxAge: 300 })]);
   return secureResponse(response);
 }
 async function completeLogin(url: URL, request: Request, env: GatewayEnv): Promise<Response> {
@@ -68,8 +68,7 @@ async function completeLogin(url: URL, request: Request, env: GatewayEnv): Promi
       "INSERT INTO nathan_gateway_sessions(id_hash, subject, email, issuer, client_id, acr, auth_time, sid, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
     ).bind(hash, id.sub, id.email_verified === true && typeof id.email === "string" ? id.email : null, meta.issuer, env.OIDC_CLIENT_ID,
       typeof id.acr === "string" ? id.acr : null, typeof id.auth_time === "number" ? id.auth_time : null, typeof id.sid === "string" ? id.sid : null, expiresAt).run();
-    const response = Response.redirect(origin(env) + flow.returnTo, 303);
-    response.headers.append("Set-Cookie", makeCookie(SESSION_COOKIE, handle, { maxAge: ttl }));
+    const response = redirectWithCookies(origin(env) + flow.returnTo, 303, [makeCookie(SESSION_COOKIE, handle, { maxAge: ttl })]);
     return cleared(response);
   } catch {
     return cleared(errorResponse(401, "Login validation failed. Please retry or contact your administrator."));

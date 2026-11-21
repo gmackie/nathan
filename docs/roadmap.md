@@ -42,10 +42,10 @@
 - [ ] Complete the fail-closed provisioning sequence and all gateway deployment workflows.
 - [ ] Verify that `workers.dev`, previews, extra routes and direct origin paths cannot bypass gateways.
 - [ ] Add assurance claim support; do not report AAL2/AAL3 without verification.
-- [x] Implement signed back-channel logout receiver; full end-to-end logout delivery and revocation test remains pending.
+- [x] Implement signed back-channel logout receiver. Revocation and JTI replay record commit atomically, storage failures return 503 so the IdP retries (NATH-8, workerd-tested); IdP-side delivery remains pending.
 - [ ] Add integration suite for OAuth/OIDC, malformed callbacks, replay, concurrency and D1 state transitions.
 - [ ] Run installer end-to-end against a real Cloudflare OAuth client; validate D1 API batch semantics, domain propagation, script binding retention, retries and safe recovery on failure.
-- [ ] Implement full installer rollback/reconciliation for interrupted upload and database ownership states (currently fails closed on ambiguity).
+- [ ] Implement full installer rollback/reconciliation for interrupted upload states. Interrupted D1 creation, stale/concurrent stage execution and CLI secret reconciliation are handled and runtime-tested (NATH-8); other ambiguous states still fail closed.
 - [ ] Verify end-to-end Enterprise SSO provider registration, passkey/TOTP enrollment and policy enforcement. Plugin runtime installation remains a reviewed redeploy operation.
 - [ ] Validate rollback, key rotation, backups, logs and incident response under staging load.
 - [ ] Independent security review, SBOM, signed release provenance and staged operational audit.

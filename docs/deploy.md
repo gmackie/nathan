@@ -85,7 +85,7 @@ The CLI requires an explicit `--apply` confirmation and uses the current Cloudfl
 node scripts/nathan.mjs deploy --apply
 ```
 
-The IdP must have a secret set before its public custom domain is enabled. Validate `/.well-known/openid-configuration`, `/api/auth/jwks`, and the authorization-code + PKCE flow, not just `/healthz`.
+The IdP must have its secrets set before its public custom domain is enabled. Re-running `npm run deploy -- --apply` after an interruption installs any missing `BETTER_AUTH_SECRET` or `NATHAN_CONFIG_KEY` (never replacing existing ones) and refuses to publish the route while either is missing. Validate discovery at the issuer path `/api/auth/.well-known/openid-configuration` (the host-root path returns 404 because the issuer is `https://<host>/api/auth`), the `jwks_uri` it advertises, and the authorization-code + PKCE flow, not just `/healthz`.
 
 ## 5. Bootstrap an administrator
 

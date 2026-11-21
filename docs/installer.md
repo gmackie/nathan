@@ -40,7 +40,7 @@ Once hosted, visitors:
 6. Choose MFA options; **enforced MFA modes are blocked until full assurance validation**.
 7. Review the Cloudflare resource diff.
 8. Explicitly consent to deployment.
-9. Follow resumable steps to create D1, apply hash-verified migrations, upload the IdP Worker **inactive** with secrets, disable workers.dev/preview ingress, attach a custom domain, activate, verify OIDC discovery and JWKS.
+9. Follow resumable steps to create D1, apply hash-verified migrations, upload the IdP Worker **inactive** with secrets, disable workers.dev/preview ingress, attach a custom domain, activate, verify OIDC discovery (at the issuer path `/api/auth/.well-known/openid-configuration`) and the JWKS it advertises. Each step runs under a per-request lease bound to the stage it read, so a duplicate or stale request cannot repeat or rewind a step. If Cloudflare created the D1 database but the response was lost, a retry adopts that database only when this job started the create and the database is still empty; anything else stops for manual inspection.
 10. Sign into Nathan with the selected provider and complete verified admin bootstrap. Then use \`/studio\`, \`/security\`, and \`/mcp\`.
 
 The installer saves an opaque job ID in browser session storage but **never stores Cloudflare or provider tokens there**. Cloudflare OAuth tokens are encrypted in the installer's D1 database for a short-lived session. Provider secrets are sent in the installation step and supplied directly as Cloudflare Worker \`secret_text\` bindings; they are not stored in installer job records.

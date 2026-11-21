@@ -100,6 +100,13 @@ export class CloudflareClient {
       throw Error("Cloudflare D1 query failed");
     return result.flatMap(r => Array.isArray(r.results) ? r.results : []);
   }
+  /** Names (never values) of the secrets bound to a Worker script. */
+  async workerSecretNames(workerName) {
+    if (!/^[a-z0-9-]{1,63}$/.test(workerName)) throw Error("Invalid Worker name");
+    const rows = await this.request("/accounts/" + this.accountId + "/workers/scripts/" + workerName + "/secrets");
+    if (!Array.isArray(rows)) throw Error("Unexpected Worker secret inventory");
+    return rows.map(r => r.name);
+  }
   async createDatabase(name) {
     if (!this.accountId) throw Error("Account ID required");
     return this.request("/accounts/" + this.accountId + "/d1/database", { method: "POST", body: { name } });
@@ -109,12 +116,26 @@ export function zoneForHostname(zones, hostname) {
   return zones.filter(z => hostname === z.name || hostname.endsWith("." + z.name))
     .sort((a,b)=> b.name.length - a.name.length)[0] || null;
 }
+/** Secrets the identity Worker needs before any public route may point at it. */
+export const REQUIRED_IDP_SECRETS = ["BETTER_AUTH_SECRET", "NATHAN_CONFIG_KEY"];
+export function missingIdpSecrets(names) {
+  return REQUIRED_IDP_SECRETS.filter(name => !names.includes(name));
+}
+/**
+ * DNS records at the identity hostname conflict unless they are the record Cloudflare
+ * manages for this installation's own Worker custom domain (a re-run or upgrade).
+ */
+export function hostnameConflicts(records, domains, hostname, workerName) {
+  const ownsHostname = domains.some(d => d.hostname === hostname && d.service === workerName);
+  return ownsHostname ? [] : records;
+}
 export async function inspectDeployment(client, cfg) {
-  const [zones, workers, databases] = await Promise.all([
-    client.zones(), client.workers(), client.databases()
+  const [zones, workers, databases, domains] = await Promise.all([
+    client.zones(), client.workers(), client.databases(), client.workerDomains()
   ]);
   const zone = zoneForHostname(zones, cfg.hostname);
-  const conflicts = zone ? await client.dnsRecords(zone.id, cfg.hostname) : [];
+  const records = zone ? await client.dnsRecords(zone.id, cfg.hostname) : [];
+  const conflicts = hostnameConflicts(records, domains, cfg.hostname, cfg.name + "-auth");
   return {
     accountId: client.accountId,
     zone: zone ? { id: zone.id, name: zone.name, status: zone.status } : null,

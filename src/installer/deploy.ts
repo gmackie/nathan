@@ -6,6 +6,7 @@ import { validateInstallPlan, validateHostname } from "./validation.mjs";
 import { realmIssuerHostname } from "../shared/realm.mjs";
 import { generateConfigKey,encryptProviderSecret } from "../auth/config-crypto.mjs";
 import {sha256} from "../gateway/crypto";
+import { verifyIdentityHostname } from "./verify-idp";
 
 const STAGES=["database","schema","upload","domain","activate","verify","bootstrap","complete"] as const;
 type Stage=typeof STAGES[number];
@@ -14,6 +15,7 @@ type InstallJob={
   id:string;owner_user_id:string;owner_email:string;account_id:string;zone_id:string;
   hostname:string;worker_name:string;admin_email:string;profile:"standard"|"business";
   enterprise_sso:number;realm_apex:string|null;scim_requested:number;scim_connection_id:string|null;scim_domain:string|null;release_id:string;stage:Stage;database_id:string|null;error:string|null;
+  lease_token:string|null;database_create_started:number;
   created_at:number;updated_at:number
 };
 type ApiSession={digest:string;tokens:InstallerTokens};
@@ -142,6 +144,14 @@ async function query(write:Write,job:InstallJob,sql:string,params:any[]=[]):Prom
   const result=await write<any[]>("POST","/accounts/"+job.account_id+"/d1/database/"+job.database_id+"/query",{sql,params});
   return records(result);
 }
+/** True when a D1 database has no application tables (Cloudflare's internal _cf_ tables excepted). */
+async function databaseIsEmpty(write:Write,accountId:string,databaseId:string){
+  if(!/^[a-f0-9-]{36}$/.test(databaseId))throw Error("D1 API returned an invalid database UUID");
+  const result=await write<any[]>("POST","/accounts/"+accountId+"/d1/database/"+databaseId+"/query",{
+    sql:"SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'",params:[]});
+  const rows=records(result);
+  return rows.length===1&&Number(rows[0].n)===0;
+}
 async function ensureMigrations(env:InstallerEnv,write:Write,release:NathanRelease,job:InstallJob){
   await query(write,job,
     "CREATE TABLE IF NOT EXISTS nathan_release_migrations(name TEXT PRIMARY KEY,sha256 TEXT NOT NULL,applied_at INTEGER NOT NULL DEFAULT (unixepoch()))");
@@ -227,11 +237,19 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
   const release=await loadRelease(env);
   if(job.release_id!==release.release)throw Error("This installation is pinned to another release. Resume with the original installer.");
   if(job.stage==="upload")validateProvider(input); // Fail before claiming lock and touching Cloudflare
-  const claim=await env.INSTALLER_DB.prepare(
-    "UPDATE nathan_install_jobs SET locked_until=unixepoch()+300 WHERE id=? AND owner_user_id=? "+
-    "AND locked_until<unixepoch() RETURNING id"
-  ).bind(job.id,user.id).first<{id:string}>();
-  if(!claim)throw Error("A setup operation is already in progress");
+  // Claim a lease for the stage this request observed. RETURNING * re-reads the job under
+  // the lease, so a request that waited behind another one never re-runs a finished stage.
+  const lease=crypto.randomUUID();
+  const claimed=await env.INSTALLER_DB.prepare(
+    "UPDATE nathan_install_jobs SET locked_until=unixepoch()+300,lease_token=? WHERE id=? AND owner_user_id=? "+
+    "AND stage=? AND locked_until<unixepoch() RETURNING *"
+  ).bind(lease,job.id,user.id,job.stage).first<InstallJob>();
+  if(!claimed)throw Error("Another setup step is running or has just finished; refresh the installation status");
+  job=claimed;
+  const finish=async(sql:string,...params:unknown[])=>{
+    const result=await env.INSTALLER_DB.prepare(sql+" AND lease_token=?").bind(...params,lease).run();
+    if(!result.meta?.changes)throw Error("Setup lease expired before this step was recorded; refresh and retry");
+  };
   let actionRequired:any=null,updatedDbId:string|undefined,oneTimeScim:any=null;
   try{
     // Every step is independently resumable. No secrets are written to installer D1.
@@ -239,9 +257,15 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
       const dbName=job.worker_name+"-db";
       const databases=await api<Array<{uuid:string;name:string}>>("/accounts/"+job.account_id+"/d1/database");
       const found=databases.find(d=>d.name===dbName);
-      // Never reuse a database that the job cannot prove it created.
-      if(found && !job.database_id)
-        throw Error("D1 database now exists but is not recorded as owned by this installer job; inspect it before retrying");
+      // Never reuse a database that the job cannot prove it created. A create this job started
+      // whose response was lost is adopted only if that database is still completely empty.
+      if(found && !job.database_id){
+        if(job.database_create_started!==1)
+          throw Error("D1 database now exists but is not recorded as owned by this installer job; inspect it before retrying");
+        if(!await databaseIsEmpty(write,job.account_id,found.uuid))
+          throw Error("D1 database from an interrupted setup already contains tables; inspect it before retrying");
+      }
+      if(!found)await finish("UPDATE nathan_install_jobs SET database_create_started=1 WHERE id=?",job.id);
       const db=found||await write<{uuid:string}>("POST","/accounts/"+job.account_id+"/d1/database",{name:dbName});
       if(!/^[a-f0-9-]{36}$/.test(db.uuid))throw Error("D1 API returned an invalid database UUID");
       updatedDbId=db.uuid;job.database_id=db.uuid;
@@ -305,18 +329,7 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
     }else if(job.stage==="activate"){
       await uploadWorker(env,write,release,job,true);
     }else if(job.stage==="verify"){
-      const base="https://"+validateHostname(job.hostname);
-      const [health,discovery,jwks]=await Promise.all([
-        fetch(base+"/healthz",{redirect:"error",signal:AbortSignal.timeout(7000)}),
-        fetch(base+"/.well-known/openid-configuration",{redirect:"error",signal:AbortSignal.timeout(7000)}),
-        fetch(base+"/api/auth/jwks",{redirect:"error",signal:AbortSignal.timeout(7000)})
-      ]);
-      if(!health.ok||!discovery.ok||!jwks.ok)throw Error("Identity hostname not healthy yet; check route, secrets, and DNS propagation");
-      const healthJson=await health.json() as {active?:boolean};
-      const metadata=await discovery.json() as {issuer?:string};
-      const keys=await jwks.json() as {keys?:unknown[]};
-      if(!healthJson.active||metadata.issuer!=="https://"+job.hostname+"/api/auth"||
-         !Array.isArray(keys.keys))throw Error("OIDC discovery, JWKS or active flag mismatch");
+      await verifyIdentityHostname(validateHostname(job.hostname));
     }else if(job.stage==="bootstrap"){
       // A verified Better Auth user with exactly the Cloudflare installer identity's
       // approved email is necessary; no unauthenticated bootstrap password.
@@ -373,19 +386,20 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
         }
       }}
     if(actionRequired){
-      await env.INSTALLER_DB.prepare("UPDATE nathan_install_jobs SET locked_until=0,error=NULL,updated_at=unixepoch() WHERE id=?")
-        .bind(job.id).run();
+      await finish("UPDATE nathan_install_jobs SET locked_until=0,lease_token=NULL,error=NULL,updated_at=unixepoch() WHERE id=?",job.id);
       return {...describe(job),actionRequired};
     }
     const following=next(job.stage);
-    await env.INSTALLER_DB.prepare(
-      "UPDATE nathan_install_jobs SET stage=?,database_id=COALESCE(?,database_id),locked_until=0,error=NULL,updated_at=unixepoch() WHERE id=?"
-    ).bind(following,updatedDbId||null,job.id).run();
+    await finish(
+      "UPDATE nathan_install_jobs SET stage=?,database_id=COALESCE(?,database_id),locked_until=0,lease_token=NULL,error=NULL,updated_at=unixepoch() WHERE id=? AND stage=?",
+      following,updatedDbId||null,job.id,job.stage);
     job=(await fetchJob(env,job.id,user.id))!;
     return {...describe(job),...(oneTimeScim?{oneTimeScim}:{})};
   }catch(error){
-    await env.INSTALLER_DB.prepare("UPDATE nathan_install_jobs SET error=?,locked_until=0,updated_at=unixepoch() WHERE id=?")
-      .bind(safeMessage(error),job.id).run();
+    // Only the current lease holder may record an error or release the lock.
+    await env.INSTALLER_DB.prepare(
+      "UPDATE nathan_install_jobs SET error=?,locked_until=0,lease_token=NULL,updated_at=unixepoch() WHERE id=? AND lease_token=?"
+    ).bind(safeMessage(error),job.id,lease).run();
     throw error;
   }
 }

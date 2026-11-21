@@ -2,6 +2,7 @@ import type { InstallerTokens } from "./oauth";
 import type { InstallerEnv } from "./env";
 import { oauthRefresh } from "./oauth";
 import { updateInstallerTokens } from "./storage";
+import { fetchNoRedirect } from "../shared/security.mjs";
 
 export async function cloudflareRequest<T>(
   env:InstallerEnv,
@@ -17,9 +18,9 @@ export async function cloudflareRequest<T>(
     current=await oauthRefresh(env,current.refreshToken);
     await updateInstallerTokens(env,digest,current);
   }
-  const response=await fetch("https://api.cloudflare.com/client/v4"+path,{
+  const response=await fetchNoRedirect("https://api.cloudflare.com/client/v4"+path,{
     headers:{"Authorization":"Bearer "+current.accessToken,"Accept":"application/json"},
-    redirect:"error",signal:AbortSignal.timeout(12000)
+    signal:AbortSignal.timeout(12000)
   });
   const data=await response.json() as {success?:boolean;result?:T;errors?:Array<{message:string}>};
   if(!response.ok||data.success!==true||data.result===undefined)
@@ -39,13 +40,13 @@ export async function cloudflareWrite<T>(
     current=await oauthRefresh(env,current.refreshToken);
     await updateInstallerTokens(env,digest,current);
   }
-  const response=await fetch("https://api.cloudflare.com/client/v4"+path,{
+  const response=await fetchNoRedirect("https://api.cloudflare.com/client/v4"+path,{
     method,headers:{
       "Authorization":"Bearer "+current.accessToken,
       ...(body instanceof FormData?{}:{"Content-Type":"application/json"})
     },
     body:body instanceof FormData?body:JSON.stringify(body),
-    redirect:"error",signal:AbortSignal.timeout(60000)
+    signal:AbortSignal.timeout(60000)
   });
   const json=await response.json().catch(()=>null) as {success?:boolean;result?:T;errors?:Array<{message:string}>}|null;
   if(!response.ok||!json?.success){
