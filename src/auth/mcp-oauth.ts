@@ -53,13 +53,13 @@ const tokenIssuer = (env: AuthEnv) => originOf(env) + "/api/auth";
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
 class OAuthFail extends Error {
-  constructor(readonly error: string, message: string, readonly status = 400) { super(message); }
+  constructor(readonly error: string, message: string, readonly status = 400, readonly headers: Record<string, string> = {}) { super(message); }
 }
 function oauthJson(body: unknown, status = 200, extra: Record<string, string> = {}) {
   return Response.json(body, { status, headers: { ...JSON_HEADERS, ...extra } });
 }
 function oauthErrorResponse(e: unknown) {
-  if (e instanceof OAuthFail) return oauthJson({ error: e.error, error_description: e.message }, e.status);
+  if (e instanceof OAuthFail) return oauthJson({ error: e.error, error_description: e.message }, e.status, e.headers);
   if (e instanceof ScopeError) return oauthJson({ error: (e as any).code ?? "invalid_scope", error_description: e.message }, 400);
   return oauthJson({ error: "server_error", error_description: "Request failed" }, 500);
 }
@@ -199,15 +199,30 @@ async function verifyAccessToken(env: AuthEnv, auth: any, token: unknown, resour
   } catch { return null; }
 }
 
-/** Issues an access + rotated refresh token for a live grant, with scopes capped by current permissions. */
-async function issueTokens(env: AuthEnv, auth: any, grant: GrantRow, resource: ResourceRow, catalog: Catalog, scopes: Set<string>) {
-  const { access } = await userPermissions(env, catalog, resource.app_id, grant.user_id);
-  if (!scopes.size) throw new OAuthFail("invalid_grant", "None of this connection's permissions is available to the user now");
+type Access = Awaited<ReturnType<typeof userPermissions>>["access"];
+/**
+ * Signs an access token and mints the next refresh token for a grant, with scopes already capped by
+ * current permissions. Nothing is stored here: the caller stores the refresh token in the same D1
+ * batch that consumes the code or the previous refresh token, so a request either wins completely
+ * or not at all.
+ */
+async function prepareTokens(env: AuthEnv, auth: any, grant: GrantRow, catalog: Catalog, scopes: Set<string>, access: Access) {
+  if (!scopes.size) throw new OAuthFail("invalid_scope", "None of this connection's permissions is available to the user now");
   const scope = scopeString(catalog, scopes);
   const accessToken = await signAccessToken(env, auth, { sub: grant.user_id, clientId: grant.client_id, resource: grant.resource, grantId: grant.id, scope, roles: rolesClaim(access) });
   const refresh = "nmcp_rt_" + randomToken();
-  await putArtifact(env, refresh, "refresh", { clientId: grant.client_id }, Math.max(1, grant.expires_at - nowSeconds()), grant.id);
-  return { access_token: accessToken, token_type: "Bearer", expires_in: MCP_ACCESS_TOKEN_SECONDS, refresh_token: refresh, scope };
+  return {
+    refreshHash: await sha256(refresh),
+    refreshData: JSON.stringify({ clientId: grant.client_id }),
+    refreshExpires: nowSeconds() + Math.max(1, grant.expires_at - nowSeconds()),
+    body: { access_token: accessToken, token_type: "Bearer", expires_in: MCP_ACCESS_TOKEN_SECONDS, refresh_token: refresh, scope }
+  };
+}
+/** No usable scope now: never consume the code or refresh token for that. A ban is temporary, so retry later. */
+function nothingUsable(access: Access): never {
+  if (access.reason === "user_blocked")
+    throw new OAuthFail("temporarily_unavailable", "The user cannot use this connection right now; try again later", 503, { "Retry-After": "300" });
+  throw new OAuthFail("invalid_scope", "None of this connection's permissions is available to the user now");
 }
 
 async function liveGrant(env: AuthEnv, grantId: string | null) {
@@ -215,9 +230,17 @@ async function liveGrant(env: AuthEnv, grantId: string | null) {
   return env.DB.prepare("SELECT g.id, g.user_id, g.client_id, g.resource, g.scope, g.created_at, g.expires_at FROM nathan_mcp_grants g " +
     "JOIN nathan_mcp_clients c ON c.client_id=g.client_id AND c.expires_at>unixepoch() WHERE g.id=? AND g.expires_at>unixepoch() LIMIT 1").bind(grantId).first<GrantRow>();
 }
+async function grantAccessNow(env: AuthEnv, grant: GrantRow, resource: ResourceRow, catalog: Catalog) {
+  const { access, permissions, admin } = await userPermissions(env, catalog, resource.app_id, grant.user_id);
+  return { access, scopes: effectiveScopes(catalog, parseGrant(catalog, grant.scope), permissions, { admin }) };
+}
 async function grantScopesNow(env: AuthEnv, grant: GrantRow, resource: ResourceRow, catalog: Catalog) {
-  const { permissions, admin } = await userPermissions(env, catalog, resource.app_id, grant.user_id);
-  return effectiveScopes(catalog, parseGrant(catalog, grant.scope), permissions, { admin });
+  return (await grantAccessNow(env, grant, resource, catalog)).scopes;
+}
+/** A code or refresh token presented again (or by a request that lost the race for it) revokes the grant it produced. */
+async function revokeOnReuse(env: AuthEnv, secret: string, kind: "used_code" | "used_refresh", clientId: string, reason: string) {
+  const used = await peekArtifact<{ clientId: string }>(env, secret, kind);
+  if (used?.grantId && used.clientId === clientId) await dropGrant(env, used.grantId, "mcp:" + clientId, reason);
 }
 
 async function tokenEndpoint(request: Request, env: AuthEnv, auth: any) {
@@ -239,29 +262,43 @@ async function tokenEndpoint(request: Request, env: AuthEnv, auth: any) {
     const pending = await peekArtifact<{ clientId: string; redirectUri: string; challenge: string; resource: string; userId: string; scope: string }>(env, code, "code");
     if (!pending) {
       // RFC 6749 §4.1.2: a replayed code revokes what it produced.
-      const used = await peekArtifact<{ clientId: string }>(env, code, "used_code");
-      if (used?.grantId && used.clientId === client.client_id) await dropGrant(env, used.grantId, "mcp:" + client.client_id, "code_replay");
+      await revokeOnReuse(env, code, "used_code", client.client_id, "code_replay");
       throw new OAuthFail("invalid_grant", "Invalid or used authorization code");
     }
     const verifier = params.get("code_verifier") ?? "";
     if (pending.clientId !== client.client_id || pending.redirectUri !== params.get("redirect_uri") || pending.resource !== resource.identifier ||
         !/^[A-Za-z0-9._~-]{43,128}$/.test(verifier) || await pkceChallenge(verifier) !== pending.challenge)
       throw new OAuthFail("invalid_grant", "Invalid authorization code, redirect_uri, resource or PKCE verifier");
-    if (!await takeArtifact(env, code, "code")) throw new OAuthFail("invalid_grant", "Invalid or used authorization code");
     const grant: GrantRow = { id: "nmcp_g_" + randomToken(), user_id: pending.userId, client_id: client.client_id, resource: resource.identifier,
       scope: pending.scope, created_at: nowSeconds(), expires_at: nowSeconds() + MCP_GRANT_SECONDS };
-    // Permissions may have shrunk since consent; a grant that could do nothing is never created.
-    const scopes = await grantScopesNow(env, grant, resource, catalog);
-    if (!scopes.size) throw new OAuthFail("invalid_grant", "None of the approved permissions is available to the user now");
-    await env.DB.batch([
-      env.DB.prepare("INSERT INTO nathan_mcp_grants(id,user_id,client_id,resource,scope,created_at,updated_at,expires_at) VALUES (?,?,?,?,?,?,?,?)")
-        .bind(grant.id, grant.user_id, grant.client_id, grant.resource, grant.scope, grant.created_at, grant.created_at, grant.expires_at),
-      env.DB.prepare("INSERT INTO nathan_mcp_artifacts(hash,kind,grant_id,data,expires_at) VALUES (?,?,?,?,?)")
-        .bind(await sha256(code), "used_code", grant.id, JSON.stringify({ clientId: client.client_id }), nowSeconds() + 86400),
-      env.DB.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) VALUES (?,?,?,?,?)")
-        .bind(crypto.randomUUID(), grant.user_id, "mcp_grant_create", grant.id + " client=" + client.client_id + " resource=" + resource.identifier + " scope=" + grant.scope, "succeeded")
+    // Permissions may have shrunk since consent; a grant that could do nothing is never created (and the code is not used up).
+    const { scopes, access } = await grantAccessNow(env, grant, resource, catalog);
+    if (!scopes.size) nothingUsable(access);
+    const issued = await prepareTokens(env, auth, grant, catalog, scopes, access);
+    // One atomic batch: the code turns into its used marker naming this request's grant, and the grant,
+    // the refresh token and the audit row exist only if this request is the one that turned it.
+    const codeHash = await sha256(code);
+    const marker = JSON.stringify({ clientId: client.client_id, grantId: grant.id });
+    const mine = "EXISTS (SELECT 1 FROM nathan_mcp_artifacts WHERE hash=? AND kind='used_code' AND data=?)";
+    const created = "EXISTS (SELECT 1 FROM nathan_mcp_grants WHERE id=?)";
+    const results = await env.DB.batch([
+      env.DB.prepare("UPDATE nathan_mcp_artifacts SET kind='used_code', data=?, expires_at=? WHERE hash=? AND kind='code' AND expires_at>unixepoch()")
+        .bind(marker, nowSeconds() + 86400, codeHash),
+      env.DB.prepare("INSERT INTO nathan_mcp_grants(id,user_id,client_id,resource,scope,created_at,updated_at,expires_at) SELECT ?,?,?,?,?,?,?,? WHERE " + mine)
+        .bind(grant.id, grant.user_id, grant.client_id, grant.resource, grant.scope, grant.created_at, grant.created_at, grant.expires_at, codeHash, marker),
+      env.DB.prepare("UPDATE nathan_mcp_artifacts SET grant_id=? WHERE hash=? AND kind='used_code' AND data=? AND " + created)
+        .bind(grant.id, codeHash, marker, grant.id),
+      env.DB.prepare("INSERT INTO nathan_mcp_artifacts(hash,kind,grant_id,data,expires_at) SELECT ?,'refresh',?,?,? WHERE " + created)
+        .bind(issued.refreshHash, grant.id, issued.refreshData, issued.refreshExpires, grant.id),
+      env.DB.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) SELECT ?,?,?,?,? WHERE " + created)
+        .bind(crypto.randomUUID(), grant.user_id, "mcp_grant_create", grant.id + " client=" + client.client_id + " resource=" + resource.identifier + " scope=" + grant.scope, "succeeded", grant.id)
     ]);
-    return oauthJson(await issueTokens(env, auth, grant, resource, catalog, scopes));
+    if (results[1].meta.changes !== 1) {
+      // Another request redeemed this code first (concurrently or before): that is a replay too.
+      await revokeOnReuse(env, code, "used_code", client.client_id, "code_replay");
+      throw new OAuthFail("invalid_grant", "Invalid or used authorization code");
+    }
+    return oauthJson(issued.body);
   }
 
   if (grantType === "refresh_token") {
@@ -269,24 +306,41 @@ async function tokenEndpoint(request: Request, env: AuthEnv, auth: any) {
     const current = await peekArtifact<{ clientId: string }>(env, token, "refresh");
     if (!current) {
       // Rotation reuse detection: a consumed refresh token coming back revokes the grant.
-      const used = await peekArtifact<{ clientId: string }>(env, token, "used_refresh");
-      if (used?.grantId && used.clientId === client.client_id) await dropGrant(env, used.grantId, "mcp:" + client.client_id, "refresh_reuse");
+      await revokeOnReuse(env, token, "used_refresh", client.client_id, "refresh_reuse");
       throw new OAuthFail("invalid_grant", "Invalid refresh token");
     }
     const grant = await liveGrant(env, current.grantId);
     if (!grant || current.clientId !== client.client_id || grant.client_id !== client.client_id) throw new OAuthFail("invalid_grant", "Invalid refresh token");
     if (grant.resource !== resource.identifier) throw new OAuthFail("invalid_target", "The refresh token belongs to another resource");
     // The grant's scopes now (the user may have edited them, or lost permissions), optionally narrowed.
-    let scopes = await grantScopesNow(env, grant, resource, catalog);
+    // Every refusal here comes before the refresh token is used up.
+    const now = await grantAccessNow(env, grant, resource, catalog);
+    if (!now.scopes.size) nothingUsable(now.access);
+    let scopes = now.scopes;
     if (params.has("scope")) {
       const narrowed = narrowScopes(catalog, params.get("scope") ?? "", scopes);
       if (!narrowed) throw new OAuthFail("invalid_scope", "Unknown scope requested");
       if (!narrowed.size) throw new OAuthFail("invalid_scope", "The grant no longer holds any requested scope");
       scopes = narrowed;
     }
-    if (!await takeArtifact(env, token, "refresh")) throw new OAuthFail("invalid_grant", "Refresh token already used");
-    await putArtifact(env, token, "used_refresh", { clientId: client.client_id }, Math.max(1, grant.expires_at - nowSeconds()), grant.id);
-    return oauthJson(await issueTokens(env, auth, grant, resource, catalog, scopes));
+    const issued = await prepareTokens(env, auth, grant, catalog, scopes, now.access);
+    // One atomic batch: the token turns into its used marker (unique to this request) and the next
+    // refresh token exists only if this request is the one that turned it.
+    const tokenHash = await sha256(token);
+    const marker = JSON.stringify({ clientId: client.client_id, next: issued.refreshHash });
+    const results = await env.DB.batch([
+      env.DB.prepare("UPDATE nathan_mcp_artifacts SET kind='used_refresh', data=?, expires_at=? WHERE hash=? AND kind='refresh' AND expires_at>unixepoch()")
+        .bind(marker, nowSeconds() + Math.max(1, grant.expires_at - nowSeconds()), tokenHash),
+      env.DB.prepare("INSERT INTO nathan_mcp_artifacts(hash,kind,grant_id,data,expires_at) SELECT ?,'refresh',?,?,? " +
+        "WHERE EXISTS (SELECT 1 FROM nathan_mcp_artifacts WHERE hash=? AND kind='used_refresh' AND data=?) AND EXISTS (SELECT 1 FROM nathan_mcp_grants WHERE id=?)")
+        .bind(issued.refreshHash, grant.id, issued.refreshData, issued.refreshExpires, tokenHash, marker, grant.id)
+    ]);
+    if (results[1].meta.changes !== 1) {
+      // Another request used this refresh token first (concurrently or before): reuse revokes the grant.
+      await revokeOnReuse(env, token, "used_refresh", client.client_id, "refresh_reuse");
+      throw new OAuthFail("invalid_grant", "Invalid refresh token");
+    }
+    return oauthJson(issued.body);
   }
   throw new OAuthFail("unsupported_grant_type", "Use authorization_code or refresh_token");
 }

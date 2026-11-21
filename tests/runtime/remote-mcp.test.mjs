@@ -35,7 +35,7 @@ const CATALOG = {
   }
 };
 
-let mf, db, auth, mcp, mcpHttps, mcpOtherApp, mcpUnpinned;
+let mf, db, auth, authDirect, mcp, mcpHttps, mcpOtherApp, mcpUnpinned;
 after(() => mf?.dispose());
 const sql = (statement, ...params) => db.prepare(statement).bind(...params).run();
 const now = () => new Date().toISOString();
@@ -66,7 +66,7 @@ const form = (path, params, headers = {}) => auth.fetch(ORIGIN + path, {
   headers: Object.fromEntries(Object.entries({ "Content-Type": "application/x-www-form-urlencoded", ...headers }).filter(([, v]) => v !== undefined))
 });
 
-let admin, alice, bob, carol;
+let admin, alice, bob, carol, dave;
 let ip = 0;
 async function registerClient(extra = {}) {
   const response = await auth.fetch(ORIGIN + "/mcp-oauth/register", {
@@ -105,6 +105,10 @@ const answer = (who, ticket, scopes, decision = "allow", headers = {}) => {
   return form("/mcp-oauth/authorize", params, { Cookie: who.cookie, ...formHeaders.get(ticket), ...headers });
 };
 const token = params => form("/mcp-oauth/token", new URLSearchParams(params)).then(async r => ({ status: r.status, body: await r.json() }));
+/** The same token request straight to the identity Worker, so it runs concurrently with dispatchFetch requests. */
+const tokenAlongside = params => authDirect.fetch(ORIGIN + "/mcp-oauth/token", {
+  method: "POST", body: new URLSearchParams(params).toString(), headers: { "Content-Type": "application/x-www-form-urlencoded" }
+}).then(async r => ({ status: r.status, body: await r.json() }));
 /** Registration, consent with `chosen`, code exchange: a whole manual flow. */
 async function connect(who, chosen, { scope = "notes:read notes:write" } = {}) {
   const client = (await registerClient()).body;
@@ -152,6 +156,7 @@ before(async () => {
   for (const file of readdirSync("migrations").filter(f => f.endsWith(".sql")).sort()) await migrate(db, "migrations/" + file);
   // dispatchFetch reaches the first worker (auth); Miniflare's getWorker().fetch refuses Origin headers.
   auth = { fetch: (input, init) => mf.dispatchFetch(input, init) };
+  authDirect = await mf.getWorker("auth");
   mcp = await mf.getWorker("mcp");
   mcpHttps = await mf.getWorker("mcp-https");
   mcpOtherApp = await mf.getWorker("mcp-other-app");
@@ -170,12 +175,16 @@ before(async () => {
   // Carol has her own consent rate-limit budget (30 a minute per user) for the later tests.
   await user("u-carol", "carol@example.test");
   carol = await session("u-carol");
+  // Dave too (the concurrency tests).
+  await user("u-dave", "dave@example.test");
+  dave = await session("u-dave");
   await sql("INSERT INTO nathan_applications(id,hostname,enabled,access_mode) VALUES ('notes','notes.example.com',1,'approved')");
   for (const key of [...SCOPES, "nathan:admin"]) await sql("INSERT INTO nathan_rbac_permissions(app_id,key,description) VALUES ('notes',?,?)", key, "Permission " + key);
   await sql("INSERT INTO nathan_rbac_roles(app_id,key) VALUES ('notes','editor')");
   for (const key of SCOPES) await sql("INSERT INTO nathan_rbac_role_permissions(app_id,role_key,permission_key) VALUES ('notes','editor',?)", key);
   await sql("INSERT INTO nathan_rbac_grants(id,app_id,role_key,principal_type,principal_id,created_by) VALUES ('g1','notes','editor','user','u-alice','test')");
   await sql("INSERT INTO nathan_rbac_grants(id,app_id,role_key,principal_type,principal_id,created_by) VALUES ('g3','notes','editor','user','u-carol','test')");
+  await sql("INSERT INTO nathan_rbac_grants(id,app_id,role_key,principal_type,principal_id,created_by) VALUES ('g4','notes','editor','user','u-dave','test')");
 });
 
 test("only an enrolled administrator registers an MCP server, and its catalog cannot imply sensitive scopes", async () => {
@@ -497,24 +506,77 @@ test("removing the user's permission removes the scope from tokens and requests"
     await sql("DELETE FROM nathan_rbac_grants WHERE id='g1'");
     assert.equal((await grantStatus(refreshed.body.access_token)).active, false, "no access to the app, no scopes");
     const none = await token({ grant_type: "refresh_token", refresh_token: refreshed.body.refresh_token, client_id: client.client_id, resource: RESOURCE });
-    assert.equal(none.body.error, "invalid_grant");
+    assert.equal(none.status, 400);
+    assert.equal(none.body.error, "invalid_scope", "nothing usable now is a scope problem, not a dead grant");
   } finally {
     await sql("INSERT OR IGNORE INTO nathan_rbac_role_permissions(app_id,role_key,permission_key) VALUES ('notes','editor','notes:write')");
     await sql("INSERT OR IGNORE INTO nathan_rbac_grants(id,app_id,role_key,principal_type,principal_id,created_by) VALUES ('g1','notes','editor','user','u-alice','test')");
   }
 });
 
-test("banning the user stops their MCP connections at the next check", async () => {
+test("a refresh with nothing usable now does not consume the refresh token", async () => {
+  const { client, tokens } = await connect(dave, ["notes:read"]);
+  const grantId = (await grantStatus(tokens.access_token)).grantId;
+  const refresh = () => token({ grant_type: "refresh_token", refresh_token: tokens.refresh_token, client_id: client.client_id, resource: RESOURCE });
+  await sql("DELETE FROM nathan_rbac_grants WHERE id='g4'");
+  try {
+    const refused = await refresh();
+    assert.equal(refused.status, 400);
+    assert.equal(refused.body.error, "invalid_scope");
+  } finally {
+    await sql("INSERT OR IGNORE INTO nathan_rbac_grants(id,app_id,role_key,principal_type,principal_id,created_by) VALUES ('g4','notes','editor','user','u-dave','test')");
+  }
+  const again = await refresh();
+  assert.equal(again.status, 200, "the same refresh token works once access is back: " + JSON.stringify(again.body));
+  assert.equal((await grantStatus(again.body.access_token)).active, true, "and the grant was not revoked as a reuse");
+  assert.equal(await count("SELECT count(*) AS n FROM nathan_security_audit WHERE action='mcp_grant_revoke' AND instr(target, ?) = 1", grantId + " "), 0);
+});
+
+test("banning the user stops their MCP connections at the next check; the refresh token survives a temporary ban", async () => {
   const { client, tokens } = await connect(carol, ["notes:read"]);
+  const grantId = (await grantStatus(tokens.access_token)).grantId;
+  const refresh = () => token({ grant_type: "refresh_token", refresh_token: tokens.refresh_token, client_id: client.client_id, resource: RESOURCE });
   await sql('UPDATE "user" SET "banned"=1 WHERE "id"=\'u-carol\'');
   try {
     assert.equal((await grantStatus(tokens.access_token)).active, false);
-    const refreshed = await token({ grant_type: "refresh_token", refresh_token: tokens.refresh_token, client_id: client.client_id, resource: RESOURCE });
-    assert.equal(refreshed.body.error, "invalid_grant");
+    const refused = await refresh();
+    assert.equal(refused.status, 503, "a ban is temporary: retry later, keep the refresh token");
+    assert.equal(refused.body.error, "temporarily_unavailable");
   } finally {
     await sql('UPDATE "user" SET "banned"=0 WHERE "id"=\'u-carol\'');
   }
   assert.equal((await grantStatus(tokens.access_token)).active, true, "the grant itself survives a temporary ban");
+  const lifted = await refresh();
+  assert.equal(lifted.status, 200, "the refresh token refused during the ban still works: " + JSON.stringify(lifted.body));
+  assert.equal((await grantStatus(lifted.body.access_token)).active, true, "no refresh_reuse revocation");
+  assert.equal(await count("SELECT count(*) AS n FROM nathan_security_audit WHERE action='mcp_grant_revoke' AND instr(target, ?) = 1", grantId + " "), 0);
+});
+
+test("concurrent use of one code or one refresh token: exactly one succeeds and the grant is revoked", async () => {
+  for (let round = 0; round < 3; round++) {
+    const client = (await registerClient()).body;
+    const verifier = base64url(crypto.getRandomValues(new Uint8Array(32)));
+    const { ticket } = await consentPage(dave, authorizeUrl(client.client_id, { verifier }));
+    const code = new URL((await answer(dave, ticket, ["notes:read"])).headers.get("Location")).searchParams.get("code");
+    const exchange = { grant_type: "authorization_code", code, redirect_uri: REDIRECT, code_verifier: verifier, client_id: client.client_id, resource: RESOURCE };
+    const exchanged = await Promise.all([tokenAlongside(exchange), tokenAlongside(exchange), token(exchange)]);
+    const won = exchanged.filter(r => r.status === 200);
+    assert.equal(won.length, 1, "exactly one exchange succeeds: " + JSON.stringify(exchanged.map(r => r.body.error ?? "ok")));
+    for (const lost of exchanged.filter(r => r.status !== 200)) assert.equal(lost.body.error, "invalid_grant");
+    assert.equal((await grantStatus(won[0].body.access_token)).active, false, "the losing exchange revoked the grant");
+    assert.equal((await token({ grant_type: "refresh_token", refresh_token: won[0].body.refresh_token, client_id: client.client_id, resource: RESOURCE })).body.error, "invalid_grant");
+    assert.equal(await count("SELECT count(*) AS n FROM nathan_mcp_grants WHERE client_id=?", client.client_id), 0);
+
+    const { client: other, tokens } = await connect(dave, ["notes:read"]);
+    const refresh = { grant_type: "refresh_token", refresh_token: tokens.refresh_token, client_id: other.client_id, resource: RESOURCE };
+    const refreshed = await Promise.all([tokenAlongside(refresh), tokenAlongside(refresh), token(refresh)]);
+    const fresh = refreshed.filter(r => r.status === 200);
+    assert.equal(fresh.length, 1, "exactly one refresh succeeds: " + JSON.stringify(refreshed.map(r => r.body.error ?? "ok")));
+    for (const lost of refreshed.filter(r => r.status !== 200)) assert.equal(lost.body.error, "invalid_grant");
+    assert.equal((await grantStatus(fresh[0].body.access_token)).active, false, "the losing refresh revoked the grant");
+    assert.equal((await token({ ...refresh, refresh_token: fresh[0].body.refresh_token })).body.error, "invalid_grant");
+    assert.equal(await count("SELECT count(*) AS n FROM nathan_security_audit WHERE action='mcp_grant_revoke' AND instr(target, ?) > 0 AND target LIKE '%reason=refresh_reuse'", " client=" + other.client_id + " "), 1);
+  }
 });
 
 test("clients revoke grants (RFC 7009), administrators revoke and disable servers", async () => {
