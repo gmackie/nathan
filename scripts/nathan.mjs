@@ -6,6 +6,7 @@ import { CloudflareClient, inspectDeployment, ensureIdpSecrets } from "./lib/clo
 import { ask, yesNo, secretPrompt } from "./lib/prompts.mjs";
 import { discoverWrangler, runCli, createGeneratedConfig } from "./lib/wrangler.mjs";
 import { providerCommand } from "./lib/provider-wizard.mjs";
+import { PROVIDER_IDS } from "../src/shared/providers.mjs";
 import { protectCommand } from "./lib/protect-wizard.mjs";
 import { rbacCommand } from "./lib/rbac-wizard.mjs";
 import { adminCommand } from "./lib/admin-wizard.mjs";
@@ -197,8 +198,8 @@ async function wizard(){
     console.log("Deployment skipped. You can resume by running npm run wizard again.");
     return;
   }
-  let provider=await ask("Initial upstream login provider (google/github)","google");
-  if(!["google","github"].includes(provider))throw Error("Select google or github");
+  let provider=await ask("Initial upstream login provider ("+PROVIDER_IDS.join("/")+")","google");
+  if(!PROVIDER_IDS.includes(provider))throw Error("Select one of: "+PROVIDER_IDS.join(", "));
   await providerCommand(["guide",provider],file,false);
   if(await yesNo("Have you created that OAuth client and want to securely store its credentials?")){
     await providerCommand(["add",provider],file,true);
@@ -207,7 +208,9 @@ async function wizard(){
     return;
   }
   if(await yesNo("Add a second provider?")){
-    provider=provider==="google"?"github":"google";
+    const second=await ask("Second provider ("+PROVIDER_IDS.filter(p=>p!==provider).join("/")+")",provider==="google"?"github":"google");
+    if(!PROVIDER_IDS.includes(second)||second===provider)throw Error("Select a different supported provider");
+    provider=second;
     await providerCommand(["guide",provider],file,false);
     if(await yesNo("Store second provider credentials?")){
       await providerCommand(["add",provider],file,true);
@@ -257,5 +260,5 @@ async function wizard(){
   if (command === "rbac") return rbacCommand(args.filter(a=>a!=="--apply"&&!a.endsWith(".json")),file,apply);
   if (command === "admin") return adminCommand(args.filter(a=>a!=="--apply"&&!a.endsWith(".json")),file,apply);
   if (command === "domains") return domainCommand(args.filter(a=>!a.endsWith(".json")),file);
-  console.log("Nathan CLI\n  wizard               guided end-to-end installer\n  init                 guided local config\n  plan                 read-only plan + optional Cloudflare discovery\n  doctor [--live]      validate config and optionally OIDC discovery\n  deploy --apply       provision D1 and deploy Worker (requires Cloudflare token)\n  providers guide      OAuth callback and provider-specific setup\n  providers add --apply    configure provider secrets securely\n  protect <app>        plan a gateway for a private upstream\n  protect <app> --apply   deploy only after public-origin isolation\n  rbac plan <app>          diff permissions/roles in nathan.config.json against Nathan\n  rbac sync <app> --apply  apply them (grants stay in Identity Studio; --prune removes undeclared)\n  admin promote --apply     elevate a verified allowlisted user\n  domains discover         Cloudflare DNS/Worker host inventory and exact OIDC callbacks\n  domains callback <host>  Exact root/subdomain OIDC callback\n  domains routes           Wildcard proxy routing preview (not applied)\n\nNo password or OAuth client secret is accepted as a CLI flag.");
+  console.log("Nathan CLI\n  wizard               guided end-to-end installer\n  init                 guided local config\n  plan                 read-only plan + optional Cloudflare discovery\n  doctor [--live]      validate config and optionally OIDC discovery\n  deploy --apply       provision D1 and deploy Worker (requires Cloudflare token)\n  providers guide <id> console link, exact callback and steps (google, github, apple, discord, twitch, twitter)\n  providers add <id> --apply  store provider credentials as an encrypted Worker secret\n  rbac plan <app>          diff permissions/roles in nathan.config.json against Nathan\n  rbac sync <app> --apply  apply them (grants stay in Identity Studio; --prune removes undeclared)\n  protect <app>        plan a gateway for a private upstream\n  protect <app> --apply   deploy only after public-origin isolation\n  admin promote --apply     elevate a verified allowlisted user\n  domains discover         Cloudflare DNS/Worker host inventory and exact OIDC callbacks\n  domains callback <host>  Exact root/subdomain OIDC callback\n  domains routes           Wildcard proxy routing preview (not applied)\n\nNo password or OAuth client secret is accepted as a CLI flag.");
 })().catch(e => { console.error("Nathan error:",e.message); process.exitCode=1; });

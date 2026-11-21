@@ -26,3 +26,21 @@ test("Identity Studio, sign-in, consent, security and installer scripts parse", 
   for (const [name, html] of Object.entries(pages)) total += assertScriptsParse(name, html);
   assert.ok(total >= 3, "expected inline scripts on the interactive pages");
 });
+
+/**
+ * Under `Referrer-Policy: no-referrer` browsers send `Origin: null` on a same-origin HTML form POST
+ * (verified in Chromium against staging: the form got "Cross-origin request denied", while a
+ * fetch() POST from the same page carried the real origin). Nathan's write paths and the gateway's
+ * unsafe-request check require an exact Origin, so pages must keep the origin on same-origin
+ * requests while still sending no referrer cross-site: `same-origin`.
+ */
+test("interactive pages keep the same-origin Origin header (no no-referrer)", async () => {
+  const pages = {
+    studio: studioPage("admin@example.com"),
+    signIn: signInPage(["google"], true, true),
+    consent: consentPage(true, "Example app", "openid"),
+    security: securityPage("admin@example.com")
+  };
+  for (const [name, response] of Object.entries(pages))
+    assert.equal(response.headers.get("Referrer-Policy"), "same-origin", name);
+});

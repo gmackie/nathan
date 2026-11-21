@@ -3,10 +3,13 @@ import { verifyOAuthQueryParams } from "@better-auth/oauth-provider";
 import { createAuth } from "./instance";
 import {isRawManagementEndpoint} from "./management-boundary.mjs";
 import { loadSocialCredentials, providerStatus, upsertSocialProvider, setSocialProviderEnabled } from "./provider-store";
+import { enabledProviderIds, beginProviderTest, completeProviderTest } from "./provider-store";
+import { providerTestResultPage } from "./provider-ui.mjs";
 import {bootstrapStatus,completeBootstrap,mayAdminister} from "./bootstrap";
 import {effectiveAdminPolicy,tightenAdminPolicy} from "./security-policy";
 import {handleScim} from "./scim/gateway";
 import {listScimConnections,createScimConnection,setScimConnectionEnabled,rotateScimToken} from "./scim/admin";
+import {samlProtocolGate,handleSamlRoutes} from "./saml-routes";
 export {NathanScimDirectory} from "./scim/directory";
 import { signInPage, consentPage, studioPage } from "./ui";
 import { securityPage } from "./security-ui";
@@ -53,13 +56,13 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
   if (url.pathname.startsWith("/directory/")) return handleDirectory(request,env,auth);
   if (url.pathname.startsWith("/api/auth/") || url.pathname.startsWith("/.well-known/")) {
     if(isRawManagementEndpoint(url.pathname))return reject(404,"Management route unavailable; use the protected Identity Studio");
+    const samlGate=await samlProtocolGate(request,env,url);
+    if(samlGate)return samlGate;
     return auth.handler(request);
   }
   if (url.pathname === "/") return (await mcpReturnRedirect(request, env, auth)) ?? Response.redirect(issuer.origin + "/sign-in", 302);
   if (url.pathname === "/sign-in" && request.method === "GET") {
-    const providers = [];
-    if (socialProviders.google) providers.push("google");
-    if (socialProviders.github) providers.push("github");
+    const providers = enabledProviderIds(socialProviders);
     return signInPage(providers, env.ENABLE_PASSWORD === "true", env.ENTERPRISE_SSO === "true");
   }
   if (url.pathname === "/consent" && request.method === "GET") {
@@ -203,7 +206,20 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
   }
 
 
-  if(["/studio/api/providers","/studio/api/providers/status"].includes(url.pathname) && request.method==="POST"){
+  // NATH-9: a Studio test sign-in lands here after the provider callback. The session may
+  // belong to the test account, so authority comes from the admin-issued single-use ticket.
+  if(url.pathname==="/studio/providers/test-complete" && request.method==="GET"){
+    const session=await auth.api.getSession({headers:request.headers});
+    try{
+      const result=await completeProviderTest(env,url.searchParams.get("ticket"),
+        session?.session?.id&&session.user?.id?{sessionId:session.session.id,userId:session.user.id}:null);
+      return providerTestResultPage(true,result.id,session?.user?.email??"",result.adminVerified);
+    }catch{
+      return providerTestResultPage(false,null,session?.user?.email??"");
+    }
+  }
+
+  if(["/studio/api/providers","/studio/api/providers/status","/studio/api/providers/test"].includes(url.pathname) && request.method==="POST"){
     if(request.headers.get("Origin")!==issuer.origin ||
        request.headers.get("Sec-Fetch-Site")==="cross-site")return reject(403,"Cross-origin request denied");
     if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")
@@ -216,10 +232,14 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     try{
       const updated=url.pathname.endsWith("/status")
         ? await setSocialProviderEnabled(env,input,session!.user.id)
-        : await upsertSocialProvider(env,input,session!.user.id);
+        : url.pathname.endsWith("/test")
+          ? await beginProviderTest(env,input,session!.user.id)
+          : await upsertSocialProvider(env,input,session!.user.id);
       return Response.json(updated,{headers:{"Cache-Control":"no-store"}});
-    }catch{
-      return reject(409,"Provider update denied. Check configuration encryption key and remaining login/recovery methods.");
+    }catch(e){
+      // Only registry/rule errors carry a publicMessage; they never contain submitted values.
+      const safe=(e as {publicMessage?:unknown})?.publicMessage;
+      return reject(409,typeof safe==="string"?safe:"Provider update denied. Check configuration encryption key and remaining login/recovery methods.");
     }
   }
 
@@ -476,6 +496,8 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
       return reject(409,message);
     }
   }
+  const saml=await handleSamlRoutes(request,env,auth,url);
+  if(saml)return saml;
 
   return reject(404, "Not found");
 }

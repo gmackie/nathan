@@ -28,7 +28,7 @@ flowchart TB
   GW --> GatewayDB[("D1: opaque app sessions")]
   GW -->|"Private Worker service binding"| Protected["Protected Worker"]
   GW <-->|"OIDC code + PKCE"| IdP
-  IdP <-->|"Social OAuth / enterprise federation"| Upstream["Google, GitHub, Entra, Okta"]
+  IdP <-->|"Social OAuth / enterprise federation"| Upstream["Google, GitHub, Apple, Discord, Twitch, X, Entra, Okta"]
   External["Non-Worker applications"] <-->|"Standard OIDC"| IdP
 ```
 
@@ -83,7 +83,7 @@ See the [domain-wide SSO guide](docs/domain-wide-sso.md).
 The initial administrator is tied to the signed-in Cloudflare installer's verified email, **not the first visitor to the new login page**. The wizard verifies that same Better Auth identity and requires authenticator enrollment before unlocking Identity Studio.
 
 After installation, \`https://login.example.com/studio\` uses the same configuration database for:
-- Google/GitHub OAuth client-secret management (encrypted, add/rotate/enable/disable without redeploy).
+- Guided social login for Google, GitHub, Apple, Discord, Twitch and X (encrypted credentials, add/rotate/enable/disable and test sign-in without redeploy; see [docs/providers.md](docs/providers.md)).
 - Enterprise OIDC registration with TXT domain-verification challenges.
 - SCIM 2.0 directory connections and bearer-token rotation. Current SCIM mode stages directory users/groups but **does not automatically provision or deprovision Better Auth accounts**.
 - Additional verified administrators, revocation, and session termination.
@@ -140,7 +140,7 @@ CLOUDFLARE_API_TOKEN=... npm run plan
 # Interactive setup (local manifest, no infrastructure changes)
 npm run init
 
-# Display exact Google OAuth instructions and callback URL
+# Display exact provider instructions and callback URL (google, github, apple, discord, twitch, twitter)
 node scripts/nathan.mjs providers guide google
 
 # Identity Worker rollout: staging only until security gates pass

@@ -1,3 +1,12 @@
+import { installerRegistry } from "../shared/providers.mjs";
+
+/** Registry data and callback function embedded for the first-admin provider step (NATH-9). */
+function providerScript():string {
+  const registry=installerRegistry();
+  const data=JSON.stringify(registry.providers).replaceAll("<","\\u003c");
+  return "const providerRegistry="+data+";\nconst providerCallbackUrl=("+registry.callbackUrlSource+");\n";
+}
+
 /** Customer-owned Cloudflare account deployment wizard, CSP nonce and no browser token storage. */
 export function installerPage(nonce:string):string {
   return String.raw`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -44,14 +53,13 @@ kbd{color:#ffe3ae}code{color:#e5d4b7}footer{margin:25px 0;color:#8493a8}
 <label>Security profile<select id="profile"><option value="business">Business — recommended</option><option value="standard">Standard — consumer / developer</option></select></label>
 </section>
 <section><h2>3. Configure first sign-in</h2>
-<label>Upstream login provider<select id="provider">
-<option value="google">Google OAuth</option><option value="github">GitHub OAuth</option></select></label>
-<div class="details"><strong>OAuth console guide</strong><p id="provider-instructions"></p>
-<a id="provider-console" href="https://console.cloud.google.com/auth/clients" target="_blank" rel="noopener noreferrer">Open provider console</a>
-<p>Authorized redirect URI:</p><pre id="provider-callback"></pre><button class="secondary" id="copy-callback">Copy redirect URI</button></div>
-<label>OAuth client ID<input id="client-id" autocomplete="off"></label>
-<label>OAuth client secret<input id="client-secret" type="password" autocomplete="off"></label>
-<p class="muted">Credentials are sent only to your live installation request over HTTPS, directly stored as Worker secrets, and not persisted in the installer database.</p>
+<label>Upstream login provider<select id="provider"></select></label>
+<div class="details"><strong>Provider console guide</strong><ol id="provider-instructions"></ol>
+<a id="provider-console" href="https://console.cloud.google.com/auth/clients/create" target="_blank" rel="noopener noreferrer">Open provider console</a>
+<p>Authorized redirect URI:</p><pre id="provider-callback"></pre><button class="secondary" id="copy-callback">Copy redirect URI</button>
+<p class="muted" id="provider-trust"></p><ul class="muted" id="provider-gotchas"></ul></div>
+<div id="provider-fields"></div>
+<p class="muted">Credentials are sent only to your live installation request over HTTPS and encrypted into your new Nathan D1 database under a key held only by your identity Worker. The installer database never stores them. Add more providers later in Identity Studio.</p>
 </section>
 <section><h2>4. Enterprise, MFA and directory provisioning</h2>
 <label><input type="checkbox" id="enterprise"> Enable enterprise SSO plugin</label>
@@ -78,7 +86,7 @@ kbd{color:#ffe3ae}code{color:#e5d4b7}footer{margin:25px 0;color:#8493a8}
 </section>
 </article><aside><h2>What gets created?</h2><ol>
 <li>One Better Auth Worker</li><li>One Cloudflare D1 identity database</li>
-<li>Private upload and locked-down preview endpoints</li><li>OAuth provider credentials stored as Worker secrets</li>
+<li>Private upload and locked-down preview endpoints</li><li>Login provider credentials encrypted in your own D1 database</li>
 <li>Custom domain and HTTPS</li><li>OIDC issuer, JWKS, and client registration</li>
 <li>Identity Studio and OAuth-protected MCP admin tools</li>
 </ol>
@@ -87,12 +95,8 @@ kbd{color:#ffe3ae}code{color:#e5d4b7}footer{margin:25px 0;color:#8493a8}
 <p class="muted">Experimental build: this wizard uses Cloudflare's real APIs, but needs live integration testing before production use.</p>
 </aside></main><footer>Nathan uses a pinned, integrity-checked release bundle. No Cloudflare OAuth tokens are exposed to the browser.</footer>
 <script nonce="__NONCE__">
-const $=id=>document.getElementById(id);
+${providerScript()}const $=id=>document.getElementById(id);
 let currentUser=null;
-const providerLinks={
-  google:{url:'https://console.cloud.google.com/auth/clients',desc:'Create an OAuth web application, configure its consent screen, and add this exact redirect URI.'},
-  github:{url:'https://github.com/settings/developers',desc:'Create an OAuth App under GitHub Developer Settings and enter its exact authorization callback URL.'}
-};
 async function api(path,options){
   const response=await fetch(path,{credentials:'same-origin',...options});
   const body=await response.json().catch(()=>({error:'Server returned an invalid response'}));
@@ -119,13 +123,49 @@ function updateRealmApex(){
   const host=$('hostname').value.trim().toLowerCase();
   if(host.startsWith('login.'))$('realm-apex').value=host.slice(6);
 }
-function updateGuide(){
-  const provider=$('provider').value,host=$('hostname').value.trim().toLowerCase();
-  const link=providerLinks[provider];
-  $('provider-console').href=link.url;$('provider-instructions').textContent=link.desc;
-  $('provider-callback').textContent=host?'https://'+host+'/api/auth/callback/'+provider:'Choose an identity hostname first.';
+providerRegistry.forEach(p=>{const o=document.createElement('option');o.value=p.id;o.textContent=p.name;$('provider').append(o)});
+function selectedProvider(){return providerRegistry.find(p=>p.id===$('provider').value)||providerRegistry[0]}
+function renderProviderFields(){
+  const p=selectedProvider(),box=$('provider-fields');box.textContent='';
+  p.fields.forEach(f=>{
+    const label=document.createElement('label');label.textContent=p.name+' '+f.label;
+    const input=document.createElement(f.multiline?'textarea':'input');
+    input.id='provider-field-'+f.name;input.autocomplete='off';input.spellcheck=false;
+    if(!f.multiline)input.type=f.secret?'password':'text';else input.rows=6;
+    input.placeholder=f.hint||'';label.append(input);
+    if(f.file){
+      const file=document.createElement('input');file.type='file';file.accept=f.file;
+      file.onchange=async()=>{if(file.files[0])input.value=await file.files[0].text()};
+      label.append(file);
+    }
+    box.append(label);
+  });
 }
-$('hostname').oninput=()=>{updateRealmApex();updateGuide()};$('provider').onchange=updateGuide;
+function providerFields(){
+  const p=selectedProvider(),values={},bad=[];
+  p.fields.forEach(f=>{
+    const raw=$('provider-field-'+f.name).value;
+    const v=f.multiline?raw.replace(/\r\n?/g,'\n').trim():raw.trim();
+    if(v.length<f.min||v.length>f.max||!new RegExp(f.pattern).test(v))bad.push(f.label+(f.hint?' ('+f.hint+')':''));
+    values[f.name]=v;
+  });
+  if(bad.length)throw Error('Check the '+p.name+' fields: '+bad.join('; '));
+  return values;
+}
+function updateGuide(){
+  const p=selectedProvider(),host=$('hostname').value.trim().toLowerCase();
+  $('provider-console').href=p.consoleUrl;$('provider-console').textContent='Open the '+p.name+' developer console';
+  $('provider-instructions').textContent='';
+  p.steps.forEach(s=>{const li=document.createElement('li');li.textContent=s;$('provider-instructions').append(li)});
+  $('provider-gotchas').textContent='';
+  p.gotchas.forEach(s=>{const li=document.createElement('li');li.textContent=s;$('provider-gotchas').append(li)});
+  $('provider-trust').textContent='Email trust: '+p.emailTrust;
+  let callback='Choose an identity hostname first.';
+  if(host){try{callback=providerCallbackUrl(host,p.id)}catch{callback='Enter a valid identity hostname.'}}
+  $('provider-callback').textContent=callback;
+}
+renderProviderFields();updateGuide();
+$('hostname').oninput=()=>{updateRealmApex();updateGuide()};$('provider').onchange=()=>{renderProviderFields();updateGuide()};
 $('copy-callback').onclick=()=>navigator.clipboard.writeText($('provider-callback').textContent);
 $('accounts').onchange=async()=>{
   const account=$('accounts').value;if(!account)return;
@@ -185,13 +225,9 @@ async function advance(id){
       const status=(await api('/api/install/status?id='+encodeURIComponent(id))).job;
       renderJob(status);
       if(status.stage==='complete')break;
-      const credentials=status.stage==='upload'?{
-        provider:$('provider').value,clientId:$('client-id').value.trim(),clientSecret:$('client-secret').value
-      }:{};
-      if(status.stage==='upload'&&(!credentials.clientId||!credentials.clientSecret))
-        throw Error('Enter the OAuth client ID and secret to proceed with the private Worker upload.');
+      const credentials=status.stage==='upload'?{provider:selectedProvider().id,fields:providerFields()}:{};
       const {job}=await send('/api/install/advance',{id,credentials});
-      if(status.stage==='upload')$('client-secret').value='';
+      if(status.stage==='upload')selectedProvider().fields.filter(f=>f.secret).forEach(f=>{$('provider-field-'+f.name).value=''});
       renderJob(job);
       if(job.actionRequired){$('result').textContent='Action required: '+job.actionRequired.instruction;break}
       if(job.stage==='complete')break;

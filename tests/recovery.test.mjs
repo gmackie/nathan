@@ -98,3 +98,19 @@ test("D1 lookup matches exactly and pages past the first 100 databases", async (
   assert.deepEqual(seen, ["1", "2"]);
   assert.equal(await client.databaseNamed("acme-auth-old-1x"), null);
 });
+
+test("installer re-run keeps an administrator's provider disable and audits the credential write", async () => {
+  const { INSTALLER_PROVIDER_STATE_SQL, INSTALLER_PROVIDER_AUDIT_SQL } = await import("../src/installer/validation.mjs");
+  const db = new DatabaseSync(":memory:");
+  for (const f of ["0003_security_audit.sql", "0006_control_plane.sql", "0012_social_providers.sql"])
+    db.exec(readFileSync("migrations/" + f, "utf8"));
+  db.prepare(INSTALLER_PROVIDER_STATE_SQL).run("github", "installer:u1");
+  assert.equal(db.prepare("SELECT enabled FROM nathan_provider_state WHERE id='github'").get().enabled, 1, "first install enables");
+  db.prepare("UPDATE nathan_provider_state SET enabled=0, tested_at=1, tested_version='v1' WHERE id='github'").run();
+  db.prepare(INSTALLER_PROVIDER_STATE_SQL).run("github", "installer:u1");
+  const row = db.prepare("SELECT enabled, tested_at FROM nathan_provider_state WHERE id='github'").get();
+  assert.deepEqual({ ...row }, { enabled: 0, tested_at: null }, "re-run keeps the disable and clears the stale test");
+  db.prepare(INSTALLER_PROVIDER_AUDIT_SQL).run("a1", "installer:u1", "github");
+  assert.deepEqual({ ...db.prepare("SELECT actor, action, target, outcome FROM nathan_security_audit").get() },
+    { actor: "installer:u1", action: "oauth_provider_update", target: "github", outcome: "succeeded" });
+});

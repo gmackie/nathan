@@ -7,12 +7,15 @@ import { sso } from "@better-auth/sso";
 import { sendAuthEmail } from "./email";
 import type { AuthEnv } from "./env";
 import type { SocialCredentials } from "./provider-store";
+import { recordProviderSignIn } from "./provider-store";
+import { ACCOUNT_LINKING, buildSocialProviders } from "../shared/providers.mjs";
 import {mayAdminister} from "./bootstrap";
 import {isAdminPrincipal} from "./admin-service";
 import { nathanAccessTokenExtension, guardAuthorizationScopes, MAX_ACCESS_TOKEN_SECONDS, API_SCOPE } from "./tokens";
 
 // NATH-15: the provider's scopes, also Better Auth's default for an authorization request without `scope`.
 const OAUTH_SCOPES = ["openid", "profile", "email", "offline_access", "nathan:read", "nathan:admin", "nathan:directory.read", API_SCOPE];
+import {ssoPluginOptions,samlUserCreateGuard} from "./saml-policy.mjs";
 
 export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredentials) {
   const issuer = new URL(env.NATHAN_ISSUER);
@@ -21,12 +24,14 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
   if (!env.BETTER_AUTH_SECRET || env.BETTER_AUTH_SECRET.length < 32)
     throw new Error("BETTER_AUTH_SECRET must have at least 32 characters");
 
-  const socialProviders = {
+  // Legacy Worker-secret providers, built through the shared registry so they get the same
+  // verified-email mapping as managed providers (NATH-9).
+  const socialProviders: SocialCredentials = buildSocialProviders({
     ...(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET
       ? { google: { clientId: env.GOOGLE_CLIENT_ID, clientSecret: env.GOOGLE_CLIENT_SECRET } } : {}),
     ...(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET
       ? { github: { clientId: env.GITHUB_CLIENT_ID, clientSecret: env.GITHUB_CLIENT_SECRET } } : {})
-  };
+  });
 
   return betterAuth({
     baseURL: issuer.origin,
@@ -34,12 +39,25 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
     secret: env.BETTER_AUTH_SECRET,
     database: env.DB,
     // Federated tokens are sensitive; encrypt them in D1 and keep OAuth state server-side.
-    account: { encryptOAuthTokens: true, storeStateStrategy: "database" },
+    // NATH-9: implicit account linking only on a provider-verified email matching a verified
+    // Nathan user; no provider is trusted by name (see docs/providers.md).
+    account: { encryptOAuthTokens: true, storeStateStrategy: "database", accountLinking: { ...ACCOUNT_LINKING, trustedProviders: [...ACCOUNT_LINKING.trustedProviders] } },
     disabledPaths: ["/token"],
+    // SAML sign-in never creates accounts unless the connection allows
+    // just-in-time provisioning for its verified domain (NATH-10).
+    databaseHooks: { user: { create: { before: (user, ctx) => samlUserCreateGuard(env.DB, user, ctx) } } },
     hooks: {
       // NATH-15: a client not marked agent may not have a user delegate nathan:api.
       before: createAuthMiddleware(async (ctx) => guardAuthorizationScopes(env, ctx, OAUTH_SCOPES)),
       after: createAuthMiddleware(async (ctx) => {
+        // NATH-9: remember which social provider created a session, so a Studio test
+        // sign-in can prove the provider round trip.
+        if(ctx.path==="/callback/:id"){
+          const created=ctx.context.newSession;
+          if(created?.session?.id && created.user?.id && typeof ctx.params?.id==="string")
+            await recordProviderSignIn(env,{providerId:ctx.params.id,sessionId:created.session.id,userId:created.user.id});
+          return;
+        }
         // Passkey enrollment never grants admin assurance. Only a newly
         // verified passkey sign-in with a freshly issued session does.
         if(ctx.path!=="/passkey/verify-authentication")return;
@@ -123,14 +141,8 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
         },
         ...(env.NATHAN_PAIRWISE_SECRET ? { pairwiseSecret: env.NATHAN_PAIRWISE_SECRET } : {})
       }),
-      ...(env.ENTERPRISE_SSO === "true" ? [sso({
-        domainVerification: { enabled: true },
-        saml: {
-          enableInResponseToValidation: true,
-          allowIdpInitiated: false,
-          requireTimestamps: true
-        }
-      })] : [])
+      // Hardened SAML/OIDC enterprise SSO options: see src/auth/saml-policy.mjs.
+      ...(env.ENTERPRISE_SSO === "true" ? [sso(ssoPluginOptions())] : [])
     ]
   });
 }

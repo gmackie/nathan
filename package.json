@@ -37,6 +37,7 @@
     "@better-auth/oauth-provider": "1.7.14",
     "@better-auth/passkey": "1.7.14",
     "@better-auth/sso": "1.7.14",
+    "@xmldom/xmldom": "^0.9.12",
     "jose": "^6.1.0"
   },
   "devDependencies": {
@@ -46,7 +47,8 @@
     "wrangler": "^4.165.0",
     "auth": "1.7.14",
     "@types/node": "^22.0.0",
-    "miniflare": "5.20261118.0-beta"
+    "miniflare": "5.20261118.0-beta",
+    "xml-crypto": "^6.4.0"
   },
   "overrides": {
     "@better-auth/core": "1.7.14",

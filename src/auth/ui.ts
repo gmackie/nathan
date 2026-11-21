@@ -2,6 +2,9 @@ import { RBAC_STUDIO_HTML, RBAC_STUDIO_SCRIPT } from "./rbac-ui.ts";
 import { TOKENS_STUDIO_HTML, TOKENS_STUDIO_SCRIPT } from "./tokens-ui.ts";
 import { MCP_STUDIO_HTML, MCP_STUDIO_SCRIPT } from "./mcp-ui.ts";
 import { SCIM_LIFECYCLE_HTML, SCIM_LIFECYCLE_SCRIPT } from "./scim-ui.ts";
+import { displayName } from "../shared/providers.mjs";
+import { providerStudioSection, providerStudioScript } from "./provider-ui.mjs";
+import { samlStudioSection, samlStudioScript } from "./saml-ui.mjs";
 const htmlEscape = (s: string) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 
 function page(title: string, body: string, script = ""): Response {
@@ -18,7 +21,7 @@ function page(title: string, body: string, script = ""): Response {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
       "Content-Security-Policy": "default-src 'none'; connect-src 'self'; img-src 'none'; style-src 'nonce-" + nonce + "'; script-src 'nonce-" + nonce + "'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
-      "Referrer-Policy": "no-referrer",
+      "Referrer-Policy": "same-origin",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY",
       "Cross-Origin-Opener-Policy": "same-origin",
@@ -28,7 +31,7 @@ function page(title: string, body: string, script = ""): Response {
 }
 
 export function signInPage(providers: string[], passwordEnabled: boolean, enterpriseSso=false): Response {
-  const buttons=providers.map(p=>'<button data-provider="'+htmlEscape(p)+'">Continue with '+htmlEscape(p)+'</button>').join("");
+  const buttons=providers.map(p=>'<button data-provider="'+htmlEscape(p)+'">Continue with '+htmlEscape(displayName(p))+'</button>').join("");
   const password=passwordEnabled?'<h2>Email/password</h2><label>Email<input id="email" type="email" autocomplete="username"></label>'+
     '<label>Password<input id="password" type="password" autocomplete="current-password"></label>'+
     '<button id="password-submit">Sign in</button>'+
@@ -36,7 +39,7 @@ export function signInPage(providers: string[], passwordEnabled: boolean, enterp
     '<button id="two-factor-submit">Verify second factor</button></div>':"";
   const sso=enterpriseSso?'<h2>Work or school account</h2>'+
     '<label>Corporate email address<input id="sso-email" type="email" autocomplete="email" placeholder="you@company.com"></label>'+
-    '<button id="sso-submit">Continue with enterprise SSO</button>':"";
+    '<button id="sso-submit">Sign in with SSO</button>':"";
   const passkey='<h2>Passkey</h2><button id="passkey-login">Sign in with passkey</button>';
   return page("Sign in",'<p>Use your configured identity provider, passkey, or approved enterprise account.</p>'+
     buttons+passkey+sso+password+'<p id="status" role="alert"></p>',String.raw`
@@ -74,7 +77,10 @@ export function signInPage(providers: string[], passwordEnabled: boolean, enterp
     const sso=document.getElementById('sso-submit');
     if(sso)sso.onclick=async()=>{
       try{
-        const d=await request('/sign-in/sso',{email:document.getElementById('sso-email').value,callbackURL:'/'});
+        // Nathan routes the email domain to its enabled SAML or verified OIDC connection.
+        const res=await fetch('/sign-in/sso/start',{method:'POST',headers:{'Content-Type':'application/json'},
+          credentials:'same-origin',body:JSON.stringify({email:document.getElementById('sso-email').value})});
+        const d=unwrap(await res.json().catch(()=>({})));if(!res.ok)throw Error(d.error||d.message||'SSO provider unavailable');
         if(!d.url)throw Error('SSO provider unavailable');
         location.assign(d.url);
       }catch(e){status.textContent=e.message}
@@ -130,18 +136,7 @@ export function studioPage(userEmail: string): Response {
   <button id="security-require-both">Require passkey + verified TOTP enrollment for administrators</button>
   <button id="security-require-recent">Require a recent passkey login for privileged administration</button>
   <p id="security-policy-status" role="status"></p>
-  <h2>Social OAuth providers</h2>
-  <p>Add or rotate Google and GitHub credentials without redeploying. Secrets are encrypted inside the customer-owned D1 database and are never returned by the admin API. Keep another tested login method before disabling your last provider.</p>
-  <button class="secondary" id="social-list">Refresh OAuth providers</button><pre id="social-list-result"></pre>
-  <label>Provider<select id="social-provider"><option value="google">Google</option><option value="github">GitHub</option></select></label>
-  <p id="social-guide"></p><a id="social-console" target="_blank" rel="noopener noreferrer" href="https://console.cloud.google.com/auth/clients">Open provider console</a>
-  <p>Authorized redirect URI:</p><pre id="social-callback"></pre><button class="secondary" id="social-copy">Copy callback URL</button>
-  <label>Client ID<input id="social-client-id" placeholder="Paste OAuth client ID" autocomplete="off"></label>
-  <label>Client secret<input id="social-secret" type="password" placeholder="Paste OAuth client secret" autocomplete="new-password"></label>
-  <button id="social-save">Save / rotate encrypted credentials</button>
-  <button class="secondary" id="social-enable">Enable provider</button>
-  <button class="secondary" id="social-disable">Disable provider</button>
-  <p id="social-result" role="status"></p>
+  ${providerStudioSection}
   <h2>Identity providers and security posture</h2><button class="secondary" id="status-btn">View active capabilities</button><pre id="capabilities"></pre><h2>Available plugins</h2><p>Catalog entries are read-only until their packages and database migrations are reviewed and deployed.</p><select id="plugin-tier"><option value="all">All tiers</option><option value="verified">Verified candidates</option><option value="community">Community</option><option value="custom">Private/custom</option></select><button class="secondary" id="plugins-btn">List integrations</button><pre id="plugins"></pre><h2>Security audit events</h2><button class="secondary" id="audit-btn">Refresh security audit</button><pre id="audit"></pre>
   <h2>Administrators and recovery</h2>
   <p>The first administrator is bound to the Cloudflare installer's verified email and can never be revoked from this screen. Additional admins require an existing email-verified Nathan account, explicit approval, enrolled authenticators, and recent passkey reauthentication.</p>
@@ -211,6 +206,7 @@ export function studioPage(userEmail: string): Response {
   <button class="secondary" id="sso-verify">Verify DNS ownership</button>
   <p id="sso-status" role="status"></p><pre id="sso-verification"></pre>
   <button class="secondary" id="sso-list">List enterprise providers</button><pre id="sso-results"></pre>
+  ${samlStudioSection}
   <h2>MCP administration</h2><p>OAuth-protected stateless MCP endpoint. Register an MCP OIDC client for resource-bound access.</p>
   <pre id="mcp-help"></pre></div>`, `
     document.getElementById('refresh').onclick=async()=>{
@@ -218,20 +214,7 @@ export function studioPage(userEmail: string): Response {
       document.getElementById('clients').textContent=r.ok?JSON.stringify(d,null,2):'Unable to load clients';
     };
 
-    const socialInfo={
-      google:{url:'https://console.cloud.google.com/auth/clients',guide:'Create a Google Cloud Web OAuth client, configure the consent screen, and add the exact callback URL.'},
-      github:{url:'https://github.com/settings/developers',guide:'In GitHub Developer Settings create an OAuth App and paste the exact authorization callback URL.'}
-    };
-    function updateSocialGuide(){
-      const id=document.getElementById('social-provider').value;
-      document.getElementById('social-console').href=socialInfo[id].url;
-      document.getElementById('social-guide').textContent=socialInfo[id].guide;
-      document.getElementById('social-callback').textContent=location.origin+'/api/auth/callback/'+id;
-    }
-    document.getElementById('social-provider').onchange=updateSocialGuide;
-    updateSocialGuide();
-    document.getElementById('social-copy').onclick=()=>navigator.clipboard.writeText(
-      document.getElementById('social-callback').textContent);
+${providerStudioScript}
 
     document.getElementById('security-policy-show').onclick=async()=>{
       const out=document.getElementById('security-policy-current');
@@ -252,37 +235,6 @@ export function studioPage(userEmail: string): Response {
     document.getElementById('security-require-both').onclick=()=>strengthenAdminPolicy('both-authenticators');
     document.getElementById('security-require-recent').onclick=()=>strengthenAdminPolicy('recent-passkey');
 
-    document.getElementById('social-list').onclick=async()=>{
-      const out=document.getElementById('social-list-result');
-      try{out.textContent=JSON.stringify((await j('/studio/api/providers')).providers,null,2)}
-      catch(e){out.textContent=e.message}
-    };
-    document.getElementById('social-save').onclick=async()=>{
-      const out=document.getElementById('social-result');
-      if(!confirm('Store these OAuth credentials in your encrypted Nathan configuration?'))return;
-      try{
-        const value=await postJson('/studio/api/providers',{
-          id:document.getElementById('social-provider').value,
-          clientId:document.getElementById('social-client-id').value,
-          clientSecret:document.getElementById('social-secret').value
-        });
-        document.getElementById('social-secret').value='';
-        out.textContent=JSON.stringify(value);
-        document.getElementById('social-list').click();
-      }catch(e){out.textContent=e.message}
-    };
-    async function setSocial(enabled){
-      const id=document.getElementById('social-provider').value;
-      const conf='CONFIRM '+(enabled?'ENABLE ':'DISABLE ')+id;
-      if(!confirm('Change OAuth provider '+id+' to '+(enabled?'enabled':'disabled')+'?'))return;
-      try{
-        const value=await postJson('/studio/api/providers/status',{id,enabled,confirm:conf});
-        document.getElementById('social-result').textContent=JSON.stringify(value);
-        document.getElementById('social-list').click();
-      }catch(e){document.getElementById('social-result').textContent=e.message}
-    }
-    document.getElementById('social-enable').onclick=()=>setSocial(true);
-    document.getElementById('social-disable').onclick=()=>setSocial(false);
 
     document.getElementById('status-btn').onclick=async()=>{
       const r=await fetch('/studio/api/status',{credentials:'same-origin'});const d=await r.json();
@@ -499,6 +451,7 @@ export function studioPage(userEmail: string): Response {
     document.getElementById('mcp-help').textContent=
       'Endpoint: '+location.origin+'/mcp\\nResource metadata: '+location.origin+'/.well-known/oauth-protected-resource\\n' +
       'Scopes: nathan:read / nathan:admin\\nProtocol: 2026-07-28';
+    ${samlStudioScript}
     const root=document.getElementById('studio-root');
     const headings=Array.from(root.children).filter(el=>el.tagName==='H2');
     const tabs=document.getElementById('studio-tabs');

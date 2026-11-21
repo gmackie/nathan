@@ -53,3 +53,15 @@ export function isAllowedOrigin(origin,expected){
  */
 export const EMPTY_DATABASE_SQL =
   "SELECT count(*) AS n FROM sqlite_master WHERE substr(name,1,7)<>'sqlite_' AND substr(name,1,4)<>'_cf_'";
+
+/**
+ * Installer write of the first-admin provider's state. A first install creates it enabled; a
+ * re-run never re-enables a provider an administrator disabled, and always clears the test
+ * record because the credentials changed. Params: [provider, updated_by].
+ */
+export const INSTALLER_PROVIDER_STATE_SQL =
+  "INSERT INTO nathan_provider_state(id,enabled,updated_by) VALUES (?,1,?) ON CONFLICT(id) DO UPDATE SET " +
+  "updated_at=unixepoch(),updated_by=excluded.updated_by,tested_at=NULL,tested_by=NULL,tested_user=NULL,tested_version=NULL";
+/** Audit row for the installer's credential write. Params: [id, actor, provider]. */
+export const INSTALLER_PROVIDER_AUDIT_SQL =
+  "INSERT INTO nathan_security_audit(id,actor,action,target,outcome) VALUES (?,?,'oauth_provider_update',?,'succeeded')";

@@ -15,7 +15,7 @@ const SESSION_COOKIE="__Host-nathan-installer";
 function error(status:number,error:string){return Response.json({error},{status,headers:{"Cache-Control":"no-store"}})}
 function responseSecurity(response:Response){
   response.headers.set("Cache-Control","no-store");
-  response.headers.set("Referrer-Policy","no-referrer");
+  response.headers.set("Referrer-Policy","same-origin");
   response.headers.set("X-Content-Type-Options","nosniff");
   response.headers.set("X-Frame-Options","DENY");
   response.headers.set("Strict-Transport-Security","max-age=31536000");

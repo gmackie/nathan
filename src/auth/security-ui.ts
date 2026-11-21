@@ -138,6 +138,6 @@ export function securityPage(userEmail:string):Response {
   return new Response(body,{
     headers:{"Content-Type":"text/html; charset=utf-8","Cache-Control":"no-store",
       "Content-Security-Policy":"default-src 'none'; script-src 'nonce-"+nonce+"'; style-src 'nonce-"+nonce+"'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-      "Referrer-Policy":"no-referrer","X-Frame-Options":"DENY","X-Content-Type-Options":"nosniff","Strict-Transport-Security":"max-age=31536000"}
+      "Referrer-Policy": "same-origin","X-Frame-Options":"DENY","X-Content-Type-Options":"nosniff","Strict-Transport-Security":"max-age=31536000"}
   });
 }
