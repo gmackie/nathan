@@ -38,8 +38,7 @@ export async function protectCommand(args,file,apply){
   const oidcSecret=await secretPrompt("OIDC client secret (masked)");
   if(!oidcClientId||!oidcSecret)throw Error("Confidential OIDC client credentials required");
   const name=cfg.name+"-"+app.id+"-sessions";
-  const available=await cf.databases();
-  const database=available.find(x=>x.name===name)||await cf.createDatabase(name);
+  const database=(await cf.databaseNamed(name))||await cf.createDatabase(name);
   const dbId=database.uuid||database.id;
   const config=await createGeneratedConfig(cfg,dbId,{...app,oidcClientId});
   if(!(await yesNo("Publish gateway at "+app.hostname+"?")))throw Error("Cancelled");

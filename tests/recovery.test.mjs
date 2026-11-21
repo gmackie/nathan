@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { missingIdpSecrets, hostnameConflicts, ensureIdpSecrets, inspectDeployment } from "../scripts/lib/cloudflare.mjs";
+import { missingIdpSecrets, hostnameConflicts, ensureIdpSecrets, inspectDeployment, CloudflareClient } from "../scripts/lib/cloudflare.mjs";
 import { redirectWithCookies, fetchNoRedirect } from "../src/shared/security.mjs";
 import { EMPTY_DATABASE_SQL } from "../src/installer/validation.mjs";
 
@@ -52,7 +52,7 @@ test("first-install discovery does not need Workers custom-domain permission", a
   let domainCalls = 0;
   const client = {
     accountId: "a", zones: async () => [{ id: "z", name: "example.com", status: "active" }],
-    workers: async () => [], databases: async () => [], dnsRecords: async () => [],
+    workers: async () => [], databaseNamed: async () => null, dnsRecords: async () => [],
     workerDomains: async () => { domainCalls++; throw Error("forbidden"); }
   };
   const result = await inspectDeployment(client, { hostname: "auth.example.com", name: "acme", database: { name: "acme-db" } });
@@ -81,4 +81,20 @@ test("the empty-database check counts look-alike names, views and triggers", () 
   assert.equal(count("CREATE TABLE xcfusers(a); CREATE TABLE sqliteXdata(b)"), 2, "LIKE wildcards must not hide tables");
   assert.equal(count("CREATE VIEW v AS SELECT 1"), 1);
   assert.equal(count("CREATE TABLE _cf_t(a); CREATE TRIGGER trg AFTER INSERT ON _cf_t BEGIN SELECT 1; END"), 1);
+});
+
+test("D1 lookup matches exactly and pages past the first 100 databases", async () => {
+  const all = [...Array.from({ length: 130 }, (_, i) => ({ uuid: "u" + i, name: "acme-auth-old-" + i })), { uuid: "target", name: "acme-auth" }];
+  const client = new CloudflareClient("token", "a".repeat(32));
+  const seen = [];
+  client.request = async path => {
+    const url = new URL("https://x" + path);
+    seen.push(url.searchParams.get("page"));
+    const filtered = all.filter(d => d.name.includes(url.searchParams.get("name")));
+    const page = Number(url.searchParams.get("page"));
+    return filtered.slice((page - 1) * 100, page * 100);
+  };
+  assert.equal((await client.databaseNamed("acme-auth")).uuid, "target");
+  assert.deepEqual(seen, ["1", "2"]);
+  assert.equal(await client.databaseNamed("acme-auth-old-1x"), null);
 });

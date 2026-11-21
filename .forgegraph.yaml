@@ -1,0 +1,18 @@
+app: nathan
+server: https://forgegraf.com
+deploymentPlatform: cloudflare-workers
+healthCheckUrl: https://nathan-stg.gmac.io/healthz
+stages:
+  - name: staging
+    platform: cloudflare-workers
+    url: https://nathan-stg.gmac.io
+    sortOrder: 10
+
+# Nathan's own staging deployment (dogfooding the code on a real Cloudflare account).
+# Customer installs use the CLI wizard (npm run wizard) or the hosted installer, not this file.
+# Target "auth": Worker nathan-stg-auth from deploy/staging/wrangler.auth.jsonc,
+#   D1 nathan-stg-auth (migrations applied as a pre-deploy step), custom domain nathan-stg.gmac.io.
+# Staging secrets (fg secret list --stage staging): BETTER_AUTH_SECRET, NATHAN_CONFIG_KEY,
+#   NATHAN_ADMIN_EMAILS, and social provider credentials as they are added.
+# Production is intentionally not declared: Nathan is a self-hosted product; there is no
+# shared production instance yet.

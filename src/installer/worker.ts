@@ -7,6 +7,7 @@ import { cloudflareRequest } from "./cloudflare";
 import { installerPage } from "./ui";
 import { validateDomainName,discoverRealmHostCandidates,realmIssuerHostname } from "../shared/realm.mjs";
 import { createInstall, installStatus, advanceInstall } from "./deploy";
+import { findD1Database } from "./d1";
 import type { InstallerEnv } from "./env";
 
 const STATE_COOKIE="__Host-nathan-installer-state";
@@ -137,13 +138,13 @@ async function dashboard(request:Request,env:InstallerEnv){
     const zones=await api<Array<{id:string;name:string;status:string}>>("/zones?account.id="+plan.accountId+"&per_page=100");
     const zone=zones.filter(z=>z.status==="active"&&(plan.hostname===z.name||plan.hostname.endsWith("."+z.name))).sort((a,b)=>b.name.length-a.name.length)[0];
     if(!zone)return error(400,"Identity hostname is not in an accessible active Cloudflare zone");
-    const [workers,databases,dns,domains]=await Promise.all([
+    const [workers,database,dns,domains]=await Promise.all([
       api<Array<{id:string}>>("/accounts/"+plan.accountId+"/workers/scripts"),
-      api<Array<{uuid:string;name:string}>>("/accounts/"+plan.accountId+"/d1/database"),
+      findD1Database(api,plan.accountId,plan.name+"-db"),
       api<Array<{id:string;type:string;name:string}>>("/zones/"+zone.id+"/dns_records?name="+encodeURIComponent(plan.hostname)),
       api<Array<{hostname:string;service:string}>>("/accounts/"+plan.accountId+"/workers/domains")
     ]);
-    const worker=workers.find(w=>w.id===plan.name),database=databases.find(d=>d.name===plan.name+"-db");
+    const worker=workers.find(w=>w.id===plan.name);
     const domain=domains.find(d=>d.hostname===plan.hostname);
     const available=!worker&&!database&&!dns.length&&!domain;
     return Response.json({

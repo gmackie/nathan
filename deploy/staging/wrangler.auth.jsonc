@@ -1,0 +1,40 @@
+// Nathan's own staging identity Worker, deployed through ForgeGraph (app "nathan",
+// stage "staging"). Not a template for customer installs: use the CLI wizard or the
+// hosted installer. Secrets (BETTER_AUTH_SECRET, NATHAN_CONFIG_KEY,
+// NATHAN_ADMIN_EMAILS, provider credentials) come from ForgeGraph's staging secret
+// store and are uploaded with the Worker; none are written here.
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "nathan-stg-auth",
+  "main": "../../src/auth/worker.ts",
+  "compatibility_date": "2026-10-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "nathan-stg-auth",
+      "database_id": "6ee7794d-d20d-4b7b-8518-984b8efe26e6",
+      "migrations_dir": "../../migrations"
+    }
+  ],
+  "vars": {
+    "NATHAN_ISSUER": "https://nathan-stg.gmac.io",
+    "NATHAN_SECURITY_PROFILE": "business",
+    "NATHAN_BOOTSTRAP_REQUIRED": "true",
+    "NATHAN_INSTALL_ACTIVE": "true",
+    "NATHAN_MCP_WRITE_ENABLED": "false",
+    "NATHAN_REALM_APEX": "",
+    "ENABLE_PASSWORD": "false",
+    "ENTERPRISE_SSO": "true",
+    "NATHAN_ADMIN_STEPUP_REQUIRED": "true"
+  },
+  "routes": [{ "pattern": "nathan-stg.gmac.io", "custom_domain": true }],
+  "triggers": { "crons": ["17 5 * * *"] },
+  "durable_objects": {
+    "bindings": [{ "name": "SCIM_DIRECTORY", "class_name": "NathanScimDirectory" }]
+  },
+  "migrations": [{ "tag": "nathan-scim-v1", "new_sqlite_classes": ["NathanScimDirectory"] }]
+}

@@ -7,6 +7,7 @@ import { realmIssuerHostname } from "../shared/realm.mjs";
 import { generateConfigKey,encryptProviderSecret } from "../auth/config-crypto.mjs";
 import {sha256} from "../gateway/crypto";
 import { verifyIdentityHostname } from "./verify-idp";
+import { findD1Database } from "./d1";
 
 const STAGES=["database","schema","upload","domain","activate","verify","bootstrap","complete"] as const;
 type Stage=typeof STAGES[number];
@@ -74,16 +75,16 @@ async function resolveZone(api:Api,accountId:string,hostname:string) {
   return matching;
 }
 async function nameIsFree(api:Api,accountId:string,name:string,dbName:string,hostname:string,zoneId:string){
-  const [scripts,dbs,dns,domains]=await Promise.all([
+  const [scripts,existingDb,dns,domains]=await Promise.all([
     api<Array<{id:string}>>("/accounts/"+accountId+"/workers/scripts"),
-    api<Array<{name:string}>>("/accounts/"+accountId+"/d1/database"),
+    findD1Database(api,accountId,dbName),
     api<Array<{id:string;type:string}>>("/zones/"+zoneId+"/dns_records?name="+encodeURIComponent(hostname)),
     api<Array<{hostname:string;service:string}>>("/accounts/"+accountId+"/workers/domains")
   ]);
-  if(!Array.isArray(scripts)||!Array.isArray(dbs)||!Array.isArray(dns)||!Array.isArray(domains))
+  if(!Array.isArray(scripts)||!Array.isArray(dns)||!Array.isArray(domains))
     throw Error("Cannot verify Cloudflare resource availability");
   if(scripts.some(s=>s.id===name))throw Error("A Worker with that name already exists. Choose a new name.");
-  if(dbs.some(d=>d.name===dbName))throw Error("A D1 database with that name already exists. Choose a new name.");
+  if(existingDb)throw Error("A D1 database with that name already exists. Choose a new name.");
   if(dns.length)throw Error("The identity hostname has existing DNS records; resolve them before installing");
   if(domains.some(d=>d.hostname===hostname))throw Error("This hostname is already attached to a Worker");
 }
@@ -266,8 +267,7 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
     // Every step is independently resumable. No secrets are written to installer D1.
     if(job.stage==="database"){
       const dbName=job.worker_name+"-db";
-      const databases=await api<Array<{uuid:string;name:string;created_at?:string}>>("/accounts/"+job.account_id+"/d1/database");
-      const found=databases.find(d=>d.name===dbName);
+      const found=await findD1Database(api,job.account_id,dbName);
       // Never reuse a database that the job cannot prove it created. A create this job started
       // whose response was lost is adopted only if Cloudflare created that database after the
       // job started the create, and it still holds no schema objects at all.

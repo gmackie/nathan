@@ -31,9 +31,18 @@ export class CloudflareClient {
     if (!this.accountId) throw Error("Account ID required");
     return this.request("/accounts/" + this.accountId + "/workers/scripts");
   }
-  async databases() {
+  /** Exact-name D1 lookup; the list API pages at 100 and its name filter matches substrings. */
+  async databaseNamed(name) {
     if (!this.accountId) throw Error("Account ID required");
-    return this.request("/accounts/" + this.accountId + "/d1/database");
+    for (let page = 1; page <= 100; page++) {
+      const rows = await this.request("/accounts/" + this.accountId + "/d1/database?name=" +
+        encodeURIComponent(name) + "&per_page=100&page=" + page);
+      if (!Array.isArray(rows)) throw Error("Unable to list D1 databases");
+      const match = rows.find(d => d.name === name);
+      if (match) return match;
+      if (rows.length < 100) return null;
+    }
+    throw Error("D1 inventory exceeds the safe discovery limit");
   }
   async workerDomains() {
     if(!this.accountId)throw Error("Account ID required");
@@ -144,8 +153,8 @@ export function hostnameConflicts(records, domains, hostname, workerName) {
   return ownsHostname ? [] : records;
 }
 export async function inspectDeployment(client, cfg) {
-  const [zones, workers, databases] = await Promise.all([
-    client.zones(), client.workers(), client.databases()
+  const [zones, workers, existingDatabase] = await Promise.all([
+    client.zones(), client.workers(), client.databaseNamed(cfg.database.name)
   ]);
   const zone = zoneForHostname(zones, cfg.hostname);
   const records = zone ? await client.dnsRecords(zone.id, cfg.hostname) : [];
@@ -158,7 +167,7 @@ export async function inspectDeployment(client, cfg) {
     accountId: client.accountId,
     zone: zone ? { id: zone.id, name: zone.name, status: zone.status } : null,
     existingAuthWorker: Array.isArray(workers) && workers.some(w => w.id === cfg.name + "-auth"),
-    existingDatabase: Array.isArray(databases) ? databases.find(d => d.name === cfg.database.name) || null : null,
+    existingDatabase,
     dnsConflicts: conflicts.map(x => ({ type: x.type, name: x.name, id: x.id })),
     warning: !zone ? "No active Cloudflare zone for requested hostname" : null
   };
