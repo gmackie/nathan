@@ -295,10 +295,10 @@ async function tokenEndpoint(request: Request, env: AuthEnv, auth: any) {
  * The authoritative check behind a Worker's `user.can(scope)`: the token verifies, its grant is live,
  * and the scopes are the token's ∩ the grant's now ∩ the user's current permissions.
  */
-export async function mcpGrantStatus(env: AuthEnv, auth: any, token: unknown, resourceId: unknown) {
+export async function mcpGrantStatus(env: AuthEnv, auth: any, token: unknown, resourceId: unknown, pinnedApp?: string) {
   const inactive = { active: false as const };
   const resource = await loadResource(env, resourceId);
-  if (!resource || resource.enabled !== 1) return inactive;
+  if (!resource || resource.enabled !== 1 || (pinnedApp !== undefined && resource.app_id !== pinnedApp)) return inactive;
   const payload = await verifyAccessToken(env, auth, token, resource.identifier);
   if (!payload) return inactive;
   const grant = await liveGrant(env, payload.nathan_grant);

@@ -71,11 +71,11 @@ export default {
 ```jsonc
 {
   "vars": { "NATHAN_ISSUER": "https://login.example.com/api/auth" },
-  "services": [{ "binding": "NATHAN", "service": "nathan-auth", "entrypoint": "NathanVerifier" }]
+  "services": [{ "binding": "NATHAN", "service": "nathan-auth", "entrypoint": "NathanVerifier", "props": { "applicationId": "notes" } }]
 }
 ```
 
-The service binding is the fast, private path for the grant check. Without it (a Worker on another account), the SDK verifies the token against `https://login.example.com/api/auth/jwks` and asks `POST https://login.example.com/mcp-oauth/grant`, authenticated with the token itself.
+The service binding is the fast, private path for the grant check. Like every `NathanVerifier` call it is app-scoped ([rbac.md](rbac.md)): a binding answers only for MCP servers of the application pinned in its `props`, and an unpinned binding answers nothing. Without it (a Worker on another account), the SDK verifies the token against `https://login.example.com/api/auth/jwks` and asks `POST https://login.example.com/mcp-oauth/grant`, authenticated with the token itself.
 
 **5. Connect a client.** Add `https://notes.example.com/mcp` as a remote MCP server in a client that supports Streamable HTTP and OAuth. It discovers Nathan, registers itself, and opens Nathan's consent page in the browser. Sign in, tick what the client may do, choose **Allow selected access**. Users manage their connections at `https://login.example.com/connections`.
 

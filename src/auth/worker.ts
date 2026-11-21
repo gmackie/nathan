@@ -460,9 +460,11 @@ export class NathanVerifier extends WorkerEntrypoint<AuthEnv, BindingProps> {
   /**
    * NATH-14 grant check for remote MCP servers (the SDK's nathanMcp()): verifies the access token,
    * and returns the scopes it may use now = token ∩ live grant ∩ the user's current permissions.
+   * Like every call here it is app-scoped: only resources of the pinned application are answered.
    */
   async mcpGrant(input: { token: string; resource: string }) {
-    if (!input || typeof input.token !== "string" || typeof input.resource !== "string") return { active: false };
-    return mcpGrantStatus(this.env, createAuth(this.env, await loadSocialCredentials(this.env)), input.token, input.resource);
+    const scope = scopedApplication(this.ctx.props, undefined);
+    if (!scope.ok || !input || typeof input.token !== "string" || typeof input.resource !== "string") return { active: false };
+    return mcpGrantStatus(this.env, createAuth(this.env, await loadSocialCredentials(this.env)), input.token, input.resource, scope.app);
   }
 }

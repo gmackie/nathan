@@ -151,7 +151,7 @@ Gatekeeper's principal id is `principal:<url-encoded issuer>:sub:<url-encoded su
 
 ## Remote MCP tokens
 
-Tokens from Nathan's MCP authorization server ([remote-mcp.md](remote-mcp.md), NATH-14) follow this profile with the same issuer and keys: `aud` is the MCP server's resource URL, `principal_kind` is always `agent`, `sub` is the user, `scope` holds the scopes effective at issuance, and they live 300 s. To accept them in Gatekeeper, use the entry above with `audience` set to the MCP resource. Gatekeeper sees the signature only; the MCP server's `nathanMcp()` additionally checks the live grant, so a revoked connection stops there within 60 s and at Gatekeeper when the token expires.
+Tokens from Nathan's MCP authorization server ([remote-mcp.md](remote-mcp.md), NATH-14) follow this profile with the same issuer and keys: `aud` is the MCP server's resource URL, `principal_kind` is always `agent`, `sub` is the user, `scope` holds the scopes effective at issuance, and they live 300 s. To accept them in Gatekeeper, use the entry above with `audience` set to the MCP resource. Gatekeeper sees the signature only; the MCP server's `nathanMcp()` additionally checks the live grant, so a revoked connection stops there within 60 s and at Gatekeeper when the token expires. They are `agent` tokens, so the live-session rule for `user` tokens does not apply: a connection deliberately outlives the browser session that approved it (30 days with refresh). Instead every refresh and grant check runs the NATH-13 evaluator, so banning the user, removing their role or disabling the app stops new tokens at once.
 
 ## Roles: read the directory, not the token
 

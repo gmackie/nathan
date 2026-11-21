@@ -14,7 +14,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { bundle, migrate, randomKey, base64url, start, COMPAT } from "./helpers.mjs";
-import { providerEntryFromDocs, verifyLikeGatekeeper } from "./gatekeeper-verifier.mjs";
+import { providerEntryFromDocs, gatekeeper, invalidCredentials } from "./gatekeeper-verifier.mjs";
 
 const PROVIDER = providerEntryFromDocs();
 const HOST = new URL(PROVIDER.issuer).host;
@@ -35,7 +35,7 @@ const CATALOG = {
   }
 };
 
-let mf, db, auth, mcp, mcpHttps;
+let mf, db, auth, mcp, mcpHttps, mcpOtherApp, mcpUnpinned;
 after(() => mf?.dispose());
 const sql = (statement, ...params) => db.prepare(statement).bind(...params).run();
 const now = () => new Date().toISOString();
@@ -64,9 +64,8 @@ const form = (path, params, headers = {}) => auth.fetch(ORIGIN + path, {
   method: "POST", redirect: "manual", body: params.toString(),
   headers: { "Content-Type": "application/x-www-form-urlencoded", ...headers }
 });
-async function jwks() { return (await auth.fetch(PROVIDER.jwksUri)).json(); }
 
-let admin, alice, bob;
+let admin, alice, bob, carol;
 let ip = 0;
 async function registerClient(extra = {}) {
   const response = await auth.fetch(ORIGIN + "/mcp-oauth/register", {
@@ -120,6 +119,11 @@ before(async () => {
       { name: "auth", modules: true, ...COMPAT, scriptPath: bundle("auth"), d1Databases: { DB: "mcp-auth-db" },
         durableObjects: { SCIM_DIRECTORY: { className: "NathanScimDirectory", useSQLite: true } }, bindings: authBindings },
       { name: "mcp", modules: true, ...COMPAT, scriptPath: ".nathan/build-mcp/mcp-server.js",
+        serviceBindings: { NATHAN: { name: "auth", entrypoint: "NathanVerifier", props: { applicationId: "notes" } } }, bindings: mcpBindings },
+      // A binding pinned to another application must learn nothing about this server's tokens.
+      { name: "mcp-other-app", modules: true, ...COMPAT, scriptPath: ".nathan/build-mcp/mcp-server.js",
+        serviceBindings: { NATHAN: { name: "auth", entrypoint: "NathanVerifier", props: { applicationId: "billing" } } }, bindings: mcpBindings },
+      { name: "mcp-unpinned", modules: true, ...COMPAT, scriptPath: ".nathan/build-mcp/mcp-server.js",
         serviceBindings: { NATHAN: { name: "auth", entrypoint: "NathanVerifier" } }, bindings: mcpBindings },
       // Same server without a service binding: JWKS and the grant check go over HTTPS to Nathan.
       { name: "mcp-https", modules: true, ...COMPAT, scriptPath: ".nathan/build-mcp/mcp-server.js", bindings: mcpBindings,
@@ -136,6 +140,8 @@ before(async () => {
   auth = { fetch: (input, init) => mf.dispatchFetch(input, init) };
   mcp = await mf.getWorker("mcp");
   mcpHttps = await mf.getWorker("mcp-https");
+  mcpOtherApp = await mf.getWorker("mcp-other-app");
+  mcpUnpinned = await mf.getWorker("mcp-unpinned");
 
   await user("admin-1", "admin@example.test", "admin");
   await sql("INSERT INTO nathan_bootstrap_status(id,cloudflare_user_id,admin_email,admin_user_id,state) VALUES ('primary','cf','admin@example.test','admin-1','complete')");
@@ -147,11 +153,15 @@ before(async () => {
   await user("u-bob", "bob@example.test");
   alice = await session("u-alice");
   bob = await session("u-bob");
+  // Carol has her own consent rate-limit budget (30 a minute per user) for the later tests.
+  await user("u-carol", "carol@example.test");
+  carol = await session("u-carol");
   await sql("INSERT INTO nathan_applications(id,hostname,enabled,access_mode) VALUES ('notes','notes.example.com',1,'approved')");
   for (const key of [...SCOPES, "nathan:admin"]) await sql("INSERT INTO nathan_rbac_permissions(app_id,key,description) VALUES ('notes',?,?)", key, "Permission " + key);
   await sql("INSERT INTO nathan_rbac_roles(app_id,key) VALUES ('notes','editor')");
   for (const key of SCOPES) await sql("INSERT INTO nathan_rbac_role_permissions(app_id,role_key,permission_key) VALUES ('notes','editor',?)", key);
   await sql("INSERT INTO nathan_rbac_grants(id,app_id,role_key,principal_type,principal_id,created_by) VALUES ('g1','notes','editor','user','u-alice','test')");
+  await sql("INSERT INTO nathan_rbac_grants(id,app_id,role_key,principal_type,principal_id,created_by) VALUES ('g3','notes','editor','user','u-carol','test')");
 });
 
 test("only an enrolled administrator registers an MCP server, and its catalog cannot imply sensitive scopes", async () => {
@@ -263,20 +273,22 @@ test("an MCP SDK client discovers, registers, gets narrowed consent and calls a 
   assert.deepEqual(JSON.parse(result.content[0].text).map(n => n.id), ["n1", "n2"]);
   await client.close();
 
-  // The access token is a NATH-15 token: Gatekeeper accepts it as an agent acting for Alice.
-  const verified = await verifyLikeGatekeeper(provider.saved.access_token, { ...PROVIDER, audience: RESOURCE }, await jwks());
-  assert.equal(verified.kind, "agent");
-  assert.equal(verified.subject, "u-alice");
-  assert.equal(verified.clientId, provider.client.client_id);
-  assert.deepEqual(verified.scopes, ["notes:read"]);
-  assert.ok(verified.expiresAt - Date.now() <= 900_000);
+  // The access token is a NATH-15 token: Gatekeeper's own resolver accepts it as an agent acting for Alice.
+  const principal = await gatekeeper(mf, { ...PROVIDER, audience: RESOURCE })(provider.saved.access_token);
+  assert.equal(principal.kind, "agent");
+  assert.equal(principal.subject, "u-alice");
+  assert.equal(principal.id, "principal:" + encodeURIComponent(PROVIDER.issuer) + ":sub:u-alice", "the same principal as Alice's own tokens");
+  assert.equal(principal.authentication.clientId, provider.client.client_id);
+  assert.deepEqual(principal.authentication.scopes, ["notes:read"]);
+  assert.equal(principal.mfa, false);
   const [header, claims] = provider.saved.access_token.split(".").slice(0, 2).map(p => JSON.parse(Buffer.from(p, "base64url")));
   assert.equal(header.typ, "at+jwt");
   assert.equal(claims.iss, PROVIDER.issuer);
   assert.equal(claims.principal_kind, "agent");
   assert.ok(claims.exp - claims.iat <= 900);
   assert.deepEqual(claims.roles, ["editor"]);
-  await assert.rejects(verifyLikeGatekeeper(provider.saved.access_token, PROVIDER, await jwks()), /InvalidCredentials/, "not valid for another audience");
+  await assert.rejects(gatekeeper(mf, PROVIDER)(provider.saved.access_token), invalidCredentials, "not valid for another audience");
+  await assert.rejects(gatekeeper(mf, { ...PROVIDER, audience: RESOURCE }, { now: () => Date.now() + 301_000 })(provider.saved.access_token), invalidCredentials, "expired after 300 s");
 });
 
 test("resource is mandatory and must name the registered MCP server on authorize, token and refresh", async () => {
@@ -413,6 +425,8 @@ test("refresh narrows to what the grant holds; reuse of a rotated refresh token 
 
 test("grant edits and disconnect reach the MCP server within 60 seconds", async () => {
   const { tokens } = await connect(alice, ["notes:write"]);
+  for (const worker of [mcpOtherApp, mcpUnpinned])
+    assert.equal((await call(worker, "/whoami", tokens.access_token)).status, 401, "the binding is app-scoped like every NathanVerifier call");
   for (const worker of [mcp, mcpHttps]) {
     const before = await (await call(worker, "/whoami", tokens.access_token)).json();
     assert.deepEqual(before.scopes, ["notes:read", "notes:write"]);
@@ -469,18 +483,31 @@ test("removing the user's permission removes the scope from tokens and requests"
   }
 });
 
+test("banning the user stops their MCP connections at the next check", async () => {
+  const { client, tokens } = await connect(carol, ["notes:read"]);
+  await sql('UPDATE "user" SET "banned"=1 WHERE "id"=\'u-carol\'');
+  try {
+    assert.equal((await grantStatus(tokens.access_token)).active, false);
+    const refreshed = await token({ grant_type: "refresh_token", refresh_token: tokens.refresh_token, client_id: client.client_id, resource: RESOURCE });
+    assert.equal(refreshed.body.error, "invalid_grant");
+  } finally {
+    await sql('UPDATE "user" SET "banned"=0 WHERE "id"=\'u-carol\'');
+  }
+  assert.equal((await grantStatus(tokens.access_token)).active, true, "the grant itself survives a temporary ban");
+});
+
 test("clients revoke grants (RFC 7009), administrators revoke and disable servers", async () => {
-  const { client, tokens } = await connect(alice, ["notes:read"]);
+  const { client, tokens } = await connect(carol, ["notes:read"]);
   const revoked = await form("/mcp-oauth/revoke", new URLSearchParams({ client_id: client.client_id, token: tokens.access_token }));
   assert.equal(revoked.status, 200);
   assert.equal((await grantStatus(tokens.access_token)).active, false);
   assert.equal((await form("/mcp-oauth/revoke", new URLSearchParams({ client_id: client.client_id, token: "unknown" }))).status, 200);
-  const second = await connect(alice, ["notes:read"]);
+  const second = await connect(carol, ["notes:read"]);
   const grantId = (await grantStatus(second.tokens.access_token)).grantId;
   assert.equal((await studio({ op: "grant.revoke", grantId }, admin)).status, 409, "explicit confirmation");
   assert.equal((await studio({ op: "grant.revoke", grantId, confirm: "CONFIRM REVOKE " + grantId }, admin)).status, 200);
   assert.equal((await grantStatus(second.tokens.access_token)).active, false);
-  const third = await connect(alice, ["notes:read"]);
+  const third = await connect(carol, ["notes:read"]);
   assert.equal((await studio({ op: "resource.status", identifier: RESOURCE, enabled: false, confirm: "CONFIRM DISABLE MCP " + RESOURCE }, admin)).status, 200);
   assert.equal((await grantStatus(third.tokens.access_token)).active, false, "a disabled server accepts no tokens");
   assert.equal((await token({ grant_type: "refresh_token", refresh_token: third.tokens.refresh_token, client_id: third.client.client_id, resource: RESOURCE })).body.error, "invalid_target");
