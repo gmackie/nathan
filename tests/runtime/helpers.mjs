@@ -40,9 +40,14 @@ export async function start(options) {
   return mf;
 }
 
-/** The built identity Worker with every top-level migration applied. Caller disposes it. */
-export async function authWorker(host, vars = {}) {
+/**
+ * The built identity Worker with every top-level migration applied. Caller disposes it.
+ * `options` adds Miniflare options such as `outboundService` (mocked outbound HTTP, including
+ * workerd's node:dns, which resolves over DNS-over-HTTPS at cloudflare-dns.com).
+ */
+export async function authWorker(host, vars = {}, options = {}) {
   const mf = await start({
+    ...options,
     scriptPath: bundle("auth"),
     d1Databases: { DB: "auth-db-" + crypto.randomUUID() },
     durableObjects: { SCIM_DIRECTORY: { className: "NathanScimDirectory", useSQLite: true } },

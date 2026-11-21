@@ -1,3 +1,4 @@
+import { samlStudioSection, samlStudioScript } from "./saml-ui.mjs";
 const htmlEscape = (s: string) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 
 function page(title: string, body: string, script = ""): Response {
@@ -32,7 +33,7 @@ export function signInPage(providers: string[], passwordEnabled: boolean, enterp
     '<button id="two-factor-submit">Verify second factor</button></div>':"";
   const sso=enterpriseSso?'<h2>Work or school account</h2>'+
     '<label>Corporate email address<input id="sso-email" type="email" autocomplete="email" placeholder="you@company.com"></label>'+
-    '<button id="sso-submit">Continue with enterprise SSO</button>':"";
+    '<button id="sso-submit">Sign in with SSO</button>':"";
   const passkey='<h2>Passkey</h2><button id="passkey-login">Sign in with passkey</button>';
   return page("Sign in",'<p>Use your configured identity provider, passkey, or approved enterprise account.</p>'+
     buttons+passkey+sso+password+'<p id="status" role="alert"></p>',String.raw`
@@ -70,7 +71,10 @@ export function signInPage(providers: string[], passwordEnabled: boolean, enterp
     const sso=document.getElementById('sso-submit');
     if(sso)sso.onclick=async()=>{
       try{
-        const d=await request('/sign-in/sso',{email:document.getElementById('sso-email').value,callbackURL:'/'});
+        // Nathan routes the email domain to its enabled SAML or verified OIDC connection.
+        const res=await fetch('/sign-in/sso/start',{method:'POST',headers:{'Content-Type':'application/json'},
+          credentials:'same-origin',body:JSON.stringify({email:document.getElementById('sso-email').value})});
+        const d=unwrap(await res.json().catch(()=>({})));if(!res.ok)throw Error(d.error||d.message||'SSO provider unavailable');
         if(!d.url)throw Error('SSO provider unavailable');
         location.assign(d.url);
       }catch(e){status.textContent=e.message}
@@ -204,6 +208,7 @@ export function studioPage(userEmail: string): Response {
   <button class="secondary" id="sso-verify">Verify DNS ownership</button>
   <p id="sso-status" role="status"></p><pre id="sso-verification"></pre>
   <button class="secondary" id="sso-list">List enterprise providers</button><pre id="sso-results"></pre>
+  ${samlStudioSection}
   <h2>MCP administration</h2><p>OAuth-protected stateless MCP endpoint. Register an MCP OIDC client for resource-bound access.</p>
   <pre id="mcp-help"></pre></div>`, `
     document.getElementById('refresh').onclick=async()=>{
@@ -493,6 +498,7 @@ export function studioPage(userEmail: string): Response {
     document.getElementById('mcp-help').textContent=
       'Endpoint: '+location.origin+'/mcp\\nResource metadata: '+location.origin+'/.well-known/oauth-protected-resource\\n' +
       'Scopes: nathan:read / nathan:admin\\nProtocol: 2026-07-28';
+    ${samlStudioScript}
     const root=document.getElementById('studio-root');
     const headings=Array.from(root.children).filter(el=>el.tagName==='H2');
     const tabs=document.getElementById('studio-tabs');

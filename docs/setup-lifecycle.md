@@ -47,7 +47,7 @@ Visit \`https://login.example.com/studio\` as a fully enrolled administrator. Se
 | Google/GitHub OAuth | Setup guides; encrypted first provider | Add/rotate/enable/disable, encrypted runtime configuration |
 | OIDC provider and RP clients | Enabled with initial Worker | Register individual external/Worker/gateway clients, including reviewed subdomain batches |
 | Enterprise OIDC federation | SSO plugin opt-in | Register provider, obtain DNS TXT challenge, verify domain before login |
-| Enterprise SAML federation | Plugin option | Metadata/SP certificate admin interface pending validation |
+| Enterprise SAML federation | SSO plugin opt-in | Create from validated IdP metadata (disabled), verify domain, enable, choose provisioning, rotate certificates ([saml.md](saml.md)) |
 | SCIM directory | Optional disabled initial directory connection | Create, list, enable/disable and rotate bearer token |
 | Passkeys / TOTP | Enrollment required to complete initial admin | Self-service enrollment, authenticator inspection and passkey reauthentication |
 | MFA posture | Standard or Business profile | View effective policy and *increase* admin requirements without redeploying |
@@ -64,7 +64,11 @@ Social credentials are encrypted in \`nathan_oauth_providers\`. Once there is a 
 
 A registered enterprise provider starts **untrusted**. Better Auth's SSO plugin requires proving ownership of the claimed domain through a TXT record, such as \`_better-auth-token-acme-entra.acme.example\`. Nathan displays the actual provider-generated token, never invents one. Identity Studio calls the domain-verification endpoint only for a verified and currently authorized administrator.
 
-Direct Better Auth SSO management HTTP endpoints are blocked; only authenticated Studio management APIs may register, update, or verify enterprise providers. SAML import, SP key custody and assertion signature handling are not yet claimed as a completed UI workflow.
+Direct Better Auth SSO management HTTP endpoints are blocked; only authenticated Studio management APIs may register, update, or verify enterprise providers.
+
+### Enterprise SAML federation
+
+Inbound SAML connections (NATH-10) are created in Identity Studio from validated IdP metadata, start disabled, can only be enabled after the same DNS TXT domain verification, and never create accounts unless the connection uses just-in-time provisioning for its verified domain. Nathan requires signed assertions, rejects repeated SAML parameters, SHA-1, IdP-initiated responses and replays, and supports certificate rotation (compare-and-swap, so concurrent rotations cannot overwrite each other). Metadata checks, including fetches of admin-supplied metadata URLs, are audited. Encrypted assertions, signed AuthnRequests and single logout are not supported. Setup per IdP: [saml.md](saml.md). Live IdP tenants have not yet been tested.
 
 ### SCIM 2.0
 
