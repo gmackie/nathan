@@ -66,6 +66,7 @@
 - [x] Rehires: deleted SCIM resources move to tombstone tables in the Durable Object (migrated in place on existing data), live-only uniqueness in D1, and a rehire with the same externalId takes over the deleted identity's link. A deleted Nathan account's link is never re-made automatically.
 - [x] Bounded reconciliation per invocation (100 statements per batch, 500 per invocation, alarm continuation, removals before additions; 1,200 JIT links and 3,000 memberships in workerd), and a Studio outbox view with skip-after-review for a poisoned entry.
 - [x] Race-safe application: compare-and-set on `apply_seq` in every batch; duplicate outbox rows, late revisions and racing appliers tested directly.
+- [x] Re-review fixes: deprovisioning takes over expiring bans (a lapsed suspension never ends a deprovisioning or counts as an override); only lifting Nathan's own SCIM ban is an override, recorded by a D1 trigger on every path; every batch of a large group starts with the compare-and-set; the last-administrator check is inside the deprovisioning batch (atomic across connections); approve/dismiss audit `rejected` when the item was decided meanwhile; review creation is rate-limited per connection and Studio pages reviews pending first, oldest first, with counts.
 - [ ] Per-user directory profile sync (name only) if needed.
 
 ## Required before first actual production-ready release
