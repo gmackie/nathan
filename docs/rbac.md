@@ -50,7 +50,7 @@ After login, the gateway calls `NATHAN.resolveAccess({applicationId, subject})` 
                "props": { "applicationId": "billing" } }]
 ```
 
-The identity Worker reads the pin from `ctx.props`, which the caller's code cannot change at runtime. It answers `resolveAccess`, `access`, `authorize` and `getPrincipal` only for that application. A request for another application gets `{allowed: false, reason: "application_mismatch"}` with no roles, permissions or email; a binding without a valid pin gets `reason: "binding_not_pinned"`. The gateway turns either reason into a 503, because it means the binding is misconfigured. `nathan protect` and the gateway template (`wrangler.gateway.jsonc`) set the pin to `APPLICATION_ID`. The directory is **not** reachable over this binding. It is served only by the authenticated directory API below, so a compromised or buggy app Worker cannot enumerate other users' groups, grants or the change feed.
+The identity Worker reads the pin from `ctx.props`, which the caller's code cannot change at runtime. It answers `resolveAccess`, `access`, `authorize`, `getPrincipal` and the remote MCP grant check `mcpGrant` (NATH-14) only for that application. A request for another application gets `{allowed: false, reason: "application_mismatch"}` with no roles, permissions or email; a binding without a valid pin gets `reason: "binding_not_pinned"`. The gateway turns either reason into a 503, because it means the binding is misconfigured. `nathan protect` and the gateway template (`wrangler.gateway.jsonc`) set the pin to `APPLICATION_ID`. The directory is **not** reachable over this binding. It is served only by the authenticated directory API below, so a compromised or buggy app Worker cannot enumerate other users' groups, grants or the change feed.
 
 **Why a service binding rather than a signed internal HTTP endpoint:** the gateway and the identity Worker are deployed to the same customer account. A binding exposes no public route, needs no extra shared secret or replay protection, and only Workers the account owner binds to it can call it. The cost is that a gateway in another Cloudflare account cannot resolve roles; such gateways are not supported.
 
@@ -77,7 +77,7 @@ The gateway strips every inbound `X-Nathan-*` header and adds `X-Nathan-Principa
 
 A present but invalid principal header never falls back to a bearer token. DPoP-bound (`cnf`) tokens are refused. Anything that does not verify is an anonymous user that can do nothing: `require()` returns 401 for anonymous users and 403 for authenticated users without the permission. Runtime tests check that both modes give the same answers.
 
-`options.resolve(subject, payload)` is the extension point for NATH-15 token claims and NATH-14 MCP scopes. Token role claims will be hints only.
+`options.resolve(subject, payload)` is the extension point for NATH-14 MCP scopes. Since NATH-15, tokens carry `principal_kind` and, for audiences bound to an app, an optional `roles` hint ([gatekeeper.md](gatekeeper.md)). The SDK still takes roles from the evaluator, never from the token. A machine token's `sub` is a client id, which resolves to no user and is denied.
 
 ## Identity Studio and API
 
@@ -116,7 +116,7 @@ Content-Type: application/x-www-form-urlencoded
 grant_type=client_credentials&scope=nathan:directory.read&resource=https://login.example.com/directory
 ```
 
-The result is an `at+jwt` with `aud` set to `https://login.example.com/directory`, `sub = client_id` and a lifetime of 300 s. On every request the directory re-checks that the client exists, is not disabled and still holds the scope. User-delegated tokens are refused. This API is the only way to read the directory: the app-scoped `NathanVerifier` binding has no directory methods, so a same-account Gatekeeper also uses this API with its own client credentials.
+The result is an `at+jwt` with `aud` set to `https://login.example.com/directory`, `sub = client_id`, `principal_kind: machine` and a lifetime of 300 s. On every request the directory re-checks that the client exists, is not disabled and still holds the scope. User-delegated tokens are refused. This API is the only way to read the directory: the app-scoped `NathanVerifier` binding has no directory methods, so a same-account Gatekeeper also uses this API with its own client credentials.
 
 `GET /directory/v1/principal?subject=<url-encoded subject>` returns 200, or 404 `unknown_subject`:
 

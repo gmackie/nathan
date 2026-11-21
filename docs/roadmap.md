@@ -48,7 +48,31 @@
 - [x] Identity Studio Roles and access (admin-only, step-up, audited, change-fed), permissions as code (`nathan rbac plan|sync`), principal key setup in `nathan protect`. [Quickstart](quickstart-rbac.md), [reference](rbac.md).
 - [ ] Follow the quickstart end to end against a staging Cloudflare account (gateway + upstream + Studio grants).
 - [ ] Contract test with Gatekeeper's PIP adapter (GATE-9) against a Nathan fixture.
-- [ ] Access-token role claims as hints (NATH-15), MCP scopes capped by permissions (NATH-14).
+- [x] MCP scopes capped by permissions (NATH-14, see below).
+- [x] SCIM group mapping (NATH-11, see below).
+
+## Gatekeeper-ready access tokens (NATH-15; implemented source, staging pending)
+
+- [x] RFC 9068 JWT access tokens (`typ: at+jwt`, `client_id`, `jti`) with `principal_kind` (user / machine / agent), capped at 900 s for every access token.
+- [x] Token audiences registered in Identity Studio (migration 0014), optionally bound to an app for a `roles` hint from the NATH-13 evaluator. Clients are linked per audience. Machine and agent client-credentials clients use scope `nathan:api`.
+- [x] Administrator-set `agent` kind per client (admin-only, audited). Without a live user session a token is never `user`.
+- [x] `nathan_amr`/`nathan_acr`/`nathan_auth_time` only from verified passkey sign-in evidence for the token's session. Better Auth 1.7.14 reserves and strips `acr`/`amr`/`auth_time` on access tokens, so Gatekeeper `mfa` is never set by Nathan tokens.
+- [x] Ready-to-paste Gatekeeper provider entry ([gatekeeper.md](gatekeeper.md)), workerd-tested with user (authorization code + PKCE), machine and agent tokens, against Gatekeeper's own resolver (a pinned, unmodified copy in `tests/vendor/gatekeeper`, so CI runs it without a checkout).
+- [x] Security-review fixes: user tokens for registered audiences need a live, unexpired session of the same user (refresh after sign-out, session revocation or expiry gets `invalid_grant`), banned users get no tokens, `nathan:api` only for client credentials and administrator-marked agents, `roles` only when every requested audience is bound to the same app, audience removal drops client links, and docs say that Gatekeeper policies must check `principal_kind`. Passkey evidence is tested through a real software-authenticator sign-in.
+- [ ] Verify against a deployed Nathan and Gatekeeper on staging, including a live passkey sign-in.
+- [ ] Standard `acr`/`amr`/`auth_time` on access tokens once Better Auth offers a supported way, and verified provider evidence.
+
+## Remote MCP servers with per-scope consent (NATH-14; implemented source, staging pending)
+
+- [x] Nathan-owned MCP authorization server (`/mcp-oauth`): RFC 8414 metadata, rate-limited expiring RFC 7591 public-client registration restricted to MCP catalog scopes, S256 PKCE only, exact HTTPS/loopback redirects, mandatory RFC 8707 `resource` on authorize, token and refresh. Better Auth 1.7.14's consent and static scopes cannot express per-app catalogs ([decision](remote-mcp.md#design-decisions)).
+- [x] Scope catalogs from app permissions (migration 0015): labels, descriptions, groups, `requires`, sensitive and admin-only scopes, aliases and a Full access marker that never covers sensitive scopes.
+- [x] Script-free consent page with per-scope checkboxes, single-use session-bound ticket, empty selection without consuming it, Safari `form-action` allowance; `/connections` to edit or disconnect; Studio registration and revocation (admin, step-up, audited).
+- [x] Effective scopes = grant ∩ current permissions at every issuance and check; refresh narrowing by intersection; rotation reuse and code replay revoke the grant; RFC 7009 revocation.
+- [x] NATH-15 tokens (`principal_kind: agent`, 300 s) and Worker SDK `nathanMcp()` with RFC 9728 metadata, 401/403 challenges, `user.can()` and a ≤ 30 s cached grant check (service binding or HTTPS). Workerd-tested with an MCP TypeScript SDK client and a sample MCP server. [Guide](remote-mcp.md).
+- [x] Security review fixes: consent and connections pages use `Referrer-Policy: same-origin` so browser form posts carry Nathan's `Origin` (`Origin: null` stays refused); registration bounded (unused clients pruned after 24 h and capped at 1,000, stored metadata < 4 KB, unknown fields dropped, global limit counts stored registrations only); codes and refresh tokens consumed atomically so a concurrent second use revokes the grant; a refresh with nothing usable (or during a ban) keeps its refresh token; Studio keeps MCP resources and Better Auth audiences apart; the SDK answers 503 for JWKS outages.
+- [ ] Verify with a deployed Nathan and MCP server, real browsers (Chromium form posts with the same-origin policy, Safari `form-action` after the consent redirect) and specific MCP products.
+- [ ] Client ID Metadata Documents (needs resolve-once DNS handling; Better Auth's `@better-auth/cimd` is a separate plugin).
+- [ ] Import scope metadata from a Gatekeeper action catalog (shape designed in [remote-mcp.md](remote-mcp.md#design-decisions)).
 
 ## Inbound SCIM lifecycle (NATH-11; implemented source, staging pending)
 
@@ -76,7 +100,7 @@
 - [ ] Complete real-account end-to-end tests for initial-admin claim, passkey/TOTP enrollment, session step-up, SSO linking and administrator recovery.
 - [ ] Complete the fail-closed provisioning sequence and all gateway deployment workflows.
 - [ ] Verify that `workers.dev`, previews, extra routes and direct origin paths cannot bypass gateways.
-- [ ] Add assurance claim support; do not report AAL2/AAL3 without verification.
+- [ ] Add assurance claim support; do not report AAL2/AAL3 without verification. (NATH-15 reports passkey sign-in evidence under `nathan_*` claims only; it is not AAL2.)
 - [x] Implement signed back-channel logout receiver. Revocation and JTI replay record commit atomically, storage failures return 503 so the IdP retries (NATH-8, workerd-tested). IdP-side delivery with retries exists for SCIM deprovisioning (NATH-11); delivery on interactive sign-out still relies on Better Auth's single attempt.
 - [ ] Add integration suite for OAuth/OIDC, malformed callbacks, replay, concurrency and D1 state transitions.
 - [ ] Run installer end-to-end against a real Cloudflare OAuth client; validate D1 API batch semantics, domain propagation, script binding retention, retries and safe recovery on failure.

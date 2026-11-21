@@ -1,4 +1,6 @@
 import { RBAC_STUDIO_HTML, RBAC_STUDIO_SCRIPT } from "./rbac-ui.ts";
+import { TOKENS_STUDIO_HTML, TOKENS_STUDIO_SCRIPT } from "./tokens-ui.ts";
+import { MCP_STUDIO_HTML, MCP_STUDIO_SCRIPT } from "./mcp-ui.ts";
 import { SCIM_LIFECYCLE_HTML, SCIM_LIFECYCLE_SCRIPT } from "./scim-ui.ts";
 const htmlEscape = (s: string) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 
@@ -179,6 +181,8 @@ export function studioPage(userEmail: string): Response {
   <button class="secondary" id="app-enable">Enable</button>
   <button class="secondary" id="app-disable">Disable</button><p id="app-status" role="status"></p>
   ${RBAC_STUDIO_HTML}
+  ${TOKENS_STUDIO_HTML}
+  ${MCP_STUDIO_HTML}
   <h2>SCIM directory connections</h2>
   <p>Nathan can receive SCIM 2.0 directory Users/Groups into a transactional, per-connection Durable Object. New connections are <strong>directory-only</strong>: they create no login accounts, revoke nothing and grant no roles until you turn on linking below (NATH-11). Directory records never grant application access by themselves.</p>
   <label>Connection ID<input id="scim-id" placeholder="acme-workforce"></label>
@@ -521,6 +525,8 @@ export function studioPage(userEmail: string): Response {
       }catch(e){status.textContent=e.message}
     }
     ${RBAC_STUDIO_SCRIPT}
+    ${TOKENS_STUDIO_SCRIPT}
+    ${MCP_STUDIO_SCRIPT}
     ${SCIM_LIFECYCLE_SCRIPT}
   `);
 }

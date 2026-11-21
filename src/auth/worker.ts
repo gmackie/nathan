@@ -20,6 +20,8 @@ import { isAdminUser, listApplications, listSso, upsertApplication,
   createOAuthClient, listUsers, isAdminPrincipal, isBootstrapOwner, listAdminGrants, grantAdmin, revokeAdminGrant } from "./admin-service";
 import { resolveAccess, directoryPrincipal, directoryChanges, pruneRbacChanges, rbacOverview, listGroups, groupMembers, applyRbacOperation } from "./rbac";
 import { handleDirectory, createDirectoryClient } from "./directory";
+import { tokenOverview, applyTokenOperation } from "./tokens";
+import { isMcpOAuthPath, handleMcpOAuth, mcpReturnRedirect, mcpGrantStatus, mcpOverview, applyMcpOperation, pruneMcp } from "./mcp-oauth";
 import { updateScimSettings, changeScimMapping, scimConnectionView, SCIM_ADMIN_ERRORS } from "./scim/lifecycle-admin";
 import { deliverLogouts } from "./logout-queue";
 import { scimUserOperation, scimOutboxView, skipScimOutbox, SCIM_REVIEW_ERRORS } from "./scim/reviews";
@@ -45,13 +47,15 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
   if(url.pathname.startsWith("/scim/v2/"))return handleScim(request,env);
   const socialProviders=await loadSocialCredentials(env);
   const auth = createAuth(env,socialProviders);
+  // NATH-14: authorization server for remote MCP servers, consent and MCP connections (src/auth/mcp-oauth.ts).
+  if (isMcpOAuthPath(url.pathname)) return handleMcpOAuth(request, env, auth);
   if (url.pathname === "/mcp") return handleMcp(request,env,auth);
   if (url.pathname.startsWith("/directory/")) return handleDirectory(request,env,auth);
   if (url.pathname.startsWith("/api/auth/") || url.pathname.startsWith("/.well-known/")) {
     if(isRawManagementEndpoint(url.pathname))return reject(404,"Management route unavailable; use the protected Identity Studio");
     return auth.handler(request);
   }
-  if (url.pathname === "/") return Response.redirect(issuer.origin + "/sign-in", 302);
+  if (url.pathname === "/") return (await mcpReturnRedirect(request, env, auth)) ?? Response.redirect(issuer.origin + "/sign-in", 302);
   if (url.pathname === "/sign-in" && request.method === "GET") {
     const providers = [];
     if (socialProviders.google) providers.push("google");
@@ -427,6 +431,52 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     }
   }
 
+  // NATH-15: Gatekeeper-ready access tokens: audiences, client principal kinds, machine clients.
+  if (url.pathname === "/studio/api/tokens" && (request.method === "GET" || request.method === "POST")) {
+    if(request.method==="POST"){
+      if(request.headers.get("Origin")!==issuer.origin ||
+         request.headers.get("Sec-Fetch-Site")==="cross-site")return reject(403,"Cross-origin request denied");
+      if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")
+        return reject(415,"JSON required");
+    }
+    const session=await auth.api.getSession({headers:request.headers});
+    if(!await isAdminPrincipal(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id))
+      return reject(403,"Admin enrollment incomplete");
+    if(request.method==="GET")return Response.json(await tokenOverview(env),{headers:{"Cache-Control":"no-store"}});
+    const raw=await request.text();
+    if(raw.length>8192)return reject(413,"Request too large");
+    let body:any;try{body=JSON.parse(raw)}catch{return reject(400,"Invalid JSON")}
+    try{
+      return Response.json(await applyTokenOperation(auth,env,request.headers,body,session!.user.id),{headers:{"Cache-Control":"no-store"}});
+    }catch(error){
+      const message=error instanceof Error && /^(Invalid|Unknown|Explicit)/.test(error.message)?error.message:"Token change rejected";
+      return reject(409,message);
+    }
+  }
+
+  // NATH-14: remote MCP servers and their connections (admin + step-up; writes same-origin and audited).
+  if (url.pathname === "/studio/api/mcp" && (request.method === "GET" || request.method === "POST")) {
+    if(request.method==="POST"){
+      if(request.headers.get("Origin")!==issuer.origin ||
+         request.headers.get("Sec-Fetch-Site")==="cross-site")return reject(403,"Cross-origin request denied");
+      if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")
+        return reject(415,"JSON required");
+    }
+    const session=await auth.api.getSession({headers:request.headers});
+    if(!await isAdminPrincipal(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id))
+      return reject(403,"Admin enrollment incomplete");
+    if(request.method==="GET")return Response.json(await mcpOverview(env),{headers:{"Cache-Control":"no-store"}});
+    const raw=await request.text();
+    if(raw.length>65536)return reject(413,"Request too large");
+    let body:any;try{body=JSON.parse(raw)}catch{return reject(400,"Invalid JSON")}
+    try{
+      return Response.json(await applyMcpOperation(env,body,session!.user.id),{headers:{"Cache-Control":"no-store"}});
+    }catch(error){
+      const message=error instanceof Error && /^(Invalid|Unknown|Explicit|Give)/.test(error.message)?error.message:"MCP change rejected";
+      return reject(409,message);
+    }
+  }
+
   return reject(404, "Not found");
 }
 
@@ -435,6 +485,7 @@ export default {
   scheduled: async (_: ScheduledEvent,env:AuthEnv) => {
     await env.DB.prepare("DELETE FROM nathan_mcp_limits WHERE expires_at < unixepoch()").run();
     await pruneRbacChanges(env);
+    await pruneMcp(env);
     // NATH-11: retry due back-channel logouts (connection Durable Objects also retry their own).
     await deliverLogouts(env,{limit:100}).catch(()=>{});
   }
@@ -473,5 +524,15 @@ export class NathanVerifier extends WorkerEntrypoint<AuthEnv, BindingProps> {
     const scope = scopedApplication(this.ctx.props, input?.applicationId);
     if (!scope.ok) return outOfScope(scope.reason);
     return resolveAccess(this.env, scope.app, input?.subject);
+  }
+  /**
+   * NATH-14 grant check for remote MCP servers (the SDK's nathanMcp()): verifies the access token,
+   * and returns the scopes it may use now = token ∩ live grant ∩ the user's current permissions.
+   * Like every call here it is app-scoped: only resources of the pinned application are answered.
+   */
+  async mcpGrant(input: { token: string; resource: string }) {
+    const scope = scopedApplication(this.ctx.props, undefined);
+    if (!scope.ok || !input || typeof input.token !== "string" || typeof input.resource !== "string") return { active: false };
+    return mcpGrantStatus(this.env, createAuth(this.env, await loadSocialCredentials(this.env)), input.token, input.resource, scope.app);
   }
 }
