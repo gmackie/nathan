@@ -20,6 +20,7 @@ import { isAdminUser, listApplications, listSso, upsertApplication,
   createOAuthClient, listUsers, isAdminPrincipal, isBootstrapOwner, listAdminGrants, grantAdmin, revokeAdminGrant } from "./admin-service";
 import { resolveAccess, directoryPrincipal, directoryChanges, pruneRbacChanges, rbacOverview, listGroups, groupMembers, applyRbacOperation } from "./rbac";
 import { handleDirectory, createDirectoryClient } from "./directory";
+import { tokenOverview, applyTokenOperation } from "./tokens";
 
 function reject(status: number, reason: string) {
   return Response.json({ error: reason }, { status, headers: { "Cache-Control": "no-store" } });
@@ -357,6 +358,29 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     }catch(error){
       const message=error instanceof Error && /^(Invalid|Unknown|Explicit|Select|User not found|Declare|Too many|Permission keys|Role keys|Group ids|Grant a role|Membership|Description|Application is not registered)/.test(error.message)
         ?error.message:"RBAC change rejected";
+      return reject(409,message);
+    }
+  }
+
+  // NATH-15: Gatekeeper-ready access tokens: audiences, client principal kinds, machine clients.
+  if (url.pathname === "/studio/api/tokens" && (request.method === "GET" || request.method === "POST")) {
+    if(request.method==="POST"){
+      if(request.headers.get("Origin")!==issuer.origin ||
+         request.headers.get("Sec-Fetch-Site")==="cross-site")return reject(403,"Cross-origin request denied");
+      if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")
+        return reject(415,"JSON required");
+    }
+    const session=await auth.api.getSession({headers:request.headers});
+    if(!await isAdminPrincipal(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id))
+      return reject(403,"Admin enrollment incomplete");
+    if(request.method==="GET")return Response.json(await tokenOverview(env),{headers:{"Cache-Control":"no-store"}});
+    const raw=await request.text();
+    if(raw.length>8192)return reject(413,"Request too large");
+    let body:any;try{body=JSON.parse(raw)}catch{return reject(400,"Invalid JSON")}
+    try{
+      return Response.json(await applyTokenOperation(auth,env,request.headers,body,session!.user.id),{headers:{"Cache-Control":"no-store"}});
+    }catch(error){
+      const message=error instanceof Error && /^(Invalid|Unknown|Explicit)/.test(error.message)?error.message:"Token change rejected";
       return reject(409,message);
     }
   }
