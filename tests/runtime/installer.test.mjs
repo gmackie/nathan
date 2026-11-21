@@ -51,6 +51,8 @@ test("installer Cloudflare login sets state and session cookies", async () => {
   for (const file of readdirSync("migrations/installer").filter(f => f.endsWith(".sql")).sort())
     await migrate(db, "migrations/installer/" + file);
 
+  const home = await mf.dispatchFetch(INSTALLER + "/");
+  assert.equal(home.headers.get("Referrer-Policy"), "same-origin", "the installer page posts back to its own origin");
   const begin = await mf.dispatchFetch(INSTALLER + "/api/login", { redirect: "manual" });
   assert.equal(begin.status, 302, "login must redirect to Cloudflare, got " + begin.status + " " + await begin.clone().text());
   const authorize = new URL(begin.headers.get("Location"));

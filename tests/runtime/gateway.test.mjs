@@ -81,6 +81,9 @@ test("gateway login round trip sets flow and session cookies and proxies upstrea
   const page = await mf.dispatchFetch(ORIGIN + "/reports", { headers: { Cookie: "__Host-nathan-session=" + session } });
   assert.equal(page.status, 200);
   assert.equal(await page.text(), "upstream ok");
+  // no-referrer would make browsers send Origin: null on the app's own same-origin POSTs,
+  // which the gateway's unsafe-request check then refuses.
+  assert.equal(page.headers.get("Referrer-Policy"), "same-origin");
 });
 
 async function logoutToken(claims, iat = Math.floor(Date.now() / 1000)) {

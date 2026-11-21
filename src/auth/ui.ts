@@ -14,7 +14,7 @@ function page(title: string, body: string, script = ""): Response {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
       "Content-Security-Policy": "default-src 'none'; connect-src 'self'; img-src 'none'; style-src 'nonce-" + nonce + "'; script-src 'nonce-" + nonce + "'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
-      "Referrer-Policy": "no-referrer",
+      "Referrer-Policy": "same-origin",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY",
       "Cross-Origin-Opener-Policy": "same-origin",

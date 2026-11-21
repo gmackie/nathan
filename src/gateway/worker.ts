@@ -25,7 +25,7 @@ function errorResponse(status: number, message: string): Response {
 function secureResponse(response: Response) {
   response.headers.set("Cache-Control", "no-store");
   response.headers.set("X-Content-Type-Options", "nosniff");
-  response.headers.set("Referrer-Policy", "no-referrer");
+  response.headers.set("Referrer-Policy", "same-origin");
   return response;
 }
 function cleared(response: Response): Response {
@@ -109,7 +109,7 @@ async function upstream(request: Request, env: GatewayEnv, session: StoredSessio
   const upstreamResponse=await env.UPSTREAM.fetch(proxied);
   const response=new Response(upstreamResponse.body,upstreamResponse);
   response.headers.set("Cache-Control","private, no-store");
-  response.headers.set("Referrer-Policy","no-referrer");
+  response.headers.set("Referrer-Policy","same-origin");
   response.headers.set("X-Content-Type-Options","nosniff");
   return response;
 }
