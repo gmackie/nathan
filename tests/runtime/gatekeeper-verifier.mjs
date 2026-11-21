@@ -1,14 +1,13 @@
 /**
- * A line-by-line mirror of Gatekeeper's OIDC access-token rules (packages/identity/jwt.ts,
- * createIdentityResolver, `kind: "oidc"` branch) so Nathan's runtime tests can check its tokens
- * against a provider entry without Gatekeeper's build. Keep it in step with Gatekeeper; the
- * contract test also runs Gatekeeper's own resolver when its checkout is available.
+ * Gatekeeper's own identity resolver, from the pinned, unmodified copy in tests/vendor/gatekeeper
+ * (see SOURCE.md there for the commit and hashes), wired to a Miniflare instance so Nathan's
+ * runtime tests verify its tokens exactly as Gatekeeper would: provider config parsing, JWKS,
+ * signature, lifetime, the RFC 9068 profile, per-scope format and the 256-scope limit, kind
+ * mapping and the `mfa` rule with `auth_time` freshness.
  */
-import { createLocalJWKSet, decodeJwt, jwtVerify } from "jose";
 import { readFileSync } from "node:fs";
-
-const claimText = value => typeof value === "string" && value.length > 0 && value.length <= 512;
-const invalid = reason => { throw Object.assign(Error("InvalidCredentials: " + reason), { code: "InvalidCredentials" }); };
+import { createHash } from "node:crypto";
+import { createIdentityResolver } from "../vendor/gatekeeper/packages/identity/jwt.ts";
 
 /** The ```json block after `<!-- gatekeeper-provider-entry -->` in docs/gatekeeper.md, parsed. */
 export function providerEntryFromDocs(path = "docs/gatekeeper.md") {
@@ -20,41 +19,25 @@ export function providerEntryFromDocs(path = "docs/gatekeeper.md") {
   return JSON.parse(block[1]);
 }
 
-export async function verifyLikeGatekeeper(token, provider, jwks, now = Date.now()) {
-  if (provider.kind !== "oidc") throw Error("only oidc providers are mirrored");
-  if (token.length > 16384 || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)) invalid("compact");
-  const hint = decodeJwt(token);
-  if (hint.iss !== provider.issuer) invalid("issuer not configured");
-  let verified;
-  try {
-    verified = await jwtVerify(token, createLocalJWKSet(jwks), {
-      issuer: provider.issuer, audience: provider.audience, algorithms: [...provider.algorithms],
-      requiredClaims: ["iss", "aud", "sub", "iat", "exp"], currentDate: new Date(now), clockTolerance: 5
-    });
-  } catch (error) { invalid("jose: " + error.code); }
-  const { payload, protectedHeader } = verified;
-  if (protectedHeader.jku || protectedHeader.jwk || protectedHeader.x5u || payload.cnf !== undefined || payload.act !== undefined) invalid("header/cnf/act");
-  const issued = payload.iat, expires = payload.exp;
-  if (!Number.isSafeInteger(issued) || !Number.isSafeInteger(expires) || issued < 0 || expires <= issued ||
-      expires - issued > (provider.maxTokenLifetimeSeconds ?? 900) ||
-      issued * 1000 > now + 5000 || expires * 1000 <= now ||
-      (payload.nbf !== undefined && (!Number.isSafeInteger(payload.nbf) || payload.nbf * 1000 > now))) invalid("lifetime");
-  const audiences = typeof payload.aud === "string" ? [payload.aud] : payload.aud;
-  if (!Array.isArray(audiences) || audiences.length > 32 || audiences.some(a => !claimText(a))) invalid("aud");
-  const profile = provider.accessTokenProfile;
-  if (profile.kind === "rfc9068") {
-    if (!["at+jwt", "application/at+jwt"].includes(protectedHeader.typ?.toLowerCase() ?? "") || !claimText(payload.client_id) || !claimText(payload.jti)) invalid("rfc9068 profile");
-  } else if (payload[profile.markerClaim] !== profile.markerValue) invalid("marker");
-  if (payload.nonce !== undefined || !claimText(payload.sub)) invalid("nonce/sub");
-  if (payload.client_id !== undefined && !claimText(payload.client_id)) invalid("client_id");
-  if (provider.allowedClientIds && (!payload.client_id || !provider.allowedClientIds.includes(payload.client_id))) invalid("client not allowed");
-  let scopes = [];
-  if (payload.scope !== undefined) {
-    if (typeof payload.scope !== "string" || payload.scope.length > 8192) invalid("scope");
-    scopes = payload.scope.split(" ").filter(Boolean);
-  }
-  const raw = provider.kindClaim ? payload[provider.kindClaim.name] : undefined;
-  const kind = provider.kindClaim && typeof raw === "string" && Object.hasOwn(provider.kindClaim.values, raw) ? provider.kindClaim.values[raw] : "unknown";
-  const mfa = kind === "human" && !!provider.mfa && typeof payload.acr === "string" && provider.mfa.acrValues.includes(payload.acr);
-  return { issuer: provider.issuer, subject: payload.sub, kind, mfa, clientId: payload.client_id, scopes, audiences, expiresAt: expires * 1000 };
+/** File → SHA-256 recorded in tests/vendor/gatekeeper/SOURCE.md, and the file's actual hash. */
+export function vendoredHashes() {
+  const source = readFileSync("tests/vendor/gatekeeper/SOURCE.md", "utf8");
+  return [...source.matchAll(/\| `(packages\/[^`]+)` \| `([0-9a-f]{64})` \|/g)].map(([, file, recorded]) => ({
+    file, recorded, actual: createHash("sha256").update(readFileSync("tests/vendor/gatekeeper/" + file)).digest("hex")
+  }));
 }
+
+/**
+ * A Gatekeeper resolver for `providers` whose JWKS requests go to the Miniflare instance.
+ * `now` is Gatekeeper's clock (milliseconds), for expiry and auth_time checks.
+ */
+export function gatekeeper(mf, providers, { now } = {}) {
+  const resolver = createIdentityResolver([].concat(providers), {
+    fetcher: (url, init) => mf.dispatchFetch(String(url), { ...init, signal: undefined }),
+    ...(now ? { now } : {})
+  });
+  return token => resolver.resolve(new Request("https://gatekeeper.example.com/api/decide", { headers: { Authorization: "Bearer " + token } }));
+}
+
+/** Rejects unless Gatekeeper refuses the token as invalid credentials. */
+export const invalidCredentials = error => error?.code === "InvalidCredentials";
