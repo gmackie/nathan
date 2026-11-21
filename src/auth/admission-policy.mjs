@@ -5,7 +5,10 @@
  *
  * Owner decision (NATH-1): invitation-only by default, self-service optional, per installation.
  * - invitation-only: an account is created only for an address with an open invitation (created by
- *   an administrator, bound to that email, single use, expiring, revocable), or for the installer's
+ *   an administrator, bound to that email, single use, expiring, revocable) that the creating method
+ *   has proven (emailVerified === true). Password sign-up is the one exception: it proves nothing
+ *   at creation, so it is admitted provisionally and claims the invitation only when the address is
+ *   verified (admitOnVerification); until then it cannot sign in. Or for the installer's
  *   first administrator (the bootstrap email, proven by the sign-in method, while that account does
  *   not exist yet; on legacy manual installations, a verified NATHAN_ADMIN_EMAILS address);
  * - self-service: every account the sign-in method itself would create is admitted.
@@ -64,16 +67,17 @@ export async function isBootstrapAdmission(db, env, email, emailVerified) {
 }
 
 const OPEN = "uses=0 AND revoked_at IS NULL AND expires_at>unixepoch()";
+const AUDIT = "INSERT INTO nathan_security_audit(id,actor,action,target,outcome) ";
 /** The open invitation for an address, or null. */
 export async function openInvitation(db, email) {
   return db.prepare("SELECT id FROM nathan_invitations WHERE email=? AND " + OPEN + " LIMIT 1").bind(email).first();
 }
 /** Claims the open invitation for an address (one statement, so two creations cannot share it). */
-export async function claimInvitation(db, email, method) {
+export async function claimInvitation(db, email, method, userId = null) {
   const row = await db.prepare(
-    "UPDATE nathan_invitations SET uses=1, used_at=unixepoch(), used_method=? WHERE id=(SELECT id FROM nathan_invitations WHERE email=? AND " +
+    "UPDATE nathan_invitations SET uses=1, used_at=unixepoch(), used_method=?, used_by_user=? WHERE id=(SELECT id FROM nathan_invitations WHERE email=? AND " +
     OPEN + " LIMIT 1) AND " + OPEN + " RETURNING id"
-  ).bind(method, email).first();
+  ).bind(method, userId, email).first();
   return row?.id ?? null;
 }
 /**
@@ -90,7 +94,9 @@ export function claimInvitationStatement(id, method, userId) {
 
 /**
  * The admission decision for one new account. `{ admitted: true, via }` with via "self-service",
- * "invitation" (the invitation is claimed) or "bootstrap"; `{ admitted: false }` otherwise.
+ * "invitation" (the invitation is claimed), "invitation_pending" (password sign-up with an open
+ * invitation: nothing is claimed; the caller records the account as provisional) or "bootstrap";
+ * `{ admitted: false }` otherwise. An invitation is claimed only for an address the method proved.
  * Throws on database errors: callers refuse the account.
  */
 export async function decideAdmission(db, env, { email, emailVerified, method }) {
@@ -98,11 +104,68 @@ export async function decideAdmission(db, env, { email, emailVerified, method })
   if (!address) return { admitted: false, via: null };
   if (await isBootstrapAdmission(db, env, address, emailVerified)) return { admitted: true, via: "bootstrap" };
   if (await admissionMode(db) === "self-service") return { admitted: true, via: "self-service" };
+  if (method === "password") return await openInvitation(db, address) ? { admitted: true, via: "invitation_pending" } : { admitted: false, via: null };
+  if (emailVerified !== true) return { admitted: false, via: null };
   const invitation = await claimInvitation(db, address, method);
   return invitation ? { admitted: true, via: "invitation", invitationId: invitation } : { admitted: false, via: null };
 }
 
-const AUDIT = "INSERT INTO nathan_security_audit(id,actor,action,target,outcome) ";
+/** Marks a password sign-up as provisional (before Better Auth inserts the account). */
+export async function recordPendingAdmission(db, email, method) {
+  await db.prepare("INSERT INTO nathan_admission_pending(email,user_id,method) VALUES (?,NULL,?) " +
+    "ON CONFLICT(email) DO UPDATE SET user_id=NULL, method=excluded.method, created_at=unixepoch()").bind(email, method).run();
+}
+/** Binds the provisional mark to the account Better Auth created. */
+export async function bindPendingAdmission(db, email, userId) {
+  await db.prepare("UPDATE nathan_admission_pending SET user_id=? WHERE email=? AND user_id IS NULL").bind(userId, email).run();
+}
+const PENDING = "SELECT email, method FROM nathan_admission_pending WHERE user_id=? OR (user_id IS NULL AND email=?) LIMIT 1";
+
+/**
+ * When an account's address is verified: `{ pending: false }` for an ordinary account. For a
+ * provisional password sign-up, the admission decision now that the address is proven:
+ * `{ pending: true, admitted: true, via }` (the open invitation is claimed for this account, or the
+ * installation is self-service, or it is the installer's first administrator), else
+ * `{ pending: true, admitted: false }` and the caller must refuse the verification.
+ */
+export async function admitOnVerification(db, env, { userId, email }) {
+  const address = normalizeEmail(email);
+  const pending = await db.prepare(PENDING).bind(userId, address ?? "").first();
+  if (!pending) return { pending: false };
+  if (!address) return { pending: true, admitted: false };
+  let decision;
+  if (await isBootstrapAdmission(db, env, address, true)) decision = { pending: true, admitted: true, via: "bootstrap" };
+  else if (await admissionMode(db) === "self-service") decision = { pending: true, admitted: true, via: "self-service" };
+  else {
+    const invitation = await claimInvitation(db, address, pending.method, userId);
+    decision = invitation ? { pending: true, admitted: true, via: "invitation", invitationId: invitation } : { pending: true, admitted: false };
+  }
+  if (decision.admitted) await db.prepare("DELETE FROM nathan_admission_pending WHERE email=?").bind(pending.email).run();
+  return decision;
+}
+
+/**
+ * The real invitee proved `email` (a verified provider address). If a provisional password account
+ * holds that address (unverified, never signed in, no passkey) while its invitation is still open,
+ * it was created by someone who could not prove the address: delete it (audited) so the invitee's
+ * sign-in creates their own account. Returns the deleted user id, or null.
+ */
+export async function supersedeUnprovenAccount(db, email) {
+  const address = normalizeEmail(email);
+  if (!address) return null;
+  const row = await db.prepare(
+    'SELECT u."id" AS id FROM nathan_admission_pending p JOIN "user" u ON u."id"=p.user_id ' +
+    'WHERE p.email=? AND lower(u."email")=? AND u."emailVerified"=0 ' +
+    'AND NOT EXISTS (SELECT 1 FROM "session" s WHERE s."userId"=u."id") AND NOT EXISTS (SELECT 1 FROM "passkey" k WHERE k."userId"=u."id") ' +
+    "AND EXISTS (SELECT 1 FROM nathan_invitations i WHERE i.email=p.email AND i.uses=0 AND i.revoked_at IS NULL AND i.expires_at>unixepoch()) LIMIT 1"
+  ).bind(address, address).first();
+  if (!row) return null;
+  const deleted = await db.prepare('DELETE FROM "user" WHERE "id"=? AND "emailVerified"=0 RETURNING "id" AS id').bind(row.id).first();
+  if (!deleted) return null;
+  await db.prepare(AUDIT + "VALUES (?,'system:admission','account_superseded',?,'succeeded')").bind(crypto.randomUUID(), row.id).run();
+  return row.id;
+}
+
 /** Audits an admission decision. Refusals are kept to one row per method and minute (sign-up floods). */
 export async function auditAdmission(db, method, outcome) {
   if (outcome === "refused") {
