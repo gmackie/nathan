@@ -61,7 +61,12 @@
 - [x] Replay-safe reconciliation (per-resource revisions, ordered outbox, applied-revision guard) and RFC 7644 PATCH with Okta and Entra request shapes (fixtures in `tests/fixtures/scim/`).
 - [x] Identity Studio lifecycle section: settings, mappings, link status, last sync, error log (admin-only, step-up, audited). Setup guide: [scim.md](scim.md).
 - [ ] Provision from a live Okta tenant and a live Entra tenant against staging (create, update, deactivate, reactivate, group push), and check the vendors' current payloads against the fixtures.
-- [ ] Studio action to unlink a single directory user; per-user directory profile sync (name only) if needed.
+- [x] Security review fixes: Nathan administrators (admin role, admin grant, bootstrap owner, `NATHAN_ADMIN_EMAILS`) are never linked or deprovisioned automatically; held changes become audited review items approved or dismissed in Studio with step-up and exact confirmation; the last administrator is never deprovisioned by SCIM (unit- and workerd-tested).
+- [x] Administrator overrides: keep active (recorded with actor and time, kept through replays and resyncs until a new deprovision change), out-of-band unbans detected and recorded, and a Studio unlink action.
+- [x] Rehires: deleted SCIM resources move to tombstone tables in the Durable Object (migrated in place on existing data), live-only uniqueness in D1, and a rehire with the same externalId takes over the deleted identity's link. A deleted Nathan account's link is never re-made automatically.
+- [x] Bounded reconciliation per invocation (100 statements per batch, 500 per invocation, alarm continuation, removals before additions; 1,200 JIT links and 3,000 memberships in workerd), and a Studio outbox view with skip-after-review for a poisoned entry.
+- [x] Race-safe application: compare-and-set on `apply_seq` in every batch; duplicate outbox rows, late revisions and racing appliers tested directly.
+- [ ] Per-user directory profile sync (name only) if needed.
 
 ## Required before first actual production-ready release
 

@@ -138,7 +138,7 @@ The result is an `at+jwt` with `aud` set to `https://login.example.com/directory
 
 `GET /directory/v1/changes?cursor=<n>&limit=<1..500>` returns `{changes, cursor, hasMore, observedAt}`, ordered by `seq`. Each change has `seq`, `kind`, `app`, `principal` (`{type, id, subject?}`), `detail` and `at`.
 
-Kinds: `grant.created`, `grant.revoked`, `member.added`, `member.removed`, `group.upserted`, `group.deleted`, `role.upserted`, `role.deleted`, `permission.upserted`, `permission.deleted`, `app.access_mode`, `app.enabled`, `app.disabled`, `app.registered`, `user.banned`, `user.unbanned`, `user.deleted`, and from SCIM (NATH-11) `user.linked`, `user.deprovisioned`, `user.reactivated`, `group.scim_mapped`, `group.scim_unmapped` (SCIM memberships are `member.added`/`member.removed` with `detail.source = "scim"`).
+Kinds: `grant.created`, `grant.revoked`, `member.added`, `member.removed`, `group.upserted`, `group.deleted`, `role.upserted`, `role.deleted`, `permission.upserted`, `permission.deleted`, `app.access_mode`, `app.enabled`, `app.disabled`, `app.registered`, `user.banned`, `user.unbanned`, `user.deleted`, and from SCIM (NATH-11) `user.linked`, `user.deprovisioned`, `user.reactivated`, `user.unlinked`, `user.scim_override`, `group.scim_mapped`, `group.scim_unmapped` (SCIM memberships are `member.added`/`member.removed` with `detail.source = "scim"`).
 
 Blocking and deleting users does not always go through Identity Studio (Better Auth's admin API, MCP, SCIM and SQL can do it too), so D1 triggers in migration 0011 feed those changes, with actor `system:user-state`:
 
