@@ -491,8 +491,8 @@ export function studioPage(userEmail: string): Response {
       try{out.textContent=JSON.stringify(await j('/studio/api/sso'),null,2)}catch(e){out.textContent=e.message}
     };
     document.getElementById('mcp-help').textContent=
-      'Endpoint: '+location.origin+'/mcp\nResource metadata: '+location.origin+'/.well-known/oauth-protected-resource\n' +
-      'Scopes: nathan:read / nathan:admin\nProtocol: 2026-07-28';
+      'Endpoint: '+location.origin+'/mcp\\nResource metadata: '+location.origin+'/.well-known/oauth-protected-resource\\n' +
+      'Scopes: nathan:read / nathan:admin\\nProtocol: 2026-07-28';
     const root=document.getElementById('studio-root');
     const headings=Array.from(root.children).filter(el=>el.tagName==='H2');
     const tabs=document.getElementById('studio-tabs');
