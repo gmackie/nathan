@@ -30,9 +30,11 @@ async function cloudflare(request) {
   if (path === "/accounts/" + ACCOUNT + "/workers/scripts") return ok([]);
   if (path === "/accounts/" + ACCOUNT + "/workers/domains") return ok([]);
   if (path.startsWith("/zones/" + ZONE + "/dns_records")) return ok([]);
-  if (path === "/accounts/" + ACCOUNT + "/d1/database" && request.method === "GET") {
+  if (url.pathname.endsWith("/accounts/" + ACCOUNT + "/d1/database") && request.method === "GET") {
     if (cf.onList) await cf.onList();
-    return ok(cf.databases);
+    // Mirror the real API: substring name filter, 100 per page.
+    const name = url.searchParams.get("name") || "", page = Number(url.searchParams.get("page") || 1);
+    return ok(cf.databases.filter(d => d.name.includes(name)).slice((page - 1) * 100, page * 100));
   }
   if (path === "/accounts/" + ACCOUNT + "/d1/database" && request.method === "POST") {
     cf.creates++;
