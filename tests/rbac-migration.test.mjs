@@ -41,6 +41,25 @@ test("0011 is the only new migration and applies after 0010", () => {
   assert.equal(migrations.filter(f => f.startsWith("0011")).length, 1);
 });
 
+test("legacy grant ids are unambiguous: (a, b-c) and (a-b, c) both keep their grant", () => {
+  const db = database(before0011);
+  addUser(db, "ann", "b-c");
+  addUser(db, "cal", "c");
+  // 'legacy-'||app||'-'||role would give both grants the id legacy-a-b-c, and INSERT OR IGNORE
+  // would silently drop the second one, so cal would lose access to a-b.
+  addApp(db, "a", '["b-c"]');
+  addApp(db, "a-b", '["c"]');
+  const expected = { "a/ann": legacyAuthorize(db, "a", "ann"), "a-b/cal": legacyAuthorize(db, "a-b", "cal") };
+  assert.deepEqual(expected, { "a/ann": true, "a-b/cal": true });
+  db.exec(readFileSync("migrations/0011_rbac.sql", "utf8"));
+  const grants = db.prepare("SELECT id, app_id AS app, role_key AS role FROM nathan_rbac_grants WHERE created_by='migration:0011' ORDER BY app_id").all();
+  assert.deepEqual(grants.map(g => [g.app, g.role]), [["a", "b-c"], ["a-b", "c"]]);
+  assert.equal(new Set(grants.map(g => g.id)).size, 2, "distinct ids");
+  assert.equal(decide(db, "a", "ann").allowed, true);
+  assert.equal(decide(db, "a-b", "cal").allowed, true);
+  db.close();
+});
+
 test("migrating legacy role lists keeps every current access decision", () => {
   const db = database(before0011);
   addUser(db, "root", "admin");

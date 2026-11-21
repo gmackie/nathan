@@ -97,8 +97,9 @@ INSERT OR IGNORE INTO nathan_group_members(group_id,user_id,added_by)
   SELECT g.id, u."id", 'migration:0011'
   FROM nathan_groups g JOIN "user" u ON 'legacy-role-'||COALESCE(u."role",'user')=g.id
   WHERE g.source='legacy';
+-- Grant ids are length-prefixed ('legacy-<len(app)>-<app>-<role>') so (a, b-c) and (a-b, c) differ.
 INSERT OR IGNORE INTO nathan_rbac_grants(id,app_id,role_key,principal_type,principal_id,created_by)
-  SELECT 'legacy-'||app_id||'-'||key, app_id, key, 'group', 'legacy-role-'||key, 'migration:0011'
+  SELECT 'legacy-'||length(app_id)||'-'||app_id||'-'||key, app_id, key, 'group', 'legacy-role-'||key, 'migration:0011'
   FROM nathan_rbac_roles WHERE source='legacy';
 INSERT INTO nathan_security_audit(id,actor,action,target,outcome)
   SELECT lower(hex(randomblob(16))), 'migration:0011', 'rbac_legacy_migration',
