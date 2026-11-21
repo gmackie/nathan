@@ -199,3 +199,15 @@ test("the directory rejects missing, user-delegated, wrong-audience and disabled
   assert.equal((await directory("/directory/v1/changes", body.access_token)).status, 401, "disabling the client cuts access immediately");
   assert.equal((await mf.dispatchFetch(ORIGIN + "/directory/v1/changes", { method: "POST" })).status, 405);
 });
+
+test("Identity Studio renders the Roles and access section with a script that parses", async () => {
+  const page = await get("/studio");
+  assert.equal(page.status, 200, await page.clone().text());
+  const html = await page.text();
+  assert.match(html, /<h2>Roles and access<\/h2>/);
+  assert.doesNotMatch(html, /id="app-roles"/, "the legacy required-roles field is gone");
+  const script = html.match(/<script nonce="[^"]+">([\s\S]*)<\/script>/)[1];
+  assert.doesNotThrow(() => new Function(script), "studio script must be valid JavaScript");
+  assert.match(script, /\/studio\/api\/rbac/);
+  assert.equal((await get("/studio", member.cookie)).status, 403);
+});
