@@ -68,7 +68,7 @@ Direct Better Auth SSO management HTTP endpoints are blocked; only authenticated
 
 ### Enterprise SAML federation
 
-Inbound SAML connections (NATH-10) are created in Identity Studio from validated IdP metadata, start disabled, can only be enabled after the same DNS TXT domain verification, and never create accounts unless the connection uses just-in-time provisioning for its verified domain. Nathan requires signed assertions, rejects SHA-1, IdP-initiated responses and replays, and supports certificate rotation. Encrypted assertions, signed AuthnRequests and single logout are not supported. Setup per IdP: [saml.md](saml.md). Live IdP tenants have not yet been tested.
+Inbound SAML connections (NATH-10) are created in Identity Studio from validated IdP metadata, start disabled, can only be enabled after the same DNS TXT domain verification, and never create accounts unless the connection uses just-in-time provisioning for its verified domain. Nathan requires signed assertions, rejects repeated SAML parameters, SHA-1, IdP-initiated responses and replays, and supports certificate rotation (compare-and-swap, so concurrent rotations cannot overwrite each other). Metadata checks, including fetches of admin-supplied metadata URLs, are audited. Encrypted assertions, signed AuthnRequests and single logout are not supported. Setup per IdP: [saml.md](saml.md). Live IdP tenants have not yet been tested.
 
 ### SCIM 2.0
 

@@ -34,7 +34,7 @@ Nathan is an identity provider. An attacker who compromises its signing keys, OA
 | T18 | Audit-log manipulation | External tamper-evident export and administrative separation | D1 audit events exist; immutable export pending |
 | T19 | D1 race / transaction failure | Atomic one-time operations, idempotent migrations, adversarial concurrency tests | Unit schema tests only; load tests pending |
 | T20 | Cloudflare zone or OAuth scope confusion | Exact account/hostname inspection, least privilege, explicit plan diff | Preview checks implemented; real account tests pending |
-| T21 | Forged, replayed or downgraded SAML assertion; rogue enterprise IdP claiming foreign addresses | Pinned IdP certificates, signed assertions, SHA-1 rejected, audience/recipient/issuer/timestamp checks, SP-initiated InResponseTo, assertion-ID replay cache, DNS-verified domain, account creation and linking limited to that domain | NATH-10: implemented and workerd-tested with a test IdP; live IdP tenants pending ([saml.md](saml.md)) |
+| T21 | Forged, replayed or downgraded SAML assertion; rogue enterprise IdP claiming foreign addresses | Pinned IdP certificates, signed assertions, Nathan's pre-parse message guard (one of each SAML parameter, so the checked message is the processed one; SHA-1/MD5, DTD and encrypted content rejected), audience/recipient/issuer/timestamp checks, SP-initiated InResponseTo, assertion-ID replay cache, DNS-verified domain, account creation and linking limited to that domain | NATH-10: implemented and workerd-tested with a test IdP; live IdP tenants pending ([saml.md](saml.md)) |
 
 ## Security release gates
 

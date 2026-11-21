@@ -2,7 +2,7 @@
 
 Nathan can let a company's own identity provider (IdP) sign its people in to Nathan over SAML 2.0. Nathan is the **service provider (SP)**: it receives signed assertions from Okta, Microsoft Entra ID, Google Workspace or another SAML 2.0 IdP and then acts as the OIDC issuer for your applications as usual. Nathan acting as a SAML *IdP* for downstream apps is a separate, later feature (NATH-12).
 
-> **Status (NATH-10):** source, unit tests and workerd runtime tests are complete. Signed logins and every rejection case below are tested against the built Worker in workerd with a test IdP. Not yet verified: real Okta, Entra or Google tenants; DNS TXT verification against live DNS from a deployed Worker; staging. Treat a connection as untested until you have signed in through it on staging.
+> **Status (NATH-10):** source, unit tests and workerd runtime tests are complete. Signed logins and every rejection case below are tested against the built Worker in workerd with a test IdP. The DNS TXT domain check is tested in workerd with the lookup mocked at its real boundary (workerd's `node:dns` resolves over DNS-over-HTTPS at `cloudflare-dns.com`). Not yet verified: real Okta, Entra or Google tenants; DNS TXT verification against live DNS from a deployed Worker; staging. Treat a connection as untested until you have signed in through it on staging.
 
 ## Prerequisites
 
@@ -80,6 +80,7 @@ Entra's metadata also contains a WS-Federation `RoleDescriptor` and an enveloped
    - 1–4 signing certificates (`use="signing"` or no `use`), each RSA ≥ 2048 bits, signed with SHA-256/384/512 or RSASSA-PSS, currently valid; a certificate that expires within 30 days produces a warning;
    - a signed metadata document must not use SHA-1. Its signature itself is not verified: the pinned certificates are what Nathan trusts.
    Metadata URLs must be HTTPS public DNS names; Nathan does not follow redirects and stops after 5 seconds or 100 KiB.
+   Every check is recorded in the security audit log as `saml_metadata_preview` with the administrator, the metadata host (or `pasted`) and the outcome. The document and the URL path are never logged.
 3. **Create disabled connection**. Nathan registers the provider with the Better Auth SSO plugin server-side, using a canonical metadata document it rebuilds from the validated values (not the pasted XML), its own per-connection SP entity ID as issuer and audience, and signed assertions required. The response contains the DNS TXT record to publish, for example `_better-auth-token-acme-okta.acme.example`.
 4. Publish the TXT record, then **Verify DNS ownership**. (**Request new TXT challenge** issues a fresh token. Only the administrator who created the connection can request or verify, because the plugin scopes these calls to the creator.)
 5. **Enable connection** and type the confirmation `CONFIRM ENABLE SAML acme-okta`. Enabling is refused until the domain is verified and at least one certificate is valid.
@@ -89,7 +90,7 @@ Disable with `CONFIRM DISABLE SAML <id>`. A disabled connection's ACS and SSO ro
 
 ## Account provisioning and linking
 
-- **Invitation only** (default): SAML sign-in works only for people who already have a Nathan account with an address in the verified domain. No account is created.
+- **Invitation only** (default): SAML sign-in works only for people who already have a Nathan account with an address in the verified domain. No account is created. "Invited" means the account exists: an existing account in the domain that has never used SAML (for example one an administrator created, or a social sign-up) is linked to the connection on its first SAML sign-in. An existing account outside the domain is refused and not linked.
 - **Just-in-time**: Nathan creates an account on first sign-in, only for an address inside the connection's verified domain (or its subdomains). Its email is marked verified, because the domain owner proved DNS control and its IdP signed the address.
 - An IdP can never create or link an account for an address outside its verified domain.
 - Existing accounts are linked only when the domain is verified and the address is inside it. The IdP's own `email_verified`-style attributes are never trusted.
@@ -107,12 +108,20 @@ Studio lists every certificate with its expiry and warns 30 days ahead and after
 
 Rotation rewrites the plugin's stored configuration. A sign-in that was in flight during the change fails and has to be restarted.
 
+Certificate changes are compare-and-swap: Nathan writes the new list only if the list is still the one it read. If two administrators rotate the same connection at the same moment, one change succeeds and the other is refused with "The connection's certificates changed concurrently; reload and try again", instead of one silently overwriting the other.
+
 ## What Nathan checks on every SAML response
 
 Enforced by the Better Auth SSO plugin (samlify) and Nathan, and tested in workerd:
 
 - The connection exists in Nathan, is enabled and its domain is verified (otherwise the ACS answers 404).
-- A valid XML signature over the assertion by a pinned certificate. Unsigned, tampered or foreign-key responses fail. SHA-1 and MD5 signature or digest methods are rejected by Nathan before the plugin runs (the plugin's own `onDeprecated` check only covers the HTTP-Redirect `SigAlg` parameter).
+- Nathan's message guard runs before the plugin parses anything, on exactly the bytes the plugin will process:
+  - every SAML binding parameter (`SAMLResponse`, `SAMLRequest`, `RelayState`, `SigAlg`, `Signature`) appears at most once across the query and the body, on every SAML endpoint. Parsers disagree on which duplicate wins (the plugin keeps the last form field), so a second `SAMLResponse` could otherwise smuggle an unchecked message past the guard;
+  - the ACS accepts only the form-encoded HTTP-POST binding with exactly one `SAMLResponse`;
+  - SHA-1 and MD5 signature or digest methods anywhere in the message are rejected. The plugin's own `algorithms.onDeprecated: "reject"` does **not** cover XML signatures in a POSTed response (it only sees configured algorithms and the HTTP-Redirect `SigAlg`), so this check is Nathan's;
+  - DTDs, undecodable messages and encrypted content (Nathan configures no SP decryption key) are rejected.
+  Refusals answer 400 with a `code` (`saml_duplicate_parameter`, `saml_missing_response`, `saml_form_required`, `saml_weak_algorithm`, `saml_encrypted_assertion`, `saml_unreadable`) and are audited as `saml_message_rejected` with the connection and code only, never the message.
+- A valid XML signature over the assertion by a pinned certificate. Unsigned, tampered or foreign-key responses fail.
 - Issuer equals the IdP entity ID; Audience equals Nathan's SP entity ID; Recipient/Destination equal the ACS URL.
 - `NotBefore`/`NotOnOrAfter` are present and valid with 2 minutes of clock skew.
 - `InResponseTo` matches an AuthnRequest Nathan issued for this connection within 5 minutes, and is single-use. Responses without `InResponseTo` (IdP-initiated) are rejected.
@@ -136,7 +145,9 @@ Raw Better Auth SSO management endpoints (`/api/auth/sso/register`, `update-prov
 |---|---|
 | `No enterprise sign-in is configured for this email domain` | No enabled connection with a verified domain matches the address. |
 | ACS answers 404 `SAML connection unavailable` | Connection disabled, unknown, or its domain is not verified. |
-| ACS answers 400 about SHA-1/MD5 | The IdP signs with SHA-1. Switch it to RSA-SHA256. |
+| ACS answers 400 about SHA-1/MD5 (`saml_weak_algorithm`) | The IdP signs with SHA-1. Switch it to RSA-SHA256. |
+| ACS answers 400 `saml_duplicate_parameter` | The request repeats a SAML parameter (for example two `SAMLResponse` fields). Conforming IdPs never do; treat it as an attack or a broken proxy. |
+| ACS answers 400 `saml_encrypted_assertion` | The IdP encrypts assertions. Turn assertion encryption off for Nathan. |
 | Redirect with `error=invalid_saml_response` or `unsolicited_response` | Wrong audience/ACS values in the IdP, an IdP-initiated login, or a sign-in older than 5 minutes. |
 | Redirect with `error=unable_to_create_user` | Invitation-only connection and the person has no Nathan account, or the address is outside the verified domain. |
 | `sso_provider_changed_during_authentication` | A certificate was rotated during the sign-in; start again. |
