@@ -1,4 +1,5 @@
 import { RBAC_STUDIO_HTML, RBAC_STUDIO_SCRIPT } from "./rbac-ui.ts";
+import { TOKENS_STUDIO_HTML, TOKENS_STUDIO_SCRIPT } from "./tokens-ui.ts";
 const htmlEscape = (s: string) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 
 function page(title: string, body: string, script = ""): Response {
@@ -178,6 +179,7 @@ export function studioPage(userEmail: string): Response {
   <button class="secondary" id="app-enable">Enable</button>
   <button class="secondary" id="app-disable">Disable</button><p id="app-status" role="status"></p>
   ${RBAC_STUDIO_HTML}
+  ${TOKENS_STUDIO_HTML}
   <h2>SCIM directory connections</h2>
   <p>Nathan can receive SCIM 2.0 directory Users/Groups into a transactional, per-connection Durable Object. This initial <strong>directory-only</strong> mode does not automatically create Better Auth login accounts, revoke sessions or grant roles. Configure and review any lifecycle projection before relying on SCIM for access control.</p>
   <label>Connection ID<input id="scim-id" placeholder="acme-workforce"></label>
@@ -519,5 +521,6 @@ export function studioPage(userEmail: string): Response {
       }catch(e){status.textContent=e.message}
     }
     ${RBAC_STUDIO_SCRIPT}
+    ${TOKENS_STUDIO_SCRIPT}
   `);
 }
