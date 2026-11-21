@@ -54,9 +54,10 @@
 
 - [x] RFC 9068 JWT access tokens (`typ: at+jwt`, `client_id`, `jti`) with `principal_kind` (user / machine / agent), capped at 900 s for every access token.
 - [x] Token audiences registered in Identity Studio (migration 0014), optionally bound to an app for a `roles` hint from the NATH-13 evaluator. Clients are linked per audience. Machine and agent client-credentials clients use scope `nathan:api`.
-- [x] Administrator-set `agent` kind per client (admin-only, audited). Without a user session a token is never `user`.
+- [x] Administrator-set `agent` kind per client (admin-only, audited). Without a live user session a token is never `user`.
 - [x] `nathan_amr`/`nathan_acr`/`nathan_auth_time` only from verified passkey sign-in evidence for the token's session. Better Auth 1.7.14 reserves and strips `acr`/`amr`/`auth_time` on access tokens, so Gatekeeper `mfa` is never set by Nathan tokens.
-- [x] Ready-to-paste Gatekeeper provider entry ([gatekeeper.md](gatekeeper.md)), workerd-tested with user (authorization code + PKCE), machine and agent tokens, against a mirror of Gatekeeper's adapter and Gatekeeper's own resolver.
+- [x] Ready-to-paste Gatekeeper provider entry ([gatekeeper.md](gatekeeper.md)), workerd-tested with user (authorization code + PKCE), machine and agent tokens, against Gatekeeper's own resolver (a pinned, unmodified copy in `tests/vendor/gatekeeper`, so CI runs it without a checkout).
+- [x] Security-review fixes: user tokens for registered audiences need a live, unexpired session of the same user (refresh after sign-out, session revocation or expiry gets `invalid_grant`), banned users get no tokens, `nathan:api` only for client credentials and administrator-marked agents, `roles` only when every requested audience is bound to the same app, audience removal drops client links, and docs say that Gatekeeper policies must check `principal_kind`. Passkey evidence is tested through a real software-authenticator sign-in.
 - [ ] Verify against a deployed Nathan and Gatekeeper on staging, including a live passkey sign-in.
 - [ ] Standard `acr`/`amr`/`auth_time` on access tokens once Better Auth offers a supported way, and verified provider evidence.
 
