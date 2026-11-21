@@ -48,7 +48,8 @@
 - [x] Identity Studio Roles and access (admin-only, step-up, audited, change-fed), permissions as code (`nathan rbac plan|sync`), principal key setup in `nathan protect`. [Quickstart](quickstart-rbac.md), [reference](rbac.md).
 - [ ] Follow the quickstart end to end against a staging Cloudflare account (gateway + upstream + Studio grants).
 - [ ] Contract test with Gatekeeper's PIP adapter (GATE-9) against a Nathan fixture.
-- [ ] MCP scopes capped by permissions (NATH-14), SCIM group mapping (NATH-11).
+- [x] MCP scopes capped by permissions (NATH-14, see below).
+- [ ] SCIM group mapping (NATH-11).
 
 ## Gatekeeper-ready access tokens (NATH-15; implemented source, staging pending)
 
@@ -60,6 +61,18 @@
 - [x] Security-review fixes: user tokens for registered audiences need a live, unexpired session of the same user (refresh after sign-out, session revocation or expiry gets `invalid_grant`), banned users get no tokens, `nathan:api` only for client credentials and administrator-marked agents, `roles` only when every requested audience is bound to the same app, audience removal drops client links, and docs say that Gatekeeper policies must check `principal_kind`. Passkey evidence is tested through a real software-authenticator sign-in.
 - [ ] Verify against a deployed Nathan and Gatekeeper on staging, including a live passkey sign-in.
 - [ ] Standard `acr`/`amr`/`auth_time` on access tokens once Better Auth offers a supported way, and verified provider evidence.
+
+## Remote MCP servers with per-scope consent (NATH-14; implemented source, staging pending)
+
+- [x] Nathan-owned MCP authorization server (`/mcp-oauth`): RFC 8414 metadata, rate-limited expiring RFC 7591 public-client registration restricted to MCP catalog scopes, S256 PKCE only, exact HTTPS/loopback redirects, mandatory RFC 8707 `resource` on authorize, token and refresh. Better Auth 1.7.14's consent and static scopes cannot express per-app catalogs ([decision](remote-mcp.md#design-decisions)).
+- [x] Scope catalogs from app permissions (migration 0015): labels, descriptions, groups, `requires`, sensitive and admin-only scopes, aliases and a Full access marker that never covers sensitive scopes.
+- [x] Script-free consent page with per-scope checkboxes, single-use session-bound ticket, empty selection without consuming it, Safari `form-action` allowance; `/connections` to edit or disconnect; Studio registration and revocation (admin, step-up, audited).
+- [x] Effective scopes = grant ∩ current permissions at every issuance and check; refresh narrowing by intersection; rotation reuse and code replay revoke the grant; RFC 7009 revocation.
+- [x] NATH-15 tokens (`principal_kind: agent`, 300 s) and Worker SDK `nathanMcp()` with RFC 9728 metadata, 401/403 challenges, `user.can()` and a ≤ 30 s cached grant check (service binding or HTTPS). Workerd-tested with an MCP TypeScript SDK client and a sample MCP server. [Guide](remote-mcp.md).
+- [x] Security review fixes: consent and connections pages use `Referrer-Policy: same-origin` so browser form posts carry Nathan's `Origin` (`Origin: null` stays refused); registration bounded (unused clients pruned after 24 h and capped at 1,000, stored metadata < 4 KB, unknown fields dropped, global limit counts stored registrations only); codes and refresh tokens consumed atomically so a concurrent second use revokes the grant; a refresh with nothing usable (or during a ban) keeps its refresh token; Studio keeps MCP resources and Better Auth audiences apart; the SDK answers 503 for JWKS outages.
+- [ ] Verify with a deployed Nathan and MCP server, real browsers (Chromium form posts with the same-origin policy, Safari `form-action` after the consent redirect) and specific MCP products.
+- [ ] Client ID Metadata Documents (needs resolve-once DNS handling; Better Auth's `@better-auth/cimd` is a separate plugin).
+- [ ] Import scope metadata from a Gatekeeper action catalog (shape designed in [remote-mcp.md](remote-mcp.md#design-decisions)).
 
 ## Required before first actual production-ready release
 
