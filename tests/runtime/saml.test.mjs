@@ -20,6 +20,51 @@ const SECRET = randomKey() + randomKey();
 let mf, db, idp, admin;
 after(() => mf?.dispose());
 
+/**
+ * Outbound HTTP from the Worker. workerd's node:dns (used by Better Auth's
+ * domain verification) resolves TXT records over DNS-over-HTTPS at
+ * cloudflare-dns.com, so the DNS check is mocked at that real boundary.
+ */
+const dnsTxt = new Map();
+const dnsQueries = [];
+const METADATA_URL = "https://idp.acme.example/app/metadata";
+async function outbound(request) {
+  const url = new URL(request.url);
+  if (url.hostname === "cloudflare-dns.com" && url.pathname === "/dns-query") {
+    const name = url.searchParams.get("name");
+    dnsQueries.push(name + " " + url.searchParams.get("type"));
+    const records = url.searchParams.get("type") === "TXT" ? dnsTxt.get(name) : undefined;
+    return Response.json({ Status: records ? 0 : 3, TC: false, RD: true, RA: true, AD: false, CD: false,
+      Question: [{ name, type: 16 }],
+      ...(records ? { Answer: records.map(data => ({ name, type: 16, TTL: 60, data: JSON.stringify(data) })) } : {}) },
+    { headers: { "content-type": "application/dns-json" } });
+  }
+  if (url.href === METADATA_URL)
+    return new Response(idpMetadata({ entityID: IDP, ssoUrl: "https://idp.acme.example/sso", certB64s: [idp.certB64] }),
+      { headers: { "content-type": "application/samlmetadata+xml" } });
+  return new Response("unexpected outbound request", { status: 599 });
+}
+
+async function signed(token) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = Buffer.from(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(token))).toString("base64");
+  return "__Secure-nathan.session_token=" + encodeURIComponent(token + "." + sig);
+}
+/** A signed-in session for an existing user, seeded directly in D1; `stepUpAge` seconds since a passkey step-up, or none. */
+async function seedSession(userId, { stepUpAge } = {}) {
+  const now = new Date().toISOString(), later = new Date(Date.now() + 3600e3).toISOString();
+  const id = "s_" + randomKey().slice(0, 12), token = "tok_" + randomKey();
+  await db.prepare('INSERT INTO "session"(id,expiresAt,token,createdAt,updatedAt,userId) VALUES(?,?,?,?,?,?)').bind(id, later, token, now, now, userId).run();
+  if (stepUpAge !== undefined)
+    await db.prepare("INSERT INTO nathan_admin_assurance(session_id,user_id,method,verified_at) VALUES(?,?,'passkey',unixepoch()-?)").bind(id, userId, stepUpAge).run();
+  return signed(token);
+}
+async function seedUser(id, email, { role = "user", emailVerified = 1 } = {}) {
+  const now = new Date().toISOString();
+  await db.prepare('INSERT INTO "user"(id,name,email,emailVerified,role,createdAt,updatedAt) VALUES(?,?,?,?,?,?,?)')
+    .bind(id, id, email, emailVerified, role, now, now).run();
+}
+
 /** A complete, recently stepped-up administrator session, seeded directly in D1. */
 async function seedAdmin() {
   const now = new Date().toISOString(), later = new Date(Date.now() + 3600e3).toISOString();
@@ -33,9 +78,7 @@ async function seedAdmin() {
     ["INSERT INTO nathan_admin_assurance(session_id,user_id,method,verified_at) VALUES('s1','admin1','passkey',unixepoch())", []]
   ];
   for (const [sql, args] of stmts) await db.prepare(sql).bind(...args).run();
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const sig = Buffer.from(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(token))).toString("base64");
-  return "__Secure-nathan.session_token=" + encodeURIComponent(token + "." + sig);
+  return signed(token);
 }
 function studio(path, body, cookie = admin) {
   return mf.dispatchFetch(ORIGIN + path, body === undefined ? { headers: { Cookie: cookie } } : {
@@ -63,11 +106,21 @@ async function startLogin(email = "jane@" + DOMAIN) {
   return { id: authnRequestId(body.url), relayState: url.searchParams.get("RelayState") };
 }
 function post(SAMLResponse, RelayState) {
-  return mf.dispatchFetch(ACS, {
+  return postForm([["SAMLResponse", SAMLResponse], ...(RelayState ? [["RelayState", RelayState]] : [])]);
+}
+/** Posts form fields in the given order, repeated names included. */
+function postForm(fields, url = ACS) {
+  return mf.dispatchFetch(url, {
     method: "POST", redirect: "manual",
     headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: "https://idp.acme.example" },
-    body: new URLSearchParams({ SAMLResponse, ...(RelayState ? { RelayState } : {}) })
+    body: new URLSearchParams(fields).toString()
   });
+}
+/** Asserts that Nathan's SAML protocol gate, not the plugin, refused the message. */
+async function assertGateRejected(r, code, label) {
+  assert.equal(sessionCookie(r), undefined, label + ": must not create a session");
+  assert.equal(r.status, 400, label + ": " + (await r.clone().text()).slice(0, 200));
+  assert.equal((await r.json()).code, code, label);
 }
 const sessionCookie = r => cookiesOf(r)["__Secure-nathan.session_token"]?.value;
 const good = (over = {}) => ({ issuer: IDP, audience: SP_ENTITY, acs: ACS, email: "jane@" + DOMAIN,
@@ -87,7 +140,7 @@ const auditCount = async (action, outcome) =>
   (await db.prepare("SELECT count(*) AS n FROM nathan_security_audit WHERE action=? AND outcome=?").bind(action, outcome).first()).n;
 
 before(async () => {
-  mf = await authWorker(HOST, { ENTERPRISE_SSO: "true", BETTER_AUTH_SECRET: SECRET });
+  mf = await authWorker(HOST, { ENTERPRISE_SSO: "true", BETTER_AUTH_SECRET: SECRET }, { outboundService: outbound });
   db = await mf.getD1Database("DB");
   idp = makeCertificate({ cn: "acme idp" });
   admin = await seedAdmin();
@@ -105,6 +158,22 @@ test("Studio SAML API requires a stepped-up administrator", async () => {
   const r = await mf.dispatchFetch(ORIGIN + "/studio/api/saml/connections", {
     method: "POST", headers: { Cookie: admin, Origin: "https://evil.example", "Content-Type": "application/json" }, body: "{}" });
   assert.equal(r.status, 403, "cross-origin write denied");
+  const metadataXml = idpMetadata({ entityID: IDP, ssoUrl: "https://idp.acme.example/sso", certB64s: [idp.certB64] });
+  const create = { providerId: "stepup-test", domain: "stepup.example", metadataXml };
+  await seedUser("member1", "member@example.test");
+  const member = await seedSession("member1", { stepUpAge: 0 });
+  const noStepUp = await seedSession("admin1");
+  const staleStepUp = await seedSession("admin1", { stepUpAge: 16 * 60 });
+  for (const [label, cookie] of [["signed-in non-admin", member], ["admin without passkey step-up", noStepUp], ["admin with a step-up older than 15 minutes", staleStepUp]]) {
+    assert.equal((await studio("/studio/api/saml", undefined, cookie)).status, 403, label + " reads");
+    const write = await studio("/studio/api/saml/connections", create, cookie);
+    assert.equal(write.status, 403, label + " writes");
+    assert.match((await write.json()).error, /recent passkey/, label);
+    assert.equal((await studio("/studio/api/saml/preview", { metadataXml }, cookie)).status, 403, label + " previews");
+  }
+  assert.equal(await db.prepare("SELECT count(*) AS n FROM nathan_saml_connections").first().then(x => x.n), 0, "nothing was created");
+  assert.equal(await db.prepare("SELECT count(*) AS n FROM nathan_security_audit WHERE action LIKE 'saml_%'").first().then(x => x.n), 0,
+    "refused callers never reach the audited service");
 });
 
 test("metadata preview reports problems without saving", async () => {
@@ -115,6 +184,16 @@ test("metadata preview reports problems without saving", async () => {
   const good = await ok(await studio("/studio/api/saml/preview", { providerId: PID, metadataXml: idpMetadata({ entityID: IDP, ssoUrl: "https://idp.acme.example/sso", certB64s: [idp.certB64] }) }));
   assert.equal(good.idp.entityID, IDP);
   assert.equal(good.sp.acsUrl, ACS);
+  const fetched = await ok(await studio("/studio/api/saml/preview", { metadataUrl: METADATA_URL }));
+  assert.equal(fetched.idp.entityID, IDP, "metadata fetched through the Worker's outbound fetch");
+  const audits = (await db.prepare("SELECT actor,target,outcome FROM nathan_security_audit WHERE action='saml_metadata_preview' ORDER BY rowid").all()).results;
+  assert.deepEqual(audits.map(a => [a.actor, a.target, a.outcome]), [
+    ["admin1", "pasted", "attempted"], ["admin1", "pasted", "failed"],
+    ["admin1", "pasted", "attempted"], ["admin1", "pasted", "succeeded"],
+    ["admin1", "idp.acme.example", "attempted"], ["admin1", "idp.acme.example", "succeeded"]
+  ], "privileged metadata preview is audited with actor, target host and outcome");
+  const leaked = await db.prepare("SELECT count(*) AS n FROM nathan_security_audit WHERE target LIKE '%<%' OR target LIKE '%/%' OR length(target)>253").first();
+  assert.equal(leaked.n, 0, "the audit never stores the metadata document or URL path");
   assert.equal((await ok(await studio("/studio/api/saml"))).connections.length, 0);
 });
 
@@ -161,9 +240,29 @@ test("a disabled or unverified connection cannot be used", async () => {
   assert.equal(await auditCount("saml_connection_enable", "failed"), 1, "refused enablement is audited");
 });
 
+test("Better Auth's DNS TXT check verifies the domain only with the issued token", async () => {
+  const txtHost = "_better-auth-token-" + PID + "." + DOMAIN;
+  const { value: token } = await db.prepare("SELECT value FROM verification WHERE identifier=?").bind("_better-auth-token-" + PID).first();
+  const verify = () => studio("/studio/api/sso/verify", { providerId: PID });
+  const verified = async () => Number((await db.prepare('SELECT "domainVerified" AS v FROM "ssoProvider" WHERE "providerId"=?').bind(PID).first()).v) === 1;
+  const queried = dnsQueries.length;
+  assert.equal((await verify()).status, 400, "no TXT record published");
+  assert.ok(dnsQueries.slice(queried).includes(txtHost + " TXT"), "the TXT lookup went out over DNS-over-HTTPS: " + dnsQueries.join(", "));
+  assert.equal(await verified(), false);
+  dnsTxt.set(txtHost, ["_better-auth-token-" + PID + "=wrong-" + token.slice(6), "unrelated=1"]);
+  assert.equal((await verify()).status, 400, "wrong token");
+  assert.equal(await verified(), false);
+  dnsTxt.set(txtHost.replace(DOMAIN, "evil.example"), ["_better-auth-token-" + PID + "=" + token]);
+  assert.equal((await verify()).status, 400, "the right token in another zone does not count");
+  assert.equal(await verified(), false);
+  assert.equal(await auditCount("enterprise_sso_domain_verify", "failed"), 3);
+  dnsTxt.set(txtHost, ["unrelated=1", "_better-auth-token-" + PID + "=" + token]);
+  await ok(await verify());
+  assert.equal(await verified(), true, "the issued token in the connection's own zone verifies the domain");
+  assert.equal(await auditCount("enterprise_sso_domain_verify", "succeeded"), 1);
+});
+
 test("enabling after domain verification opens SSO for the domain", async () => {
-  // Better Auth's DNS TXT verification (existing Studio flow) sets this flag; DNS itself is not exercised here.
-  await db.prepare('UPDATE "ssoProvider" SET "domainVerified"=1 WHERE "providerId"=?').bind(PID).run();
   const enabled = await ok(await studio("/studio/api/saml/status", { providerId: PID, enabled: true, confirm: "CONFIRM ENABLE SAML " + PID }));
   assert.equal(enabled.enabled, true);
   assert.equal(await auditCount("saml_connection_enable", "succeeded"), 1);
@@ -224,13 +323,62 @@ test("IdP-initiated response (no InResponseTo) is rejected", async () => {
 test("unknown InResponseTo is rejected", async () => {
   await assertRejected(await post(samlResponse(good({ inResponseTo: "_never_issued" }))), "unknown request");
 });
-test("SHA-1 signed response is rejected", async () => {
-  await assertRejected(await login({ signatureAlgorithm: "rsa-sha1" }), "sha1");
+test("SHA-1 signed response is rejected by Nathan's algorithm guard", async () => {
+  const r = await login({ signatureAlgorithm: "rsa-sha1", email: "sha1user@" + DOMAIN });
+  await assertGateRejected(r, "saml_weak_algorithm", "sha1");
+  assert.equal(await db.prepare('SELECT id FROM "user" WHERE email=?').bind("sha1user@" + DOMAIN).first(), null);
+});
+
+test("duplicate SAMLResponse fields are refused before parsing, in either order", async () => {
+  const sha1user = "sha1user@" + DOMAIN;
+  for (const order of ["strong first", "weak first"]) {
+    const { id, relayState } = await startLogin();
+    const strong = samlResponse(good({ inResponseTo: id }));
+    const weak = samlResponse(good({ inResponseTo: id, email: sha1user, signatureAlgorithm: "rsa-sha1" }));
+    const pair = order === "strong first" ? [strong, weak] : [weak, strong];
+    const r = await postForm([["SAMLResponse", pair[0]], ["SAMLResponse", pair[1]], ["RelayState", relayState]]);
+    await assertGateRejected(r, "saml_duplicate_parameter", order);
+  }
+  assert.equal(await db.prepare('SELECT id FROM "user" WHERE email=?').bind(sha1user).first(), null, "no user created");
+  const events = (await db.prepare("SELECT actor,target,outcome FROM nathan_security_audit WHERE action='saml_message_rejected'").all()).results;
+  assert.deepEqual(events.filter(e => e.target === PID + ":saml_duplicate_parameter").map(e => [e.actor, e.outcome]),
+    [["anonymous", "rejected"], ["anonymous", "rejected"]], "audited as a security event without payloads");
+});
+
+test("duplicate RelayState and repeated SAML query parameters are refused", async () => {
+  const { id, relayState } = await startLogin();
+  const b64 = samlResponse(good({ inResponseTo: id }));
+  await assertGateRejected(await postForm([["SAMLResponse", b64], ["RelayState", relayState], ["RelayState", "x"]]), "saml_duplicate_parameter", "RelayState twice");
+  await assertGateRejected(await postForm([["SAMLResponse", b64], ["RelayState", relayState]], ACS + "?RelayState=x"), "saml_duplicate_parameter", "RelayState in query and body");
+  await assertGateRejected(await postForm([["RelayState", relayState]]), "saml_missing_response", "no SAMLResponse");
+  const slo = ORIGIN + "/api/auth/sso/saml2/sp/slo/" + PID;
+  for (const name of ["SAMLRequest", "SAMLResponse", "SigAlg", "Signature", "RelayState"]) {
+    const r = await mf.dispatchFetch(slo + "?" + name + "=a&" + name + "=b", { redirect: "manual" });
+    await assertGateRejected(r, "saml_duplicate_parameter", "SLO query " + name);
+    const acs = await mf.dispatchFetch(ACS + "?" + name + "=a&" + name + "=b", { redirect: "manual" });
+    await assertGateRejected(acs, "saml_duplicate_parameter", "ACS query " + name);
+  }
+  assert.ok(sessionCookie(await post(b64, relayState)), "the same single-field response still signs in");
+});
+
+test("a response with an encrypted assertion is refused (Nathan configures no decryption key)", async () => {
+  const { id, relayState } = await startLogin();
+  const r = await post(samlResponse(good({ inResponseTo: id, mutate: x => x.replace(/<saml:Assertion[\s\S]*<\/saml:Assertion>/,
+    '<saml:EncryptedAssertion><xenc:EncryptedData xmlns:xenc="http://www.w3.org/2001/04/xmlenc#"/></saml:EncryptedAssertion>') })), relayState);
+  await assertGateRejected(r, "saml_encrypted_assertion", "encrypted");
 });
 test("an IdP cannot create users outside its verified domain", async () => {
   const { id, relayState } = await startLogin();
   await assertRejected(await post(samlResponse(good({ inResponseTo: id, email: "ceo@other.example" })), relayState), "foreign domain");
   assert.equal(await db.prepare('SELECT id FROM "user" WHERE email=?').bind("ceo@other.example").first(), null);
+});
+
+test("an IdP cannot sign in or link an existing verified user from another domain", async () => {
+  await seedUser("cfo1", "cfo@other.example");
+  const { id, relayState } = await startLogin();
+  await assertRejected(await post(samlResponse(good({ inResponseTo: id, email: "cfo@other.example" })), relayState), "existing user outside the verified domain");
+  assert.equal(await db.prepare('SELECT id FROM "account" WHERE "userId"=?').bind("cfo1").first(), null, "no account linked");
+  assert.equal(await db.prepare('SELECT id FROM "session" WHERE "userId"=?').bind("cfo1").first(), null, "no session");
 });
 
 test("invitation-only provisioning admits existing users but creates nobody", async () => {
@@ -239,6 +387,26 @@ test("invitation-only provisioning admits existing users but creates nobody", as
   await assertRejected(await login({ email: "newhire@" + DOMAIN }), "new user under invitation-only");
   assert.equal(await db.prepare('SELECT id FROM "user" WHERE email=?').bind("newhire@" + DOMAIN).first(), null);
   assert.ok(sessionCookie(await login()), "existing linked user still signs in");
+});
+
+test("invitation-only links an existing verified user inside the domain on first SAML sign-in", async () => {
+  // Design: invitation means "the account already exists". An admin-created (or
+  // previously signed-up) verified user in the DNS-verified domain is linked to
+  // the connection the first time the IdP signs for that address.
+  await seedUser("alice1", "alice@" + DOMAIN);
+  const r = await login({ email: "alice@" + DOMAIN });
+  assert.ok(sessionCookie(r), "existing user signs in: " + r.headers.get("location"));
+  const account = await db.prepare('SELECT "accountId" AS a FROM "account" WHERE "userId"=? AND "providerId"=?').bind("alice1", PID).first();
+  assert.ok(account, "SAML account linked to the existing user");
+  assert.equal((await db.prepare('SELECT count(*) AS n FROM "user" WHERE email=?').bind("alice@" + DOMAIN).first()).n, 1, "no duplicate user");
+});
+
+test("invitation-only refuses an existing user outside the domain", async () => {
+  await seedUser("bob1", "bob@other.example");
+  const { id, relayState } = await startLogin();
+  await assertRejected(await post(samlResponse(good({ inResponseTo: id, email: "bob@other.example" })), relayState), "existing user outside the domain");
+  assert.equal(await db.prepare('SELECT id FROM "account" WHERE "userId"=?').bind("bob1").first(), null, "no account linked");
+  assert.equal(await db.prepare('SELECT id FROM "session" WHERE "userId"=?').bind("bob1").first(), null, "no session");
 });
 
 test("certificate rotation: trust the next certificate, then retire the old one", async () => {
@@ -263,6 +431,23 @@ test("certificate rotation: trust the next certificate, then retire the old one"
   assert.equal(await auditCount("saml_certificate_add", "succeeded"), 1);
   assert.equal(await auditCount("saml_certificate_retire", "succeeded"), 1);
   idp = next;
+});
+
+test("concurrent certificate changes never silently lose an update", async () => {
+  const a = makeCertificate({ cn: "acme idp a" }), b = makeCertificate({ cn: "acme idp b" });
+  const results = await Promise.all([a, b].map(c => studio("/studio/api/saml/certificates", { providerId: PID, certificate: c.certPem })));
+  const bodies = await Promise.all(results.map(r => r.json()));
+  const accepted = results.filter(r => r.status === 200).length;
+  assert.ok(accepted >= 1, JSON.stringify(bodies));
+  for (const [i, r] of results.entries())
+    if (r.status !== 200) assert.match(bodies[i].error, /changed concurrently/, "a lost race is reported, not swallowed");
+  const { certificates, samlConfig } = await db.prepare('SELECT c.certificates AS certificates,p."samlConfig" AS samlConfig FROM nathan_saml_connections c JOIN "ssoProvider" p ON p."providerId"=c.provider_id WHERE c.provider_id=?').bind(PID).first();
+  const stored = JSON.parse(certificates);
+  assert.equal(stored.length, 1 + accepted, "every accepted certificate is still stored");
+  for (const der of stored.map(c => c.der)) assert.ok(JSON.parse(samlConfig).idpMetadata.metadata.includes(der), "plugin metadata matches Nathan's list");
+  // Remove whatever was added so the rest of the suite sees one certificate.
+  for (const c of stored.slice(1))
+    await ok(await studio("/studio/api/saml/certificates/retire", { providerId: PID, sha256: c.sha256, confirm: "CONFIRM RETIRE CERTIFICATE " + PID }));
 });
 
 test("disabling closes the ACS and SSO routing again", async () => {

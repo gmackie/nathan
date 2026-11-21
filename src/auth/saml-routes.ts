@@ -5,15 +5,15 @@
  * additive routing change.
  */
 import type { AuthEnv } from "./env";
-import { isAdminPrincipal } from "./admin-service";
+import { audit, isAdminPrincipal } from "./admin-service";
 import { mayAdminister } from "./bootstrap";
-import { samlProviderFromPath, samlConnectionUsable, resolveSsoConnection, samlResponseXml, weakSamlAlgorithm } from "./saml-policy.mjs";
+import { samlProviderFromPath, samlConnectionUsable, resolveSsoConnection, inspectSamlMessage } from "./saml-policy.mjs";
 import { listSamlConnections, previewSamlMetadata, createSamlConnection, setSamlConnectionEnabled,
   setSamlProvisioning, addSamlCertificate, retireSamlCertificate } from "./saml-admin";
 
 const noStore = { "Cache-Control": "no-store" };
-function reject(status:number,reason:string){
-  return Response.json({error:reason},{status,headers:noStore});
+function reject(status:number,reason:string,code?:string){
+  return Response.json(code?{error:reason,code}:{error:reason},{status,headers:noStore});
 }
 /** Admin-readable reason from Nathan's validators; never database internals. */
 function reason(e:unknown,fallback:string){
@@ -23,20 +23,23 @@ function reason(e:unknown,fallback:string){
 
 /**
  * Runs before auth.handler for /api/auth/*. SAML ACS/SLO paths only reach the
- * plugin for an enabled connection with a verified domain; raw SSO sign-in
- * must name a usable connection explicitly.
+ * plugin for an enabled connection with a verified domain, and only after
+ * Nathan's message guard (inspectSamlMessage) has accepted the exact message
+ * the plugin will parse; raw SSO sign-in must name a usable connection explicitly.
  */
 export async function samlProtocolGate(request:Request,env:AuthEnv,url:URL):Promise<Response|null>{
   const id=samlProviderFromPath(url.pathname);
   if(id!==null){
     if(!await samlConnectionUsable(env.DB,id))return reject(404,"SAML connection unavailable");
-    if(request.method==="POST"){
-      const raw=await request.clone().text();
-      if(raw.length>400_000)return reject(413,"SAML message too large");
-      const xml=samlResponseXml(request.headers.get("Content-Type")?.split(";")[0]?.trim()??"",raw);
-      if(xml===null)return reject(400,"Unreadable SAML message");
-      // The plugin's onDeprecated check misses XML signatures in POSTed responses.
-      if(xml!==undefined&&weakSamlAlgorithm(xml))return reject(400,"SAML response rejected: SHA-1/MD5 signatures and digests are not accepted");
+    const raw=request.method==="POST"?await request.clone().text():"";
+    if(raw.length>400_000)return reject(413,"SAML message too large");
+    const endpoint=url.pathname.includes("/sp/acs/")?"acs":url.pathname.includes("/sp/slo/")?"slo":"logout";
+    const refused=inspectSamlMessage({endpoint,method:request.method,search:url.search,
+      contentType:request.headers.get("Content-Type")??"",body:raw});
+    if(refused){
+      // Security event: the connection and the refusal code only, never the message.
+      await audit(env,"anonymous","saml_message_rejected",id+":"+refused.code,"rejected");
+      return reject(refused.status,refused.message,refused.code);
     }
     return null;
   }
@@ -63,7 +66,7 @@ async function adminSession(auth:any,env:AuthEnv,request:Request){
 }
 
 const POSTS:Record<string,(auth:any,env:AuthEnv,headers:Headers,body:any,actor:string)=>Promise<unknown>>={
-  "/studio/api/saml/preview":(_a,env,_h,body)=>previewSamlMetadata(env,body),
+  "/studio/api/saml/preview":(_a,env,_h,body,actor)=>previewSamlMetadata(env,body,actor),
   "/studio/api/saml/connections":(auth,env,headers,body,actor)=>createSamlConnection(auth,env,headers,body,actor),
   "/studio/api/saml/status":(_a,env,_h,body,actor)=>setSamlConnectionEnabled(env,body,actor),
   "/studio/api/saml/provisioning":(_a,env,_h,body,actor)=>setSamlProvisioning(env,body,actor),

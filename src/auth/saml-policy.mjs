@@ -11,10 +11,14 @@ export const SAML_ACS_ENDPOINT = "/sso/saml2/sp/acs/:providerId";
 
 /**
  * Options for the sso() plugin. Signed assertions are required per connection
- * (wantAssertionsSigned); here: SHA-1 rejected, SP-initiated only with
- * InResponseTo bound to a stored AuthnRequest, timestamps required with a
- * 2 minute skew, and IdP email_verified claims never trusted — email trust
- * comes only from Better Auth's DNS-verified domain.
+ * (wantAssertionsSigned); here: SP-initiated only with InResponseTo bound to a
+ * stored AuthnRequest, timestamps required with a 2 minute skew, and IdP
+ * email_verified claims never trusted — email trust comes only from Better
+ * Auth's DNS-verified domain. algorithms.onDeprecated:"reject" covers only
+ * the algorithms the plugin itself inspects (configuration and the
+ * HTTP-Redirect SigAlg); it does NOT reject a SHA-1/MD5 XML signature inside
+ * a POSTed Response. Nathan enforces that in inspectSamlMessage, which the
+ * auth Worker runs before the plugin sees any SAML message.
  * @returns {import("@better-auth/sso").SSOOptions}
  */
 export function ssoPluginOptions() {
@@ -104,6 +108,25 @@ export async function samlUserCreateGuard(db, user, ctx) {
 }
 
 /**
+ * The two statements that store a rotated certificate list, to run in one
+ * D1 batch (a transaction). Compare-and-swap: both apply only while Nathan's
+ * row still holds `previousCertificates` (the list the caller read), and the
+ * second only once the first has written the plugin's config, so concurrent
+ * rotations cannot silently overwrite each other or leave the two rows apart.
+ * The caller must check that each statement changed exactly one row.
+ */
+export function certificateSwapStatements(providerId, previousCertificates, certificates, samlConfig) {
+  return [
+    { sql: 'UPDATE "ssoProvider" SET "samlConfig"=? WHERE "providerId"=? AND "samlConfig" IS NOT NULL ' +
+        "AND EXISTS(SELECT 1 FROM nathan_saml_connections WHERE provider_id=? AND certificates=?)",
+      args: [samlConfig, providerId, providerId, previousCertificates] },
+    { sql: "UPDATE nathan_saml_connections SET certificates=?,updated_at=unixepoch() WHERE provider_id=? AND certificates=? " +
+        'AND EXISTS(SELECT 1 FROM "ssoProvider" WHERE "providerId"=? AND "samlConfig"=?)',
+      args: [certificates, providerId, previousCertificates, providerId, samlConfig] }
+  ];
+}
+
+/**
  * Routes "Sign in with SSO" by email domain to exactly one usable connection:
  * the most specific enabled SAML connection, else a verified OIDC provider.
  */
@@ -130,6 +153,32 @@ export async function resolveSsoConnection(db, email) {
 }
 
 const WEAK_ALGORITHM = /(sha1|md5)$/i;
+const ENCRYPTED = new Set(["EncryptedAssertion", "EncryptedID", "EncryptedAttribute", "EncryptedData", "EncryptedKey"]);
+
+/** Parses SAML XML once; reports a DTD, a parse error, the first weak algorithm and any encrypted element. */
+function scanSamlXml(xml) {
+  if (typeof xml !== "string") return { error: "unparseable" };
+  if (/<!DOCTYPE|<!ENTITY/i.test(xml)) return { error: "dtd" };
+  let doc, failed = false;
+  try {
+    doc = new DOMParser({ onError: (level) => { if (level !== "warning") failed = true; } })
+      .parseFromString(xml, "application/xml");
+  } catch { return { error: "unparseable" }; }
+  if (failed || !doc?.documentElement) return { error: "unparseable" };
+  let weak = null, encrypted = false;
+  const stack = [doc.documentElement];
+  while (stack.length) {
+    const el = stack.pop();
+    if (ENCRYPTED.has(el.localName)) encrypted = true;
+    if (!weak && (el.localName === "SignatureMethod" || el.localName === "DigestMethod")) {
+      const alg = el.getAttribute("Algorithm") || "";
+      if (WEAK_ALGORITHM.test(alg)) weak = "weak algorithm " + alg.replace(/^.*#/, "");
+    }
+    for (const child of Array.from(el.childNodes || [])) if (child.nodeType === 1) stack.push(child);
+  }
+  return { weak, encrypted };
+}
+
 /**
  * The plugin's onDeprecated check only sees the HTTP-Redirect SigAlg query
  * parameter, not the XML signature inside a POSTed Response. Returns a reason
@@ -138,40 +187,73 @@ const WEAK_ALGORITHM = /(sha1|md5)$/i;
  * entity decoding so character references cannot hide "sha1".
  */
 export function weakSamlAlgorithm(xml) {
-  if (typeof xml !== "string") return "unparseable";
-  if (/<!DOCTYPE|<!ENTITY/i.test(xml)) return "dtd";
-  let doc, failed = false;
+  const r = scanSamlXml(xml);
+  return r.error ?? r.weak;
+}
+
+/** SAML binding parameters (HTTP-Redirect and HTTP-POST). Each may appear at most once per message. */
+export const SAML_BINDING_PARAMETERS = ["SAMLRequest", "SAMLResponse", "RelayState", "SigAlg", "Signature"];
+const FORM = "application/x-www-form-urlencoded";
+const refuse = (code, message) => ({ status: 400, code, message });
+
+/** Decodes a base64 SAML message exactly as the plugin will see it (whitespace stripped), strictly. */
+function decodeSamlMessage(value) {
   try {
-    doc = new DOMParser({ onError: (level) => { if (level !== "warning") failed = true; } })
-      .parseFromString(xml, "application/xml");
-  } catch { return "unparseable"; }
-  if (failed || !doc?.documentElement) return "unparseable";
-  const stack = [doc.documentElement];
-  while (stack.length) {
-    const el = stack.pop();
-    if (el.localName === "SignatureMethod" || el.localName === "DigestMethod") {
-      const alg = el.getAttribute("Algorithm") || "";
-      if (WEAK_ALGORITHM.test(alg)) return "weak algorithm " + alg.replace(/^.*#/, "");
-    }
-    for (const child of Array.from(el.childNodes || [])) if (child.nodeType === 1) stack.push(child);
-  }
-  return null;
+    const bin = atob(value.replace(/\s+/g, ""));
+    if (!bin) return null;
+    return new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
+  } catch { return null; }
 }
 
 /**
- * Extracts and decodes the SAMLResponse of an ACS POST (form or JSON body).
- * Returns undefined when there is none, null when it cannot be decoded.
+ * Nathan's guard for a SAML protocol message, run before @better-auth/sso
+ * parses anything. `endpoint` is "acs", "slo" or "logout"; `search` the URL
+ * query; `body` the raw request body text. Returns null to let the plugin
+ * handle the message, else {status, code, message} to refuse it.
+ *
+ * - Every SAML binding parameter appears at most once across the query and
+ *   the body. Different parsers disagree on which duplicate wins (URLSearchParams.get
+ *   takes the first, the plugin's form parsing keeps the last), so a
+ *   duplicate could make Nathan check one message and the plugin process
+ *   another. Refusing duplicates means the checked bytes are the processed bytes.
+ * - The ACS accepts only the form-encoded HTTP-POST binding with exactly one
+ *   SAMLResponse in the body.
+ * - Any SAMLResponse/SAMLRequest in a POST body is decoded as the plugin
+ *   decodes it and refused if it is unreadable, has a DTD, uses SHA-1/MD5
+ *   anywhere, or carries encrypted content (Nathan configures no SP
+ *   decryption key, so encrypted algorithms could not be inspected).
  */
-export function samlResponseXml(contentType, raw) {
-  let value;
-  if (contentType === "application/x-www-form-urlencoded") value = new URLSearchParams(raw).get("SAMLResponse") ?? undefined;
-  else if (contentType === "application/json") {
-    try { const body = JSON.parse(raw); value = body?.SAMLResponse; } catch { return null; }
-    if (value !== undefined && typeof value !== "string") return null;
-  } else return null;
-  if (value === undefined) return undefined;
-  try {
-    const bin = atob(value.replace(/\s+/g, ""));
-    return new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(bin, c => c.charCodeAt(0)));
-  } catch { return null; }
+export function inspectSamlMessage({ endpoint, method, search, contentType, body }) {
+  const counts = new Map();
+  const count = name => { if (SAML_BINDING_PARAMETERS.includes(name)) counts.set(name, (counts.get(name) ?? 0) + 1); };
+  for (const name of new URLSearchParams(search ?? "").keys()) count(name);
+  const posted = new Map();
+  if (method === "POST") {
+    const type = String(contentType ?? "").split(";")[0].trim().toLowerCase();
+    if (type === FORM) {
+      for (const [name, value] of new URLSearchParams(body ?? "")) { count(name); if (SAML_BINDING_PARAMETERS.includes(name)) posted.set(name, value); }
+    } else if (type === "application/json" && endpoint !== "acs") {
+      let parsed;
+      try { parsed = JSON.parse(body ?? ""); } catch { return refuse("saml_unreadable", "Unreadable SAML message"); }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return refuse("saml_unreadable", "Unreadable SAML message");
+      for (const name of SAML_BINDING_PARAMETERS) {
+        if (!Object.hasOwn(parsed, name)) continue;
+        if (typeof parsed[name] !== "string") return refuse("saml_unreadable", "Unreadable SAML message");
+        count(name); posted.set(name, parsed[name]);
+      }
+    } else return refuse("saml_form_required", "SAML messages must use the form-encoded HTTP-POST binding");
+  }
+  for (const [name, n] of counts)
+    if (n > 1) return refuse("saml_duplicate_parameter", "SAML message rejected: " + name + " appears more than once");
+  if (endpoint === "acs" && method === "POST" && !posted.has("SAMLResponse"))
+    return refuse("saml_missing_response", "SAML message rejected: exactly one SAMLResponse is required");
+  for (const name of ["SAMLResponse", "SAMLRequest"]) {
+    if (!posted.has(name)) continue;
+    const xml = decodeSamlMessage(posted.get(name));
+    const scan = xml === null ? { error: "undecodable" } : scanSamlXml(xml);
+    if (scan.error) return refuse("saml_unreadable", "Unreadable SAML message");
+    if (scan.weak) return refuse("saml_weak_algorithm", "SAML response rejected: SHA-1/MD5 signatures and digests are not accepted");
+    if (scan.encrypted) return refuse("saml_encrypted_assertion", "SAML response rejected: encrypted assertions are not supported");
+  }
+  return null;
 }

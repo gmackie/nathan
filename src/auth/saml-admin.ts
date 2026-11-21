@@ -9,7 +9,7 @@ import type { AuthEnv } from "./env";
 import { audit } from "./admin-service";
 import { parseIdpMetadata, fetchIdpMetadata, buildIdpMetadata, spValues, certificateFromInput,
   EXPIRY_WARNING_DAYS } from "./saml-metadata.mjs";
-import { attributeMapping, ATTRIBUTE_PRESETS } from "./saml-policy.mjs";
+import { attributeMapping, ATTRIBUTE_PRESETS, certificateSwapStatements } from "./saml-policy.mjs";
 
 type Certificate = { der:string; sha256:string; bits:number; signatureAlgorithm:string;
   notBefore:string; notAfter:string; role:"active"|"next"; addedAt:string };
@@ -89,10 +89,29 @@ async function metadataFrom(input:any):Promise<string>{
   throw Error("Paste the IdP metadata XML or give its HTTPS metadata URL");
 }
 
-/** Validates metadata without saving anything (Studio "Check metadata"). */
-export async function previewSamlMetadata(env:AuthEnv,input:any){
+/** Audit target for a metadata source: the URL's host, or "pasted". Never the document or the URL path. */
+function metadataSource(input:any):string{
+  if(typeof input?.metadataXml==="string"&&input.metadataXml.trim())return "pasted";
+  if(typeof input?.metadataUrl!=="string"||!input.metadataUrl.trim())return "none";
+  try{
+    const host=new URL(input.metadataUrl.trim()).hostname;
+    return /^[a-z0-9.:[\]-]{1,253}$/i.test(host)?host.toLowerCase():"invalid-url";
+  }catch{return "invalid-url";}
+}
+
+/**
+ * Validates metadata without saving anything (Studio "Check metadata"). It can
+ * make the Worker fetch an admin-chosen URL, so it is audited: actor, the
+ * metadata host (or "pasted") and the outcome.
+ */
+export async function previewSamlMetadata(env:AuthEnv,input:any,actor:string){
   requireEnterpriseSso(env);
-  const m=await parseIdpMetadata(await metadataFrom(input));
+  const source=metadataSource(input);
+  await audit(env,actor,"saml_metadata_preview",source,"attempted");
+  let m:Awaited<ReturnType<typeof parseIdpMetadata>>;
+  try{m=await parseIdpMetadata(await metadataFrom(input));}
+  catch(e){await audit(env,actor,"saml_metadata_preview",source,"failed");throw e;}
+  await audit(env,actor,"saml_metadata_preview",source,"succeeded");
   const providerId=typeof input?.providerId==="string"&&/^[a-z][a-z0-9-]{1,62}$/.test(input.providerId)?input.providerId:null;
   return {idp:{entityID:m.entityID,ssoUrl:m.ssoRedirectUrl,ssoPostUrl:m.ssoPostUrl},
     certificates:m.certificates.map(c=>certificateStatus({...c,role:"active",addedAt:""})),
@@ -194,7 +213,12 @@ export async function setSamlProvisioning(env:AuthEnv,input:any,actor:string){
   }catch(e){await audit(env,actor,"saml_connection_provisioning",id+":"+input.provisioning,"failed");throw e;}
 }
 
-/** Rebuilds the plugin's IdP metadata from Nathan's certificate list, atomically with Nathan's row. */
+/**
+ * Rebuilds the plugin's IdP metadata from Nathan's certificate list, atomically
+ * with Nathan's row. Compare-and-swap: both updates apply only if the
+ * certificate list is still the one `row` was read with, so two concurrent
+ * rotations cannot silently overwrite each other; the loser gets an error.
+ */
 async function writeCertificates(env:AuthEnv,row:ConnectionRow,certs:Certificate[]){
   const provider=await env.DB.prepare('SELECT "samlConfig" AS config FROM "ssoProvider" WHERE "providerId"=? LIMIT 1')
     .bind(row.provider_id).first<{config:string|null}>();
@@ -203,12 +227,10 @@ async function writeCertificates(env:AuthEnv,row:ConnectionRow,certs:Certificate
   config.idpMetadata={metadata:buildIdpMetadata({entityID:row.idp_entity_id,ssoRedirectUrl:row.sso_url,
     ssoPostUrl:row.sso_post_url,certificates:certs.map(c=>c.der)})};
   delete config.cert;
-  await env.DB.batch([
-    env.DB.prepare('UPDATE "ssoProvider" SET "samlConfig"=? WHERE "providerId"=? AND "samlConfig" IS NOT NULL')
-      .bind(JSON.stringify(config),row.provider_id),
-    env.DB.prepare("UPDATE nathan_saml_connections SET certificates=?,updated_at=unixepoch() WHERE provider_id=?")
-      .bind(JSON.stringify(certs),row.provider_id)
-  ]);
+  const results=await env.DB.batch(certificateSwapStatements(row.provider_id,row.certificates,JSON.stringify(certs),JSON.stringify(config))
+    .map(({sql,args})=>env.DB.prepare(sql).bind(...args)));
+  if(results[0]?.meta?.changes!==1||results[1]?.meta?.changes!==1)
+    throw Error("The connection's certificates changed concurrently; reload and try again");
 }
 
 /** Rotation step 1: trust the IdP's next signing certificate alongside the current one. */
