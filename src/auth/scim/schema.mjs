@@ -12,3 +12,26 @@ export const DIRECTORY_LIFECYCLE_SCHEMA="CREATE UNIQUE INDEX IF NOT EXISTS scim_
 "  attempts INTEGER NOT NULL DEFAULT 0,\n  last_error TEXT,\n  created_at INTEGER NOT NULL\n);\n"+
 "CREATE INDEX IF NOT EXISTS scim_outbox_resource ON scim_outbox(kind,resource_id);\n"+
 "CREATE TABLE IF NOT EXISTS scim_meta (\n  key TEXT PRIMARY KEY NOT NULL,\n  value TEXT NOT NULL\n);\n";
+/**
+ * NATH-11 review fix: a soft-deleted resource kept its UNIQUE userName/externalId (or displayName) in
+ * the live tables, so a rehire got 409 forever. Deleted resources now move to tombstone tables (kept
+ * for reconciliation and history) and uniqueness covers live resources only. The live tables cannot
+ * be rebuilt with partial indexes inside a Durable Object: foreign_keys cannot be turned off there, so
+ * dropping scim_users would cascade-delete group memberships.
+ */
+export const DIRECTORY_TOMBSTONE_SCHEMA="CREATE TABLE IF NOT EXISTS scim_user_tombstones (\n  id TEXT PRIMARY KEY NOT NULL,\n  external_id TEXT NOT NULL,\n  user_name TEXT NOT NULL,\n"+
+"  display_name TEXT NOT NULL,\n  emails_json TEXT NOT NULL,\n  revision INTEGER NOT NULL,\n  created_at INTEGER NOT NULL,\n  updated_at INTEGER NOT NULL\n);\n"+
+"CREATE TABLE IF NOT EXISTS scim_group_tombstones (\n  id TEXT PRIMARY KEY NOT NULL,\n  display_name TEXT NOT NULL,\n  external_id TEXT,\n"+
+"  revision INTEGER NOT NULL,\n  created_at INTEGER NOT NULL,\n  updated_at INTEGER NOT NULL\n);\n";
+/** One-time move of rows soft-deleted before tombstones existed (run in one transaction; idempotent).
+ * Their memberships were already removed on delete; the DELETEs below only make that certain. */
+export const DIRECTORY_TOMBSTONE_MIGRATION=
+"INSERT OR IGNORE INTO scim_user_tombstones(id,external_id,user_name,display_name,emails_json,revision,created_at,updated_at) "+
+"SELECT id,external_id,user_name,display_name,emails_json,revision,created_at,updated_at FROM scim_users WHERE deleted=1;\n"+
+"DELETE FROM scim_group_members WHERE user_id IN (SELECT id FROM scim_users WHERE deleted=1);\n"+
+"DELETE FROM scim_users WHERE deleted=1;\n"+
+"INSERT OR IGNORE INTO scim_group_tombstones(id,display_name,external_id,revision,created_at,updated_at) "+
+"SELECT id,display_name,external_id,revision,created_at,updated_at FROM scim_groups WHERE deleted=1;\n"+
+"DELETE FROM scim_group_members WHERE group_id IN (SELECT id FROM scim_groups WHERE deleted=1);\n"+
+"DELETE FROM scim_groups WHERE deleted=1;\n"+
+"INSERT OR REPLACE INTO scim_meta(key,value) VALUES('tombstones','1');\n";

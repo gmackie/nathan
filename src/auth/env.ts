@@ -1,6 +1,8 @@
 export interface AuthEnv {
   DB: D1Database;
   SCIM_DIRECTORY?: DurableObjectNamespace;
+  /** NATH-11: SCIM requests per minute per connection (default 600). */
+  NATHAN_SCIM_RATE_LIMIT?: string;
   NATHAN_INSTALL_ACTIVE?: string;
   NATHAN_MCP_WRITE_ENABLED?: string;
   BETTER_AUTH_SECRET: string;
