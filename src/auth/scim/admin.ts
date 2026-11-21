@@ -11,10 +11,12 @@ function randomToken(){
 }
 export async function listScimConnections(env:AuthEnv){
   const result=await env.DB.prepare(
-    "SELECT id,domain,organization_id AS organizationId,mode,enabled,created_at AS createdAt,updated_at AS updatedAt "+
+    "SELECT id,domain,organization_id AS organizationId,mode,enabled,linking_enabled AS linking,jit_enabled AS jit,"+
+    "last_sync_at AS lastSyncAt,last_error_at AS lastErrorAt,created_at AS createdAt,updated_at AS updatedAt "+
     "FROM nathan_scim_connections ORDER BY created_at DESC LIMIT 100"
   ).all();
-  return result.results.map((r:any)=>({...r,enabled:r.enabled===1,baseUrl:new URL(
+  return result.results.map((r:any)=>({...r,enabled:r.enabled===1,linking:r.linking===1,jit:r.jit===1,
+    lifecycle:r.linking===1?"linked":"directory-only",baseUrl:new URL(
     "/scim/v2/"+r.id,env.NATHAN_ISSUER).href}));
 }
 export async function createScimConnection(env:AuthEnv,input:any,actor:string) {

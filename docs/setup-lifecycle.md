@@ -72,7 +72,7 @@ SCIM is not the same as SSO. It provisions directory identities and group data, 
 
 Nathan stores SCIM connection metadata and **one-way SHA-256 hashes** of its high-entropy bearer tokens in D1. The directory itself uses one SQLite-backed Durable Object per connection with atomic transactions. Its endpoints are \`/scim/v2/<connectionId>/Users\` and \`/Groups\`; each connection has a scoped, independently revocable token.
 
-The initial SCIM implementation is deliberately **directory-only**, with users and groups staged transactionally. It does **not** create Better Auth user accounts, implicitly link accounts by email, assign admin rights, deprovision sessions, or satisfy a production directory-lifecycle requirement. Before a connected organization uses SCIM for access control, we must design and test immutable external ID mapping, fail-closed deprovisioning, reconciliation, replay and event delivery.
+New connections are **directory-only**: users and groups are staged transactionally, and nothing is linked, created, granted or revoked. Turning on linking per connection (NATH-11) adds identity linking by immutable externalId (first link only by a verified email on the verified domain), optional just-in-time creation, fail-closed deprovisioning with session and token revocation and back-channel logout, and explicit group mapping. SCIM never assigns admin rights or application roles. Setup for Okta and Entra: [scim.md](scim.md).
 
 Better Auth's official SCIM plugin depends on interactive transaction features unavailable on D1; Nathan therefore uses its own outpost storage boundary. Do not enable the official D1-backed plugin as though it were equivalent.
 

@@ -22,6 +22,9 @@ import { resolveAccess, directoryPrincipal, directoryChanges, pruneRbacChanges, 
 import { handleDirectory, createDirectoryClient } from "./directory";
 import { tokenOverview, applyTokenOperation } from "./tokens";
 import { isMcpOAuthPath, handleMcpOAuth, mcpReturnRedirect, mcpGrantStatus, mcpOverview, applyMcpOperation, pruneMcp } from "./mcp-oauth";
+import { updateScimSettings, changeScimMapping, scimConnectionView, SCIM_ADMIN_ERRORS } from "./scim/lifecycle-admin";
+import { deliverLogouts } from "./logout-queue";
+import { scimUserOperation, scimOutboxView, skipScimOutbox, SCIM_REVIEW_ERRORS } from "./scim/reviews";
 
 function reject(status: number, reason: string) {
   return Response.json({ error: reason }, { status, headers: { "Cache-Control": "no-store" } });
@@ -330,6 +333,69 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     }
   }
 
+  // NATH-11: SCIM lifecycle (linking/JIT toggles, group mappings, status). Admin-only, stepped up, audited.
+  if (url.pathname === "/studio/api/scim/connection" && request.method === "GET") {
+    const session=await auth.api.getSession({headers:request.headers});
+    if(!await isAdminPrincipal(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id))
+      return reject(403,"Admin enrollment incomplete");
+    try{return Response.json(await scimConnectionView(env,url.searchParams.get("id"),
+      {reviewState:url.searchParams.get("reviewState"),reviewOffset:url.searchParams.get("reviewOffset")}),{headers:{"Cache-Control":"no-store"}})}
+    catch(error){
+      if(error instanceof Error&&error.message==="Invalid review filter")return reject(400,"Invalid review filter");
+      return reject(404,"Unknown SCIM connection");
+    }
+  }
+  if (["/studio/api/scim/settings","/studio/api/scim/mappings"].includes(url.pathname) && request.method === "POST") {
+    if(request.headers.get("Origin")!==issuer.origin ||
+       request.headers.get("Sec-Fetch-Site")==="cross-site")return reject(403,"Cross-origin request denied");
+    if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")
+      return reject(415,"JSON required");
+    const session=await auth.api.getSession({headers:request.headers});
+    if(!await isAdminPrincipal(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id))
+      return reject(403,"Verified administrator with completed enrollment required");
+    const raw=await request.text();
+    if(raw.length>4096)return reject(413,"SCIM configuration too large");
+    let body:any;try{body=JSON.parse(raw)}catch{return reject(400,"Invalid JSON")}
+    try{
+      const value=url.pathname.endsWith("/settings")
+        ?await updateScimSettings(env,body,session!.user.id)
+        :await changeScimMapping(env,body,session!.user.id);
+      return Response.json(value,{headers:{"Cache-Control":"no-store"}});
+    }catch(error){
+      return reject(409,error instanceof Error&&SCIM_ADMIN_ERRORS.test(error.message)?error.message:"SCIM lifecycle change rejected");
+    }
+  }
+
+  // NATH-11 review fixes: administrator reviews, keep active / unlink, outbox head and skip.
+  // Admin-only with fresh step-up (mayAdminister), same-origin JSON writes, exact confirmation, audited.
+  if (url.pathname === "/studio/api/scim/outbox" && request.method === "GET") {
+    const session=await auth.api.getSession({headers:request.headers});
+    if(!await isAdminPrincipal(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id))
+      return reject(403,"Admin enrollment incomplete");
+    try{return Response.json(await scimOutboxView(env,url.searchParams.get("id")),{headers:{"Cache-Control":"no-store"}})}
+    catch(error){return reject(409,error instanceof Error&&SCIM_REVIEW_ERRORS.test(error.message)?error.message:"SCIM outbox unavailable");}
+  }
+  if (["/studio/api/scim/users","/studio/api/scim/outbox"].includes(url.pathname) && request.method === "POST") {
+    if(request.headers.get("Origin")!==issuer.origin ||
+       request.headers.get("Sec-Fetch-Site")==="cross-site")return reject(403,"Cross-origin request denied");
+    if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")
+      return reject(415,"JSON required");
+    const session=await auth.api.getSession({headers:request.headers});
+    if(!await isAdminPrincipal(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id))
+      return reject(403,"Verified administrator with completed enrollment required");
+    const raw=await request.text();
+    if(raw.length>4096)return reject(413,"SCIM operation too large");
+    let body:any;try{body=JSON.parse(raw)}catch{return reject(400,"Invalid JSON")}
+    try{
+      const value=url.pathname.endsWith("/users")
+        ?await scimUserOperation(env,body,session!.user.id)
+        :await skipScimOutbox(env,body,session!.user.id);
+      return Response.json(value,{headers:{"Cache-Control":"no-store"}});
+    }catch(error){
+      return reject(409,error instanceof Error&&SCIM_REVIEW_ERRORS.test(error.message)?error.message:"SCIM operation rejected");
+    }
+  }
+
   // NATH-13: roles and minimal RBAC (reads and writes need an enrolled, stepped-up administrator).
   if (["/studio/api/rbac","/studio/api/rbac/groups","/studio/api/rbac/group"].includes(url.pathname) && request.method === "GET") {
     const session=await auth.api.getSession({headers:request.headers});
@@ -420,6 +486,8 @@ export default {
     await env.DB.prepare("DELETE FROM nathan_mcp_limits WHERE expires_at < unixepoch()").run();
     await pruneRbacChanges(env);
     await pruneMcp(env);
+    // NATH-11: retry due back-channel logouts (connection Durable Objects also retry their own).
+    await deliverLogouts(env,{limit:100}).catch(()=>{});
   }
 };
 

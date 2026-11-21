@@ -11,7 +11,7 @@ Start with the [5-minute quickstart](quickstart-rbac.md).
 | `nathan_applications.access_mode` | `approved` (default) or `any_signed_in` |
 | `nathan_rbac_permissions` | per-app permission keys such as `invoices:write`, with a source (`studio`, `code`, `legacy`) |
 | `nathan_rbac_roles`, `nathan_rbac_role_permissions` | per-app roles and the permissions they bundle |
-| `nathan_groups`, `nathan_group_members` | Nathan groups of Better Auth users (`source` `scim` is reserved for NATH-11 group mapping) |
+| `nathan_groups`, `nathan_group_members` | Nathan groups of Better Auth users (`source` `scim`: membership maintained by an explicit SCIM group mapping, see [scim.md](scim.md)) |
 | `nathan_rbac_grants` | `(app, role) → user or group` |
 | `nathan_rbac_changes`, `nathan_rbac_feed_state` | ordered change feed and its pruning watermark |
 
@@ -138,7 +138,7 @@ The result is an `at+jwt` with `aud` set to `https://login.example.com/directory
 
 `GET /directory/v1/changes?cursor=<n>&limit=<1..500>` returns `{changes, cursor, hasMore, observedAt}`, ordered by `seq`. Each change has `seq`, `kind`, `app`, `principal` (`{type, id, subject?}`), `detail` and `at`.
 
-Kinds: `grant.created`, `grant.revoked`, `member.added`, `member.removed`, `group.upserted`, `group.deleted`, `role.upserted`, `role.deleted`, `permission.upserted`, `permission.deleted`, `app.access_mode`, `app.enabled`, `app.disabled`, `app.registered`, `user.banned`, `user.unbanned`, `user.deleted`.
+Kinds: `grant.created`, `grant.revoked`, `member.added`, `member.removed`, `group.upserted`, `group.deleted`, `role.upserted`, `role.deleted`, `permission.upserted`, `permission.deleted`, `app.access_mode`, `app.enabled`, `app.disabled`, `app.registered`, `user.banned`, `user.unbanned`, `user.deleted`, and from SCIM (NATH-11) `user.linked`, `user.deprovisioned`, `user.reactivated`, `user.unlinked`, `user.scim_override`, `group.scim_mapped`, `group.scim_unmapped` (SCIM memberships are `member.added`/`member.removed` with `detail.source = "scim"`).
 
 Blocking and deleting users does not always go through Identity Studio (Better Auth's admin API, MCP, SCIM and SQL can do it too), so D1 triggers in migration 0011 feed those changes, with actor `system:user-state`:
 
@@ -151,4 +151,4 @@ Reads are not audited; every write that changes them is.
 
 ## Not in Nathan
 
-These are out of scope: conditions, approvals, a policy language or resource rules (Gatekeeper); MCP scopes capped by permissions (NATH-14); and SCIM group mapping (NATH-11, which will write `source = 'scim'` groups that Studio does not edit by hand).
+These are out of scope: conditions, approvals, a policy language or resource rules (Gatekeeper); access-token role claims (NATH-15); MCP scopes capped by permissions (NATH-14). SCIM group mapping (NATH-11) writes `source = 'scim'` groups that Studio does not edit by hand, and never grants roles by itself.
