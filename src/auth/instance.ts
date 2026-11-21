@@ -9,7 +9,10 @@ import type { AuthEnv } from "./env";
 import type { SocialCredentials } from "./provider-store";
 import {mayAdminister} from "./bootstrap";
 import {isAdminPrincipal} from "./admin-service";
-import { nathanAccessTokenExtension, MAX_ACCESS_TOKEN_SECONDS, API_SCOPE } from "./tokens";
+import { nathanAccessTokenExtension, guardAuthorizationScopes, MAX_ACCESS_TOKEN_SECONDS, API_SCOPE } from "./tokens";
+
+// NATH-15: the provider's scopes, also Better Auth's default for an authorization request without `scope`.
+const OAUTH_SCOPES = ["openid", "profile", "email", "offline_access", "nathan:read", "nathan:admin", "nathan:directory.read", API_SCOPE];
 
 export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredentials) {
   const issuer = new URL(env.NATHAN_ISSUER);
@@ -34,6 +37,8 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
     account: { encryptOAuthTokens: true, storeStateStrategy: "database" },
     disabledPaths: ["/token"],
     hooks: {
+      // NATH-15: a client not marked agent may not have a user delegate nathan:api.
+      before: createAuthMiddleware(async (ctx) => guardAuthorizationScopes(env, ctx, OAUTH_SCOPES)),
       after: createAuthMiddleware(async (ctx) => {
         // Passkey enrollment never grants admin assurance. Only a newly
         // verified passkey sign-in with a freshly issued session does.
@@ -87,7 +92,7 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
       oauthProvider({
         loginPage: "/sign-in",
         consentPage: "/consent",
-        scopes: ["openid", "profile", "email", "offline_access", "nathan:read", "nathan:admin", "nathan:directory.read", API_SCOPE],
+        scopes: OAUTH_SCOPES,
         // NATH-15: hard cap for every access token (Gatekeeper's limit). Better Auth takes the minimum
         // of this, scope expirations and a resource's accessTokenTtl, so no resource can exceed it.
         accessTokenExpiresIn: MAX_ACCESS_TOKEN_SECONDS,

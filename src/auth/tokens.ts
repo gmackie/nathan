@@ -14,13 +14,14 @@
  * same-origin, size-limited and audited.
  */
 import type { AuthEnv } from "./env";
+import { APIError } from "better-auth/api";
 import { audit } from "./admin-service";
 import { resolveAccess } from "./rbac";
-import { principalKind, evidenceClaims, rolesClaim, audienceApp, validateAudience,
+import { principalKind, evidenceClaims, rolesClaim, audienceApp, validateAudience, liveSession, userBanned, apiScopeAllowed,
   MAX_ACCESS_TOKEN_SECONDS, API_SCOPE } from "../shared/token-claims.mjs";
 
 export { MAX_ACCESS_TOKEN_SECONDS, API_SCOPE };
-/** Scopes a registered audience accepts: user sign-in scopes plus the machine API scope. */
+/** Scopes a registered audience accepts: user sign-in scopes plus the machine and agent API scope. */
 export const AUDIENCE_SCOPES = ["openid", "profile", "email", "offline_access", API_SCOPE];
 
 const CLIENT_ID = /^[A-Za-z0-9._-]{1,200}$/;
@@ -29,39 +30,94 @@ const APP_ID = /^[a-z][a-z0-9-]{0,62}$/;
 type ClaimInput = {
   user?: { id?: unknown } | null;
   client: { clientId: string };
-  sessionId?: string;
+  sessionId?: string | null;
+  scopes?: string[];
+  grantType?: string;
   resources?: string[];
 };
 
+/** An OAuth token-endpoint error (RFC 6749 §5.2) that Better Auth returns as a 400 JSON body. */
+const tokenError = (error: "invalid_grant" | "invalid_scope", description: string) =>
+  new APIError("BAD_REQUEST", { error, error_description: description });
+
 /**
- * Claims Nathan adds to every JWT access token. Errors propagate, so a D1 failure fails the token
- * request rather than issuing a token without its principal kind.
+ * Claims Nathan adds to every JWT access token, and the checks Better Auth does not make before it
+ * issues one. Errors propagate, so a D1 failure fails the token request rather than issuing a token
+ * without its principal kind. The checks run before Better Auth rotates a refresh token, so a
+ * refused refresh leaves the grant as it was.
+ *
+ * For a grant that carries a user (authorization code, or refresh from one):
+ *   - a banned user gets no token (`invalid_grant`), whatever the client;
+ *   - API_SCOPE needs an administrator-marked agent client (`invalid_scope`);
+ *   - a `user` token for a registered audience needs the grant's Better Auth session to be live:
+ *     present, the same user's and unexpired (`invalid_grant`). Signing out, revoking the session
+ *     and banning the user (which deletes the sessions) all end such grants. Nathan refuses rather
+ *     than downgrading the kind. Agent clients keep offline (refresh) access without a live session;
+ *     their tokens say `agent` and carry no session evidence.
  */
 export async function accessTokenClaims(env: AuthEnv, input: ClaimInput): Promise<Record<string, unknown>> {
   const userId = typeof input.user?.id === "string" ? input.user.id : null;
   const resources = Array.isArray(input.resources) ? input.resources.filter(r => typeof r === "string").slice(0, 16) : [];
+  const sessionId = typeof input.sessionId === "string" && input.sessionId ? input.sessionId : null;
   const statements = [env.DB.prepare("SELECT principal_kind FROM nathan_client_principals WHERE client_id=? LIMIT 1").bind(input.client.clientId)];
-  if (userId && resources.length)
-    statements.push(env.DB.prepare("SELECT identifier, app_id FROM nathan_token_audiences WHERE identifier IN (" +
-      resources.map(() => "?").join(",") + ")").bind(...resources));
-  const [kind, audiences] = (await env.DB.batch(statements)).map(r => (r.results ?? []) as any[]);
-  const claims: Record<string, unknown> = {
-    principal_kind: principalKind({ hasUser: userId !== null, clientKind: kind[0]?.principal_kind })
-  };
+  if (userId) {
+    statements.push(env.DB.prepare('SELECT "banned" AS banned, "banExpires" AS banExpires FROM "user" WHERE "id"=? LIMIT 1').bind(userId));
+    statements.push(resources.length
+      ? env.DB.prepare("SELECT identifier, app_id FROM nathan_token_audiences WHERE identifier IN (" + resources.map(() => "?").join(",") + ")").bind(...resources)
+      : env.DB.prepare("SELECT identifier, app_id FROM nathan_token_audiences WHERE 0"));
+    // The grant's session, and passkey evidence that counts only while that session exists.
+    statements.push(env.DB.prepare('SELECT s."id" AS id, s."userId" AS userId, s."expiresAt" AS expiresAt, a.session_id, a.user_id, a.method, a.verified_at ' +
+      'FROM "session" s LEFT JOIN nathan_admin_assurance a ON a.session_id=s."id" AND a.user_id=s."userId" WHERE s."id"=? LIMIT 1').bind(sessionId ?? ""));
+  }
+  const [kindRows, userRows, audiences, sessionRows] = (await env.DB.batch(statements)).map(r => (r.results ?? []) as any[]);
+  const clientKind = kindRows[0]?.principal_kind;
+  const kind = principalKind({ hasUser: userId !== null, clientKind });
+  const claims: Record<string, unknown> = { principal_kind: kind };
   if (!userId) return claims;
-  const appId = audiences ? audienceApp(audiences) : null;
+
+  const now = Date.now();
+  if (userBanned(userRows[0], now)) throw tokenError("invalid_grant", "The user is banned");
+  if (!apiScopeAllowed({ hasUser: true, clientKind, scopes: input.scopes }))
+    throw tokenError("invalid_scope", API_SCOPE + " is only for client credentials and agent clients");
+  const session = liveSession(sessionRows[0], { userId, sessionId: sessionId ?? undefined, now }) ? sessionRows[0] : null;
+  if (kind === "user" && audiences.length > 0 && !session)
+    throw tokenError("invalid_grant", "The sign-in session for this grant has ended");
+
+  const appId = audienceApp(audiences, resources);
   if (appId) {
     const roles = rolesClaim(await resolveAccess(env, appId, userId));
     if (roles) claims.roles = roles;
   }
-  if (typeof input.sessionId === "string" && input.sessionId) {
-    // Evidence counts only while its Better Auth session still exists.
-    const row = await env.DB.prepare(
-      'SELECT a.session_id, a.user_id, a.method, a.verified_at FROM nathan_admin_assurance a JOIN "session" s ON s."id"=a.session_id AND s."userId"=a.user_id ' +
-      "WHERE a.session_id=? AND a.user_id=? LIMIT 1").bind(input.sessionId, userId).first();
-    Object.assign(claims, evidenceClaims(row, { userId, sessionId: input.sessionId }));
-  }
+  if (session && sessionId) Object.assign(claims, evidenceClaims(session, { userId, sessionId }));
   return claims;
+}
+
+/**
+ * Better Auth `hooks.before` check on /oauth2/authorize: a client that is not an
+ * administrator-marked agent may not ask a user to delegate API_SCOPE. An omitted `scope` counts
+ * as asking for it when the client's default scopes include it (Better Auth then grants the
+ * client's scopes, or every provider scope). Refused requests get a 400 `invalid_scope` and no code.
+ */
+export async function guardAuthorizationScopes(env: AuthEnv, ctx: any, providerScopes: readonly string[]): Promise<void> {
+  if (ctx?.path !== "/oauth2/authorize") return;
+  const source = ctx.method === "POST" ? ctx.body : ctx.query;
+  const clientId = source?.client_id;
+  if (typeof clientId !== "string" || !clientId) return; // Better Auth refuses the request itself.
+  const scope = source.scope;
+  const requested = typeof scope === "string" ? scope.split(" ").filter(Boolean) : null;
+  if (requested && !requested.includes(API_SCOPE)) return;
+  const row = await env.DB.prepare('SELECT c."scopes" AS scopes, p.principal_kind AS kind FROM "oauthClient" c ' +
+    'LEFT JOIN nathan_client_principals p ON p.client_id=c."clientId" WHERE c."clientId"=? LIMIT 1').bind(clientId).first<any>();
+  if (!row || row.kind === "agent") return;
+  if (!requested) {
+    let defaults: unknown = null;
+    try { defaults = row.scopes ? JSON.parse(row.scopes) : null; } catch { defaults = null; }
+    const effective = Array.isArray(defaults) ? defaults : providerScopes;
+    if (!effective.includes(API_SCOPE)) return;
+  }
+  throw new APIError("BAD_REQUEST", { error: "invalid_scope",
+    error_description: (requested ? "" : "Name the scopes you need: the default includes " + API_SCOPE + ". ") +
+      API_SCOPE + " is only for client credentials and administrator-marked agent clients" });
 }
 
 /** Registered as `oauthProvider({ extensions: [...] })`; claims are strictly additive. */
@@ -148,11 +204,16 @@ export async function applyTokenOperation(auth: any, env: AuthEnv, headers: Head
   if (op === "audience.remove") {
     const identifier = await registeredAudience(env, body.identifier);
     if (body.confirm !== "CONFIRM REMOVE AUDIENCE " + identifier) throw Error("Explicit confirmation required");
-    return audited(env, actor, "token_audience_remove", identifier, async () => {
+    const links = (await env.DB.prepare('SELECT count(*) AS n FROM "oauthClientResource" WHERE "resourceId"=?').bind(identifier).first<any>())?.n ?? 0;
+    return audited(env, actor, "token_audience_remove", identifier + " unlinked=" + links, async () => {
       // Disable rather than delete: Better Auth refuses new tokens for it; issued tokens expire within 900 s.
       await auth.api.adminUpdateOAuthResource({ headers, params: { identifier }, body: { disabled: true } });
-      await env.DB.prepare("DELETE FROM nathan_token_audiences WHERE identifier=?").bind(identifier).run();
-      return { identifier, removed: true };
+      // Drop every client link with it, so registering the identifier again starts with no clients.
+      const [unlinked] = await env.DB.batch([
+        env.DB.prepare('DELETE FROM "oauthClientResource" WHERE "resourceId"=?').bind(identifier),
+        env.DB.prepare("DELETE FROM nathan_token_audiences WHERE identifier=?").bind(identifier)
+      ]);
+      return { identifier, removed: true, unlinkedClients: unlinked.meta?.changes ?? links };
     });
   }
 
@@ -176,8 +237,14 @@ export async function applyTokenOperation(auth: any, env: AuthEnv, headers: Head
       ? env.DB.prepare("INSERT INTO nathan_client_principals(client_id,principal_kind,set_by) VALUES (?,'agent',?) " +
         "ON CONFLICT(client_id) DO UPDATE SET principal_kind='agent', set_by=excluded.set_by, updated_at=unixepoch()").bind(clientId, actor)
       : env.DB.prepare("DELETE FROM nathan_client_principals WHERE client_id=?").bind(clientId);
+    // Classified by grant again, the client may no longer hold user-delegated API_SCOPE grants:
+    // its refresh and opaque access tokens that carry it are revoked with the change.
+    const revoke = body.kind === "auto" ? [
+      env.DB.prepare('DELETE FROM "oauthRefreshToken" WHERE "clientId"=? AND instr("scopes",?)>0').bind(clientId, API_SCOPE),
+      env.DB.prepare('DELETE FROM "oauthAccessToken" WHERE "clientId"=? AND "userId" IS NOT NULL AND instr("scopes",?)>0').bind(clientId, API_SCOPE)
+    ] : [];
     // The change and its audit row commit together.
-    await env.DB.batch([change, env.DB.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) VALUES (?,?,?,?,?)")
+    await env.DB.batch([change, ...revoke, env.DB.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) VALUES (?,?,?,?,?)")
       .bind(crypto.randomUUID(), actor, "client_principal_kind", clientId + " kind=" + body.kind, "succeeded")]);
     return { clientId, principalKind: body.kind,
       note: "Applies to tokens issued from now on; tokens already issued keep their kind until they expire (at most 900 s)." };

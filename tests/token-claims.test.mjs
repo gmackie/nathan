@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, readdirSync } from "node:fs";
 import {
-  principalKind, evidenceClaims, rolesClaim, audienceApp, validateAudience, PASSKEY_ACR, MAX_ACCESS_TOKEN_SECONDS, API_SCOPE
+  principalKind, evidenceClaims, rolesClaim, audienceApp, validateAudience, PASSKEY_ACR, MAX_ACCESS_TOKEN_SECONDS, API_SCOPE,
+  liveSession, userBanned, apiScopeAllowed, timestampMs
 } from "../src/shared/token-claims.mjs";
 
 test("principal kind: a human session is a user, a client-credentials grant is a machine, an admin-marked client is an agent", () => {
@@ -40,12 +41,59 @@ test("the roles claim is a hint: present only for an allowed principal with role
   assert.equal(rolesClaim({ allowed: true, roles: ["ok", 7] }), undefined, "malformed evaluator output omits the claim");
 });
 
-test("a token's app is the single app bound to its requested audiences, otherwise none", () => {
-  assert.equal(audienceApp([{ identifier: "https://a", app_id: "billing" }]), "billing");
-  assert.equal(audienceApp([{ identifier: "https://a", app_id: "billing" }, { identifier: "https://b", app_id: null }]), "billing");
-  assert.equal(audienceApp([{ identifier: "https://a", app_id: "billing" }, { identifier: "https://b", app_id: "crm" }]), null, "ambiguous");
-  assert.equal(audienceApp([]), null);
-  assert.equal(audienceApp([{ identifier: "https://a", app_id: null }]), null);
+test("a token's app: every requested resource must be a registered audience bound to the same app", () => {
+  const billing = { identifier: "https://a", app_id: "billing" };
+  assert.equal(audienceApp([billing], ["https://a"]), "billing");
+  assert.equal(audienceApp([billing, { identifier: "https://b", app_id: "billing" }], ["https://a", "https://b"]), "billing");
+  // An unbound second audience must not receive the first audience's app roles.
+  assert.equal(audienceApp([billing, { identifier: "https://b", app_id: null }], ["https://a", "https://b"]), null, "unbound second audience");
+  assert.equal(audienceApp([billing, { identifier: "https://b", app_id: "crm" }], ["https://a", "https://b"]), null, "differently bound");
+  // A requested resource that is not a registered audience (Nathan's /mcp, say) is not bound to the app either.
+  assert.equal(audienceApp([billing], ["https://a", "https://login.example.com/mcp"]), null, "unregistered second resource");
+  assert.equal(audienceApp([billing, billing], ["https://a", "https://a"]), "billing", "a repeated resource is one audience");
+  assert.equal(audienceApp([], []), null);
+  assert.equal(audienceApp([billing], []), null, "no requested resource");
+  assert.equal(audienceApp([{ identifier: "https://a", app_id: null }], ["https://a"]), null);
+  assert.equal(audienceApp([billing]), null, "no resource list");
+  assert.equal(audienceApp(null, ["https://a"]), null);
+});
+
+test("a user token needs a live, unexpired session of the same user", () => {
+  const now = 1_800_000_000_000;
+  const row = { id: "s1", userId: "u1", expiresAt: new Date(now + 60_000).toISOString() };
+  assert.equal(liveSession(row, { userId: "u1", sessionId: "s1", now }), true);
+  assert.equal(liveSession(null, { userId: "u1", sessionId: "s1", now }), false, "deleted or revoked session");
+  assert.equal(liveSession(row, { userId: "u1", sessionId: undefined, now }), false, "grant without a session (sid null after deletion)");
+  assert.equal(liveSession(row, { userId: "u2", sessionId: "s1", now }), false, "another user's session");
+  assert.equal(liveSession(row, { userId: "u1", sessionId: "s2", now }), false, "another session");
+  assert.equal(liveSession({ ...row, expiresAt: new Date(now - 1).toISOString() }, { userId: "u1", sessionId: "s1", now }), false, "expired");
+  assert.equal(liveSession({ ...row, expiresAt: now + 60_000 }, { userId: "u1", sessionId: "s1", now }), true, "epoch milliseconds");
+  assert.equal(liveSession({ ...row, expiresAt: "soon" }, { userId: "u1", sessionId: "s1", now }), false, "unparseable expiry");
+  assert.equal(liveSession({ ...row, expiresAt: null }, { userId: "u1", sessionId: "s1", now }), false);
+});
+
+test("a banned user gets no new tokens until the ban expires", () => {
+  const now = 1_800_000_000_000;
+  assert.equal(userBanned({ banned: 1, banExpires: null }, now), true);
+  assert.equal(userBanned({ banned: true }, now), true);
+  assert.equal(userBanned({ banned: 1, banExpires: new Date(now + 1000).toISOString() }, now), true);
+  assert.equal(userBanned({ banned: 1, banExpires: new Date(now - 1000).toISOString() }, now), false, "expired ban");
+  assert.equal(userBanned({ banned: 0 }, now), false);
+  assert.equal(userBanned({ banned: null }, now), false);
+  assert.equal(userBanned(null, now), true, "a missing user row is treated as banned");
+  assert.equal(timestampMs("2026-01-01T00:00:00.000Z"), Date.UTC(2026, 0, 1));
+  assert.equal(timestampMs(1_800_000_000), 1_800_000_000_000, "epoch seconds");
+  assert.ok(Number.isNaN(timestampMs(undefined)));
+});
+
+test("nathan:api is for client credentials and administrator-marked agents, never a plain user delegation", () => {
+  assert.equal(apiScopeAllowed({ hasUser: false, clientKind: undefined, scopes: [API_SCOPE] }), true, "machine");
+  assert.equal(apiScopeAllowed({ hasUser: false, clientKind: "agent", scopes: [API_SCOPE] }), true, "agent, client credentials");
+  assert.equal(apiScopeAllowed({ hasUser: true, clientKind: "agent", scopes: ["openid", API_SCOPE] }), true, "agent acting for a user");
+  assert.equal(apiScopeAllowed({ hasUser: true, clientKind: undefined, scopes: ["openid", API_SCOPE] }), false, "user delegation");
+  assert.equal(apiScopeAllowed({ hasUser: true, clientKind: "human", scopes: [API_SCOPE] }), false, "unknown attribute");
+  assert.equal(apiScopeAllowed({ hasUser: true, clientKind: undefined, scopes: ["openid", "profile"] }), true, "no nathan:api");
+  assert.equal(apiScopeAllowed({ hasUser: true, clientKind: undefined, scopes: "openid nathan:api" }), false, "space-separated string");
 });
 
 test("token audiences are exact HTTPS resource identifiers that cannot shadow Nathan's own resources", () => {

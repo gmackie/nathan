@@ -12,7 +12,11 @@
 
 /** Gatekeeper's default and maximum lifetime for OIDC access tokens. Nathan caps every access token here. */
 export const MAX_ACCESS_TOKEN_SECONDS = 900;
-/** Scope for client-credentials (machine and agent) tokens to APIs and Gatekeeper. Never user-delegated. */
+/**
+ * Scope for machine and agent tokens to APIs and Gatekeeper: client credentials, or an
+ * administrator-marked agent client (which may also act for a signed-in user). Never granted to a
+ * plain user delegation through a client that is not marked agent (see apiScopeAllowed).
+ */
 export const API_SCOPE = "nathan:api";
 /** Values of the `principal_kind` claim. */
 export const PRINCIPAL_KINDS = Object.freeze(["user", "machine", "agent"]);
@@ -53,11 +57,63 @@ export function rolesClaim(access) {
   return [...access.roles].sort();
 }
 
-/** The single application bound to a token's requested audiences, or null when none or ambiguous. */
-export function audienceApp(rows) {
-  if (!Array.isArray(rows)) return null;
-  const apps = new Set(rows.map(r => r?.app_id).filter(a => typeof a === "string" && a));
+/**
+ * The application whose roles a token's `roles` hint may carry: only when every requested resource
+ * is a registered audience and all of them are bound to the same app. One app's roles never go to
+ * an unbound, differently bound or unregistered audience in the same token. (The automatic
+ * `<issuer>/oauth2/userinfo` audience is not a requested resource and is not counted.)
+ */
+export function audienceApp(rows, resources) {
+  if (!Array.isArray(rows) || !Array.isArray(resources)) return null;
+  if (resources.length === 0 || resources.some(r => typeof r !== "string")) return null;
+  const requested = new Set(resources);
+  const bound = new Map(rows.filter(r => r && typeof r.identifier === "string").map(r => [r.identifier, r.app_id]));
+  const apps = new Set();
+  for (const resource of requested) {
+    const app = bound.get(resource);
+    if (typeof app !== "string" || !app) return null;
+    apps.add(app);
+  }
   return apps.size === 1 ? [...apps][0] : null;
+}
+
+/** Milliseconds since the epoch from a D1 date column (ISO text, epoch seconds or milliseconds); NaN otherwise. */
+export function timestampMs(value) {
+  if (typeof value === "number") return Number.isFinite(value) ? (Math.abs(value) < 1e11 ? value * 1000 : value) : NaN;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value !== "string" || !value) return NaN;
+  if (/^\d+$/.test(value)) return timestampMs(Number(value));
+  return Date.parse(value);
+}
+
+/**
+ * A grant may mint a `user` token only while the Better Auth session it is bound to exists (it was
+ * not revoked or deleted, which also happens on ban), belongs to the same user and has not expired.
+ * Better Auth's refresh grant does not check this itself.
+ * @param {any} row the session row: {id, userId, expiresAt}
+ * @param {{userId?: string, sessionId?: string, now?: number}} [grant]
+ */
+export function liveSession(row, { userId, sessionId, now = Date.now() } = {}) {
+  if (!row || typeof row !== "object" || typeof userId !== "string" || typeof sessionId !== "string" || !sessionId) return false;
+  if (row.id !== sessionId || row.userId !== userId) return false;
+  const expires = timestampMs(row.expiresAt);
+  return Number.isFinite(expires) && expires > now;
+}
+
+/** Better Auth admin ban, honoring banExpires. A missing user row counts as banned (fail closed). */
+export function userBanned(row, now = Date.now()) {
+  if (!row || typeof row !== "object") return true;
+  if (!(row.banned === true || row.banned === 1)) return false;
+  if (row.banExpires === null || row.banExpires === undefined) return true;
+  const expires = timestampMs(row.banExpires);
+  return !Number.isFinite(expires) || expires > now;
+}
+
+/** Whether a grant may carry API_SCOPE: always without a user; with a user only for an administrator-marked agent client. */
+export function apiScopeAllowed({ hasUser, clientKind, scopes } = {}) {
+  const list = typeof scopes === "string" ? scopes.split(" ") : Array.isArray(scopes) ? scopes : [];
+  if (!list.includes(API_SCOPE)) return true;
+  return hasUser !== true || clientKind === "agent";
 }
 
 /**
