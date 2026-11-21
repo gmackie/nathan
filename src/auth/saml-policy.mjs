@@ -216,6 +216,11 @@ function decodeSamlMessage(value) {
  *   takes the first, the plugin's form parsing keeps the last), so a
  *   duplicate could make Nathan check one message and the plugin process
  *   another. Refusing duplicates means the checked bytes are the processed bytes.
+ * - Query strings and form bodies must be canonically encoded: a '%' that does
+ *   not start a valid %HH escape is refused. URLSearchParams keeps such a name
+ *   verbatim ("SAMLResp%onse") while workerd's formData(), which the plugin
+ *   uses, drops the stray '%' and reads a second SAMLResponse. The route gate
+ *   additionally compares this parse with formData() itself (formDataMatches).
  * - The ACS accepts only the form-encoded HTTP-POST binding with exactly one
  *   SAMLResponse in the body.
  * - Any SAMLResponse/SAMLRequest in a POST body is decoded as the plugin
@@ -223,7 +228,10 @@ function decodeSamlMessage(value) {
  *   anywhere, or carries encrypted content (Nathan configures no SP
  *   decryption key, so encrypted algorithms could not be inspected).
  */
+const MALFORMED_ESCAPE = /%(?![0-9A-Fa-f]{2})/;
 export function inspectSamlMessage({ endpoint, method, search, contentType, body }) {
+  if (MALFORMED_ESCAPE.test(search ?? ""))
+    return refuse("saml_noncanonical_encoding", "SAML message rejected: malformed percent-encoding");
   const counts = new Map();
   const count = name => { if (SAML_BINDING_PARAMETERS.includes(name)) counts.set(name, (counts.get(name) ?? 0) + 1); };
   for (const name of new URLSearchParams(search ?? "").keys()) count(name);
@@ -231,6 +239,8 @@ export function inspectSamlMessage({ endpoint, method, search, contentType, body
   if (method === "POST") {
     const type = String(contentType ?? "").split(";")[0].trim().toLowerCase();
     if (type === FORM) {
+      if (MALFORMED_ESCAPE.test(body ?? ""))
+        return refuse("saml_noncanonical_encoding", "SAML message rejected: malformed percent-encoding");
       for (const [name, value] of new URLSearchParams(body ?? "")) { count(name); if (SAML_BINDING_PARAMETERS.includes(name)) posted.set(name, value); }
     } else if (type === "application/json" && endpoint !== "acs") {
       let parsed;
@@ -256,4 +266,18 @@ export function inspectSamlMessage({ endpoint, method, search, contentType, body
     if (scan.encrypted) return refuse("saml_encrypted_assertion", "SAML response rejected: encrypted assertions are not supported");
   }
   return null;
+}
+
+/**
+ * True when the runtime's own form parser (what @better-auth/sso reads via
+ * request.formData()) yields exactly the same ordered name/value pairs as the
+ * URLSearchParams parse Nathan inspects. Any disagreement means the checked
+ * bytes may not be the processed bytes, so the gate refuses the message.
+ * @param {string} body @param {Iterable<[string, FormDataEntryValue]>} formEntries
+ */
+export function formDataMatches(body, formEntries) {
+  const expected = [...new URLSearchParams(body ?? "")];
+  const actual = [...formEntries];
+  if (expected.length !== actual.length) return false;
+  return expected.every(([name, value], i) => actual[i][0] === name && actual[i][1] === value);
 }

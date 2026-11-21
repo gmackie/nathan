@@ -341,8 +341,43 @@ test("duplicate SAMLResponse fields are refused before parsing, in either order"
   }
   assert.equal(await db.prepare('SELECT id FROM "user" WHERE email=?').bind(sha1user).first(), null, "no user created");
   const events = (await db.prepare("SELECT actor,target,outcome FROM nathan_security_audit WHERE action='saml_message_rejected'").all()).results;
-  assert.deepEqual(events.filter(e => e.target === PID + ":saml_duplicate_parameter").map(e => [e.actor, e.outcome]),
-    [["anonymous", "rejected"], ["anonymous", "rejected"]], "audited as a security event without payloads");
+  const dup = events.filter(e => e.target === PID + ":saml_duplicate_parameter");
+  assert.ok(dup.length >= 1, "audited as a security event");
+  assert.ok(dup.every(e => e.actor === "anonymous" && e.outcome === "rejected"), "without payloads");
+});
+
+/** Posts a raw form body exactly as given, so malformed escapes reach the Worker untouched. */
+function postRaw(body, url = ACS) {
+  return mf.dispatchFetch(url, {
+    method: "POST", redirect: "manual",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: "https://idp.acme.example" },
+    body
+  });
+}
+
+test("a malformed percent-escape cannot smuggle a second SAMLResponse past the guard", async () => {
+  // URLSearchParams keeps "SAMLResp%onse" as its own name; workerd's formData(), which the
+  // plugin uses, drops the stray '%' and reads a second SAMLResponse (the last one wins).
+  const sha1user = "smuggled@" + DOMAIN;
+  const { id, relayState } = await startLogin();
+  const strong = encodeURIComponent(samlResponse(good({ inResponseTo: id })));
+  const weak = encodeURIComponent(samlResponse(good({ inResponseTo: id, email: sha1user, signatureAlgorithm: "rsa-sha1" })));
+  const body = "SAMLResponse=" + strong + "&RelayState=" + encodeURIComponent(relayState) + "&SAMLResp%onse=" + weak;
+  await assertGateRejected(await postRaw(body), "saml_noncanonical_encoding", "smuggled field name");
+  await assertGateRejected(await postRaw("SAMLResponse=" + strong + "%zz&RelayState=" + encodeURIComponent(relayState)),
+    "saml_noncanonical_encoding", "malformed escape in a value");
+  const slo = ORIGIN + "/api/auth/sso/saml2/sp/slo/" + PID;
+  await assertGateRejected(await mf.dispatchFetch(slo + "?SAMLReq%uest=a&SAMLRequest=b", { redirect: "manual" }),
+    "saml_noncanonical_encoding", "malformed escape in the query");
+  assert.equal(await db.prepare('SELECT id FROM "user" WHERE email=?').bind(sha1user).first(), null, "no user created");
+});
+
+test("rejected SAML messages write at most one audit row per connection, reason and minute", async () => {
+  await db.prepare("DELETE FROM nathan_security_audit WHERE action='saml_message_rejected'").run();
+  for (let i = 0; i < 12; i++)
+    await assertGateRejected(await postForm([["RelayState", "x" + i]]), "saml_missing_response", "flood " + i);
+  const rows = (await db.prepare("SELECT target FROM nathan_security_audit WHERE action='saml_message_rejected'").all()).results;
+  assert.ok(rows.length >= 1 && rows.length <= 2, "flood must not grow the audit log per request, got " + rows.length);
 });
 
 test("duplicate RelayState and repeated SAML query parameters are refused", async () => {

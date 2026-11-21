@@ -7,7 +7,7 @@
 import type { AuthEnv } from "./env";
 import { audit, isAdminPrincipal } from "./admin-service";
 import { mayAdminister } from "./bootstrap";
-import { samlProviderFromPath, samlConnectionUsable, resolveSsoConnection, inspectSamlMessage } from "./saml-policy.mjs";
+import { samlProviderFromPath, samlConnectionUsable, resolveSsoConnection, inspectSamlMessage, formDataMatches } from "./saml-policy.mjs";
 import { listSamlConnections, previewSamlMetadata, createSamlConnection, setSamlConnectionEnabled,
   setSamlProvisioning, addSamlCertificate, retireSamlCertificate } from "./saml-admin";
 
@@ -19,6 +19,18 @@ function reject(status:number,reason:string,code?:string){
 function reason(e:unknown,fallback:string){
   const m=e instanceof Error?e.message:"";
   return m&&m.length<=300&&!/D1_|SQLITE|SQL|stack/i.test(m)?m:fallback;
+}
+
+/**
+ * Security event for a refused SAML message: the connection and the refusal code only,
+ * never the message. This runs before Better Auth's rate limiter, so the row id is
+ * deterministic per connection, code and minute: a flood of unauthenticated rejections
+ * writes at most one row per (connection, code) per minute instead of one per request.
+ */
+async function auditRejection(env:AuthEnv,connection:string,code:string){
+  const minute=Math.floor(Date.now()/60_000);
+  await env.DB.prepare("INSERT OR IGNORE INTO nathan_security_audit (id,actor,action,target,outcome) VALUES (?,?,?,?,?)")
+    .bind("saml-rejected:"+connection+":"+code+":"+minute,"anonymous","saml_message_rejected",connection+":"+code,"rejected").run();
 }
 
 /**
@@ -34,11 +46,18 @@ export async function samlProtocolGate(request:Request,env:AuthEnv,url:URL):Prom
     const raw=request.method==="POST"?await request.clone().text():"";
     if(raw.length>400_000)return reject(413,"SAML message too large");
     const endpoint=url.pathname.includes("/sp/acs/")?"acs":url.pathname.includes("/sp/slo/")?"slo":"logout";
-    const refused=inspectSamlMessage({endpoint,method:request.method,search:url.search,
-      contentType:request.headers.get("Content-Type")??"",body:raw});
+    const contentType=request.headers.get("Content-Type")??"";
+    let refused=inspectSamlMessage({endpoint,method:request.method,search:url.search,contentType,body:raw});
+    if(!refused&&request.method==="POST"&&contentType.split(";")[0].trim().toLowerCase()==="application/x-www-form-urlencoded"){
+      // Parse with the exact primitive the plugin uses; any divergence from what was
+      // inspected means the plugin could process a message Nathan never checked.
+      let entries:Iterable<[string,FormDataEntryValue]>|null=null;
+      try{entries=(await request.clone().formData()).entries()}catch{entries=null}
+      if(!entries||!formDataMatches(raw,entries))
+        refused={status:400,code:"saml_noncanonical_encoding",message:"SAML message rejected: non-canonical form encoding"};
+    }
     if(refused){
-      // Security event: the connection and the refusal code only, never the message.
-      await audit(env,"anonymous","saml_message_rejected",id+":"+refused.code,"rejected");
+      await auditRejection(env,id,refused.code);
       return reject(refused.status,refused.message,refused.code);
     }
     return null;

@@ -192,3 +192,22 @@ test("certificate rotation is compare-and-swap: a stale writer changes nothing",
   assert.deepEqual(state(), ['{"v":"AB"}', '["X","A","B"]']);
   assert.deepEqual(apply(certificateSwapStatements("other", '["X","A","B"]', '[]', '{}')), [0, 0], "scoped to its connection");
 });
+
+test("malformed percent-escapes are refused before any SAML parsing", async () => {
+  const { inspectSamlMessage } = await import("../src/auth/saml-policy.mjs");
+  const form = "application/x-www-form-urlencoded";
+  for (const body of ["SAMLResp%onse=a", "SAMLResponse=a%zz", "SAMLResponse=a%", "SAMLResponse=a%4"])
+    assert.equal(inspectSamlMessage({ endpoint: "acs", method: "POST", search: "", contentType: form, body })?.code,
+      "saml_noncanonical_encoding", body);
+  assert.equal(inspectSamlMessage({ endpoint: "slo", method: "GET", search: "?SAMLReq%uest=a", contentType: "", body: "" })?.code,
+    "saml_noncanonical_encoding");
+});
+
+test("formDataMatches requires the runtime form parse to equal the inspected parse", async () => {
+  const { formDataMatches } = await import("../src/auth/saml-policy.mjs");
+  const body = "SAMLResponse=abc%2B&RelayState=x";
+  assert.equal(formDataMatches(body, [["SAMLResponse", "abc+"], ["RelayState", "x"]]), true);
+  assert.equal(formDataMatches(body, [["SAMLResponse", "abc+"], ["RelayState", "x"], ["SAMLResponse", "evil"]]), false, "extra field");
+  assert.equal(formDataMatches(body, [["SAMLResponse", "evil"], ["RelayState", "x"]]), false, "different value");
+  assert.equal(formDataMatches(body, [["RelayState", "x"], ["SAMLResponse", "abc+"]]), false, "different order");
+});
