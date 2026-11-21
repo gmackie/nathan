@@ -40,7 +40,9 @@
 - [x] One pure evaluator (`src/shared/policy.mjs`) used by the gateway RPC, the SDK's token path, `NathanVerifier.authorize/access` and the directory API.
 - [x] App-scoped `NathanVerifier` binding: each binding pins its application in binding props, answers only for it, and has no directory methods (security review; workerd-tested).
 - [x] Gateway resolves roles over the `NathanVerifier` service binding, caches them for at most 60 s per session, answers 403 on deny, strips inbound `X-Nathan-*` and forwards a signed, ≤ 60 s `X-Nathan-Principal` (workerd-tested: forged/unsigned principals rejected, grant removal effective within the cache window).
-- [x] Worker SDK `nathan(request, env)` with `hasRole`, `can`, `require`; the gateway and bearer-token paths give the same answers (workerd table test).
+- [x] Worker SDK `nathan(request, env)` with `hasRole`, `can`, `require`; the gateway and bearer-token paths give the same answers (workerd table test with access tokens issued by the built identity Worker). Machine (client-credentials) and DPoP-bound tokens are refused on the bearer path.
+- [x] Gateway fails closed with 503 for a missing, throwing, unpinned or mis-pinned binding, a missing or short principal key and a cache TTL outside 0–60 (workerd-tested).
+- [x] Audit trail: rejected Studio RBAC attempts are audited `rejected`; `nathan rbac sync` audits `attempted` first and `partial`/`failed` on error (the D1 REST API cannot run a sync as one transaction).
 - [x] Change feed also carries bans, unbans and deleted users' memberships and grants (D1 triggers; SQLite- and workerd-tested).
 - [x] Directory read API and change feed for Gatekeeper's PIP, with client-credentials authentication (workerd-tested with a token from Nathan's own endpoint).
 - [x] Identity Studio Roles and access (admin-only, step-up, audited, change-fed), permissions as code (`nathan rbac plan|sync`), principal key setup in `nathan protect`. [Quickstart](quickstart-rbac.md), [reference](rbac.md).
