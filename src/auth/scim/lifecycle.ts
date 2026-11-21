@@ -138,16 +138,32 @@ export async function adminProtection(env: AuthEnv, userId: string): Promise<str
   if (adminEmails(env).includes(String(u.email).toLowerCase())) return "an administrator email in NATHAN_ADMIN_EMAILS";
   return null;
 }
-/** Administrators other than `userId` who are not banned (bootstrap owner or enabled admin grant). */
-export async function otherActiveAdmins(env: AuthEnv, userId: string): Promise<number> {
+/** SQL counting administrators other than `userId` who are not banned (bootstrap owner or enabled admin grant). */
+function otherActiveAdminsCount(env: AuthEnv, userId: string): Statement {
   const legacy = env.NATHAN_BOOTSTRAP_REQUIRED !== "true";
-  const row = await first<{ n: number }>(env,
-    'SELECT count(*) AS n FROM "user" u WHERE u."id"<>? AND ifnull(u."banned",0) NOT IN (1,\'1\') AND (' +
+  return statement(
+    'SELECT count(*) FROM "user" u WHERE u."id"<>? AND ifnull(u."banned",0) NOT IN (1,\'1\') AND (' +
     "EXISTS(SELECT 1 FROM nathan_bootstrap_status b WHERE b.admin_user_id=u.\"id\") OR " +
     "EXISTS(SELECT 1 FROM nathan_admin_grants g WHERE g.user_id=u.\"id\" AND g.enabled=1) OR " +
     "(? AND u.\"role\"='admin' AND u.\"emailVerified\" IN (1,'1') AND lower(u.\"email\") IN (SELECT value FROM json_each(?))))",
     userId, legacy ? 1 : 0, JSON.stringify(adminEmails(env)));
+}
+/** Administrators other than `userId` who are not banned (bootstrap owner or enabled admin grant). */
+export async function otherActiveAdmins(env: AuthEnv, userId: string): Promise<number> {
+  const count = otherActiveAdminsCount(env, userId);
+  const row = await first<{ n: number }>(env, "SELECT (" + count.sql + ") AS n", ...count.params);
   return Number(row?.n ?? 0);
+}
+/**
+ * The last-administrator guarantee, inside the deprovisioning batch itself: the batch aborts (the
+ * apply_seq CHECK fails and D1 rolls everything back) unless another active administrator remains
+ * when it commits. D1 serializes batches across every connection's Durable Object, so two
+ * administrators approved in different connections can never both be deprovisioned.
+ */
+function lastAdminGuard(env: AuthEnv, connection: string, scimId: string, userId: string): Statement {
+  const count = otherActiveAdminsCount(env, userId);
+  return statement("UPDATE nathan_scim_users SET apply_seq=-1 WHERE connection_id=? AND scim_id=? AND (" + count.sql + ") < 1",
+    connection, scimId, ...count.params);
 }
 
 type Review = { id: string; state: string; userId: string };
@@ -156,19 +172,37 @@ async function openReview(env: AuthEnv, connection: string, scimId: string, acti
     "SELECT id, state, user_id AS userId FROM nathan_scim_reviews WHERE connection_id=? AND scim_id=? AND action=? AND state IN ('pending','approved')",
     connection, scimId, action);
 }
-/** Opens a review item (once per open action), superseding an open one for a different user. */
-function reviewStatements(connection: string, scimId: string, existing: Review | null, item:
-  { userId: string; action: "link" | "deprovision"; cause: string | null; reason: string; revision: number }): Statement[] {
+/**
+ * Review items a connection may open per hour. A directory (or a stolen bearer token) cannot bury
+ * real reviews under a flood: past the limit the change simply keeps waiting, unapplied, with a note,
+ * and the next directory change or resync opens its review.
+ */
+export const REVIEW_LIMITS = { perConnectionPerHour: 50 };
+const reviewRateLimited = (connection: string) =>
+  "Administrator review not opened: review creation for connection " + connection + " is rate-limited (" +
+  REVIEW_LIMITS.perConnectionPerHour + " per hour); nothing was applied, and the next directory change or resync opens it";
+/**
+ * Opens a review item (once per open action), superseding an open one for a different user.
+ * `limited`: the connection's review rate limit is spent and nothing is opened.
+ */
+async function reviewStatements(env: AuthEnv, connection: string, scimId: string, existing: Review | null, item:
+  { userId: string; action: "link" | "deprovision"; cause: string | null; reason: string; revision: number }): Promise<{ statements: Statement[]; limited: boolean }> {
   if (existing && existing.userId === item.userId) {
     // Still waiting; an approval that can no longer be applied (last administrator) goes back to pending.
-    return existing.state === "pending" ? [] : [statement("UPDATE nathan_scim_reviews SET state='pending', reason=?, decided_by=NULL, decided_at=NULL WHERE id=?", item.reason, existing.id)];
+    return { limited: false, statements: existing.state === "pending" ? []
+      : [statement("UPDATE nathan_scim_reviews SET state='pending', reason=?, decided_by=NULL, decided_at=NULL WHERE id=?", item.reason, existing.id)] };
   }
-  return [
+  const recent = "(SELECT count(*) FROM nathan_scim_reviews WHERE connection_id=? AND created_at>unixepoch()-3600)";
+  const opened = await first<{ n: number }>(env, "SELECT " + recent + " AS n", connection);
+  if (Number(opened?.n ?? 0) >= REVIEW_LIMITS.perConnectionPerHour) return { limited: true, statements: [] };
+  const id = crypto.randomUUID(), audit = auditStatement(actorOf(connection), "scim_admin_review_open", connection + ":" + item.userId + ":" + item.action, "pending");
+  return { limited: false, statements: [
     ...(existing ? [statement("UPDATE nathan_scim_reviews SET state='superseded', decided_at=unixepoch() WHERE id=?", existing.id)] : []),
-    statement("INSERT INTO nathan_scim_reviews(id,connection_id,scim_id,user_id,action,cause,reason,revision) VALUES (?,?,?,?,?,?,?,?)",
-      crypto.randomUUID(), connection, scimId, item.userId, item.action, item.cause, item.reason.slice(0, 300), item.revision),
-    auditStatement(actorOf(connection), "scim_admin_review_open", connection + ":" + item.userId + ":" + item.action, "pending")
-  ];
+    // The limit is checked again in the batch itself, so concurrent appliers cannot exceed it.
+    statement("INSERT INTO nathan_scim_reviews(id,connection_id,scim_id,user_id,action,cause,reason,revision) SELECT ?,?,?,?,?,?,?,? WHERE " + recent + "<?",
+      id, connection, scimId, item.userId, item.action, item.cause, item.reason.slice(0, 300), item.revision, connection, REVIEW_LIMITS.perConnectionPerHour),
+    statement(audit.sql.replace(/VALUES \(\?,\?,\?,\?,\?\)$/, "SELECT ?,?,?,?,? WHERE EXISTS(SELECT 1 FROM nathan_scim_reviews WHERE id=?)"), ...audit.params, id)
+  ] };
 }
 
 /**
@@ -301,9 +335,10 @@ export async function applyUser(env: AuthEnv, policy: ConnectionPolicy, snap: Us
       const decision = await decideLink(env, policy, snap, row);
       if ("note" in decision) note = decision.note;
       else if ("review" in decision) {
-        note = decision.review.reason;
-        statements.push(...reviewStatements(connection, snap.id, await openReview(env, connection, snap.id, "link"),
-          { userId: decision.review.userId, action: "link", cause: null, reason: decision.review.reason, revision: snap.revision }));
+        const opened = await reviewStatements(env, connection, snap.id, await openReview(env, connection, snap.id, "link"),
+          { userId: decision.review.userId, action: "link", cause: null, reason: decision.review.reason, revision: snap.revision });
+        note = opened.limited ? reviewRateLimited(connection) : decision.review.reason;
+        statements.push(...opened.statements);
       } else {
         if ("create" in decision) {
           // Just-in-time: the directory record does not prove the email, so it stays unverified.
@@ -331,18 +366,16 @@ export async function applyUser(env: AuthEnv, policy: ConnectionPolicy, snap: Us
     }
   }
   const existing = userId && !created
-    ? await first<{ banned: unknown }>(env, 'SELECT "banned" AS banned FROM "user" WHERE "id"=?', userId) : null;
-  let deprovisioned = false;
+    ? await first<{ banned: unknown; reason: string | null; expires: unknown }>(env,
+      'SELECT "banned" AS banned, "banReason" AS reason, "banExpires" AS expires FROM "user" WHERE "id"=?', userId) : null;
+  let deprovisioned = false, adminGuard = false;
   if (userId) {
     const cause = snap.deleted ? "deleted" : "deactivated";
     if (snap.deleted || !snap.active) {
-      // An administrator lifted Nathan's SCIM ban outside SCIM (Better Auth admin API, by hand): record
-      // it as an override so this replay, and every later one for the same cause, leaves it alone.
-      if (state === "deprovisioned" && !override.cause && existing && !truthy(existing.banned)) {
-        override = { cause: truthy(row?.deleted) ? "deleted" : "deactivated", by: "out-of-band unban (detected by reconciliation)", at: nowSeconds };
-        scimBanned = false;
-        tail.push(auditStatement(actor, "scim_override_detected", connection + ":" + userId, "recorded"));
-      }
+      // An administrator lifting Nathan's own SCIM ban outside SCIM is recorded as an override by the
+      // nathan_scim_ban_changed trigger (migration 0016) when it happens, on every path. A ban that is
+      // simply missing here (an expiring ban that lapsed, or one that replaced Nathan's) is no
+      // override: the user is banned again below.
       // A different cause than the one an administrator overrode is a new deprovision change.
       const renewed = Boolean(override.cause && override.cause !== cause);
       if (renewed) override = { cause: null, by: null, at: null };
@@ -356,23 +389,35 @@ export async function applyUser(env: AuthEnv, policy: ConnectionPolicy, snap: Us
           const review = await openReview(env, connection, snap.id, "deprovision");
           const approved = review?.state === "approved" && review.userId === userId;
           if (approved && await otherActiveAdmins(env, userId) > 0) {
-            tail.push(statement("UPDATE nathan_scim_reviews SET state='applied' WHERE id=?", review!.id),
+            adminGuard = true;
+            tail.push(lastAdminGuard(env, connection, snap.id, userId),
+              statement("UPDATE nathan_scim_reviews SET state='applied' WHERE id=?", review!.id),
               auditStatement(actor, "scim_admin_review_apply", connection + ":" + userId + ":deprovision", "succeeded"));
           } else {
             allowed = false;
             note = approved
               ? "Not deprovisioned: this is the last administrator; SCIM never removes the last administrator"
               : "Deprovisioning waits for administrator review: this is a Nathan administrator (" + protection + ")";
-            tail.push(...reviewStatements(connection, snap.id, review, { userId, action: "deprovision", cause, reason: note, revision: snap.revision }));
+            const opened = await reviewStatements(env, connection, snap.id, review, { userId, action: "deprovision", cause, reason: note, revision: snap.revision });
+            if (opened.limited) note = reviewRateLimited(connection);
+            tail.push(...opened.statements);
           }
         }
         if (allowed) {
           const transition = state !== "deprovisioned" || renewed;
+          // Nathan takes over any ban that can lapse (an expiring suspension must not end a directory
+          // deprovisioning) and bans again when its ban is missing. Only a permanent ban an
+          // administrator wrote is left as it is: it cannot lapse, and reactivation never lifts it.
+          const banned = Boolean(existing && truthy(existing.banned));
+          const ours = banned && existing!.reason === scimBanReason(connection) && existing!.expires == null;
+          const foreignPermanent = banned && !ours && existing!.expires == null;
+          if (created || (!ours && !foreignPermanent)) {
+            tail.push(statement('UPDATE "user" SET "banned"=1, "banReason"=?, "banExpires"=NULL, "updatedAt"=? WHERE "id"=? ' +
+              'AND NOT (ifnull("banned",0) IN (1,\'1\') AND "banExpires" IS NULL AND ifnull("banReason",\'\')<>?)',
+              scimBanReason(connection), now, userId, scimBanReason(connection)));
+          }
+          scimBanned = created || !foreignPermanent;
           if (transition || force) {
-            if (created || (existing && !truthy(existing.banned))) {
-              tail.push(statement('UPDATE "user" SET "banned"=1, "banReason"=?, "banExpires"=NULL, "updatedAt"=? WHERE "id"=?', scimBanReason(connection), now, userId));
-              scimBanned = true;
-            }
             if (transition) tail.push(statement(
               "INSERT INTO nathan_backchannel_deliveries(id,client_id,user_id,connection_id,reason) " +
               "SELECT lower(hex(randomblob(16))), c.\"clientId\", ?, ?, ? FROM \"oauthClient\" c " +
@@ -429,6 +474,9 @@ export async function applyUser(env: AuthEnv, policy: ConnectionPolicy, snap: Us
   try { await commit(env, statements); }
   catch (error) {
     if (await lostRace(env, "nathan_scim_users", connection, snap.id, seq, snap.revision)) return UNCHANGED;
+    // The last-administrator guard aborted the batch (another administrator was deprovisioned
+    // meanwhile, in any connection): apply again, which records the refusal and reopens the review.
+    if (adminGuard && userId && await otherActiveAdmins(env, userId) === 0) return applyUser(env, policy, snap, { ...options, force: true });
     throw error;
   }
   return { changed: true, deprovisioned };
@@ -458,32 +506,41 @@ export async function applyGroup(env: AuthEnv, policy: ConnectionPolicy, snap: G
     for (const userId of current) if (!want.has(userId)) work.push({ remove: true, statements: membershipStatements(connection, userId, [], [mapping.groupId]) });
     for (const userId of desired) if (!have.has(userId)) work.push({ remove: false, statements: membershipStatements(connection, userId, [mapping.groupId], []) });
   }
-  const seq = row ? Number(row.seq) : null;
-  const marker = [guardStatement("nathan_scim_groups", connection, snap.id, seq, statement(
+  // Every batch, intermediate ones included, starts with the compare-and-set on apply_seq: a stale
+  // applier (one that read the group before another writer committed) commits nothing at all.
+  let seq = row ? Number(row.seq) : null;
+  const guard = () => guardStatement("nathan_scim_groups", connection, snap.id, seq, statement(
     "INSERT INTO nathan_scim_groups(connection_id,scim_id,external_id,display_name,apply_seq) VALUES (?,?,?,?,1)",
-    connection, snap.id, snap.externalId, snap.displayName)), statement(
+    connection, snap.id, snap.externalId, snap.displayName));
+  const marker = statement(
     "INSERT INTO nathan_scim_groups(connection_id,scim_id,external_id,display_name,members,deleted,applied_revision,updated_at) VALUES (?,?,?,?,?,?,?,unixepoch()) " +
     "ON CONFLICT(connection_id,scim_id) DO UPDATE SET external_id=excluded.external_id, display_name=excluded.display_name, members=excluded.members, " +
     "deleted=excluded.deleted, applied_revision=excluded.applied_revision, updated_at=unixepoch()",
-    connection, snap.id, snap.externalId, snap.displayName, snap.deleted ? 0 : snap.members.length, snap.deleted ? 1 : 0, snap.revision)];
+    connection, snap.id, snap.externalId, snap.displayName, snap.deleted ? 0 : snap.members.length, snap.deleted ? 1 : 0, snap.revision);
   const perBatch = RECONCILE_LIMITS.statementsPerBatch;
   let next = 0;
+  const partial = (): ApplyResult => ({ changed: true, deprovisioned: false, partial: true, removalsPending: work.slice(next).some(w => w.remove) });
   for (;;) {
-    const room = Math.min(perBatch, budget ? budget.remaining : Infinity);
+    const room = Math.min(perBatch, budget ? budget.remaining : Infinity) - 1;
     const batch: Statement[] = [];
     while (next < work.length && batch.length + work[next].statements.length <= room) batch.push(...work[next++].statements);
-    if (next === work.length && batch.length + marker.length <= room) {
-      try { await commit(env, [...batch, ...marker]); }
-      catch (error) {
-        if (await lostRace(env, "nathan_scim_groups", connection, snap.id, seq, snap.revision)) return UNCHANGED;
-        throw error;
-      }
-      return { changed: true, deprovisioned: false };
-    }
+    const complete = next === work.length && batch.length + 1 <= room;
     // Budget spent: the next invocation recomputes what is left from D1 and continues.
-    if (!batch.length) return { changed: true, deprovisioned: false, partial: true, removalsPending: work.slice(next).some(w => w.remove) };
-    await commit(env, batch);
+    if (!complete && !batch.length) return partial();
+    try { await commit(env, [guard(), ...batch, ...(complete ? [marker] : [])]); }
+    catch (error) {
+      if (await lostRace(env, "nathan_scim_groups", connection, snap.id, seq, snap.revision)) return UNCHANGED;
+      // Another writer is applying this group: stop; the next invocation recomputes from D1.
+      if (await seqMoved(env, "nathan_scim_groups", connection, snap.id, seq)) return partial();
+      throw error;
+    }
+    if (complete) return { changed: true, deprovisioned: false };
+    seq = seq === null ? 1 : seq + 1;
   }
+}
+async function seqMoved(env: AuthEnv, table: string, connection: string, scimId: string, seq: number | null) {
+  const now = await first<{ seq: number }>(env, "SELECT apply_seq AS seq FROM " + table + " WHERE connection_id=? AND scim_id=?", connection, scimId);
+  return Boolean(now && Number(now.seq) !== (seq ?? -1));
 }
 
 export async function markSynced(env: AuthEnv, connectionId: string) {

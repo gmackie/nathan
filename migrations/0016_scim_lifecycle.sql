@@ -111,3 +111,26 @@ CREATE TABLE IF NOT EXISTS nathan_backchannel_deliveries (
   updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 CREATE INDEX IF NOT EXISTS nathan_backchannel_due ON nathan_backchannel_deliveries(state,next_attempt_at);
+-- Whose ban is it. Nathan's SCIM ban is permanent (banExpires NULL) and carries the reason
+-- 'SCIM deprovisioned (connection <id>)' (src/auth/scim/lifecycle.ts scimBanReason). Only lifting
+-- that ban outside SCIM (Better Auth's admin unban, or by hand) is an administrator override: it is
+-- recorded here, on every path, at the moment it happens. When the ban is replaced instead (an
+-- administrator's ban, possibly with an expiry), it is no longer Nathan's: scim_banned is cleared, so
+-- that ban lapsing later is not an override and the next resync bans the deprovisioned user again.
+CREATE TRIGGER IF NOT EXISTS nathan_scim_ban_changed AFTER UPDATE OF "banned","banReason","banExpires" ON "user"
+  WHEN OLD."banned" IN (1,'1') AND OLD."banExpires" IS NULL AND OLD."banReason" LIKE 'SCIM deprovisioned (connection %)'
+    AND NOT (NEW."banned" IN (1,'1') AND NEW."banExpires" IS NULL AND NEW."banReason" IS OLD."banReason")
+BEGIN
+  INSERT INTO nathan_security_audit(id,actor,action,target,outcome)
+    SELECT lower(hex(randomblob(16))), 'scim:' || s.connection_id, 'scim_override_detected', s.connection_id || ':' || NEW."id", 'recorded'
+    FROM nathan_scim_users s
+    WHERE s.user_id=NEW."id" AND s.scim_banned=1 AND s.link_state='deprovisioned' AND s.override_cause IS NULL
+      AND OLD."banReason"='SCIM deprovisioned (connection ' || s.connection_id || ')' AND ifnull(NEW."banned" IN (1,'1'),0)=0;
+  UPDATE nathan_scim_users SET scim_banned=0,
+    override_cause=CASE WHEN ifnull(NEW."banned" IN (1,'1'),0) THEN override_cause WHEN deleted=1 THEN 'deleted' ELSE 'deactivated' END,
+    override_by=CASE WHEN ifnull(NEW."banned" IN (1,'1'),0) THEN override_by ELSE 'out-of-band unban (Better Auth admin API or D1)' END,
+    override_at=CASE WHEN ifnull(NEW."banned" IN (1,'1'),0) THEN override_at ELSE unixepoch() END,
+    updated_at=unixepoch()
+  WHERE user_id=NEW."id" AND scim_banned=1 AND link_state='deprovisioned' AND override_cause IS NULL
+    AND OLD."banReason"='SCIM deprovisioned (connection ' || connection_id || ')';
+END;

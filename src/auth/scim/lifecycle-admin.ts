@@ -5,10 +5,10 @@
  * same-origin JSON request. Every attempt is audited: succeeded, failed, or rejected before writing.
  */
 import type { AuthEnv } from "../env";
-import { audit } from "../admin-service";
+import { audit } from "../admin-service.ts";
 import { isGroupId } from "../../shared/policy.mjs";
 import { changeStatement, auditStatement } from "../../shared/rbac-store.mjs";
-import { isVerifiedDomain } from "./lifecycle";
+import { isVerifiedDomain } from "./lifecycle.ts";
 
 const CID = /^[a-z][a-z0-9-]{1,62}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -118,10 +118,25 @@ async function unmapGroup(env: AuthEnv, input: any, actor: string) {
   });
 }
 
+const REVIEW_STATES = ["pending", "approved", "applied", "dismissed", "superseded"];
+export const REVIEW_PAGE = 100;
+/**
+ * Which review items the Studio view shows: an optional state filter and an offset, a page of
+ * REVIEW_PAGE at a time. Open items (pending, then approved) come first, oldest first, so a burst of
+ * newer items never hides one that has been waiting; decided items follow, newest first.
+ */
+function reviewQuery(options: { reviewState?: unknown; reviewOffset?: unknown }) {
+  const state = options.reviewState === undefined || options.reviewState === null || options.reviewState === "" ? null : options.reviewState;
+  if (state !== null && !REVIEW_STATES.includes(state as string)) throw reject("Invalid review filter");
+  const raw = options.reviewOffset === undefined || options.reviewOffset === null || options.reviewOffset === "" ? "0" : String(options.reviewOffset);
+  if (!/^\d{1,6}$/.test(raw)) throw reject("Invalid review filter");
+  return { state: state as string | null, offset: Number(raw) };
+}
 /** Studio view of one connection: policy, link status, mappings, last sync, error log, logout queue. */
-export async function scimConnectionView(env: AuthEnv, id: unknown) {
+export async function scimConnectionView(env: AuthEnv, id: unknown, options: { reviewState?: unknown; reviewOffset?: unknown } = {}) {
   if (typeof id !== "string" || !CID.test(id)) throw reject("Invalid SCIM connection id");
-  const [connections, users, groups, mappings, errors, deliveries, reviews] = (await env.DB.batch([
+  const page = reviewQuery(options);
+  const [connections, users, groups, mappings, errors, deliveries, reviews, reviewCounts] = (await env.DB.batch([
     env.DB.prepare("SELECT id, domain, organization_id AS organizationId, enabled, linking_enabled AS linking, jit_enabled AS jit, " +
       "last_sync_at AS lastSyncAt, last_error_at AS lastErrorAt FROM nathan_scim_connections WHERE id=?").bind(id),
     env.DB.prepare('SELECT s.scim_id AS scimId, s.external_id AS externalId, s.user_name AS userName, s.active, s.deleted, s.link_state AS linkState, ' +
@@ -138,7 +153,11 @@ export async function scimConnectionView(env: AuthEnv, id: unknown) {
     env.DB.prepare('SELECT r.id, r.scim_id AS scimId, s.user_name AS userName, r.user_id AS userId, u."email" AS email, r.action, r.cause, r.reason, r.state, ' +
       'r.created_at AS createdAt, r.decided_by AS decidedBy, r.decided_at AS decidedAt FROM nathan_scim_reviews r LEFT JOIN "user" u ON u."id"=r.user_id ' +
       "LEFT JOIN nathan_scim_users s ON s.connection_id=r.connection_id AND s.scim_id=r.scim_id " +
-      "WHERE r.connection_id=? ORDER BY r.state IN ('pending','approved') DESC, r.created_at DESC LIMIT 100").bind(id)
+      "WHERE r.connection_id=? AND (? IS NULL OR r.state=?) " +
+      "ORDER BY CASE r.state WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 ELSE 2 END, " +
+      "CASE WHEN r.state IN ('pending','approved') THEN r.created_at ELSE -r.created_at END, r.id LIMIT ? OFFSET ?")
+      .bind(id, page.state, page.state, REVIEW_PAGE, page.offset),
+    env.DB.prepare("SELECT state, count(*) AS n FROM nathan_scim_reviews WHERE connection_id=? GROUP BY state").bind(id)
   ])).map(r => (r.results ?? []) as any[]);
   const c = connections[0];
   if (!c) throw reject("Unknown SCIM connection");
@@ -153,8 +172,12 @@ export async function scimConnectionView(env: AuthEnv, id: unknown) {
     users: users.map(u => ({ ...u, active: u.active === 1, deleted: u.deleted === 1 })),
     groups: groups.map(g => ({ ...g, deleted: g.deleted === 1 })),
     mappings, errors,
-    // Directory changes held for an administrator (src/auth/scim/reviews.ts): pending first.
+    // Directory changes held for an administrator (src/auth/scim/reviews.ts): pending first, oldest
+    // first, one page at a time, with the count of every state so nothing is buried.
     reviews,
+    reviewCounts: Object.fromEntries(reviewCounts.map(r => [r.state, Number(r.n)])),
+    reviewPage: { state: page.state, offset: page.offset, limit: REVIEW_PAGE,
+      total: page.state ? Number(reviewCounts.find(r => r.state === page.state)?.n ?? 0) : reviewCounts.reduce((sum, r) => sum + Number(r.n), 0) },
     logoutDeliveries: Object.fromEntries(deliveries.map(d => [d.state, d.n]))
   };
 }

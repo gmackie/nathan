@@ -17,8 +17,8 @@
  */
 import type { AuthEnv } from "../env";
 import { changeStatement, auditStatement } from "../../shared/rbac-store.mjs";
-import { guarded, reject, requireConnection } from "./lifecycle-admin";
-import { otherActiveAdmins, recordError, scimBanReason } from "./lifecycle";
+import { guarded, reject, requireConnection } from "./lifecycle-admin.ts";
+import { otherActiveAdmins, recordError, scimBanReason } from "./lifecycle.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** Messages safe to show an administrator (worker.ts maps anything else to a generic rejection). */
@@ -40,6 +40,13 @@ async function directory(env: AuthEnv, connection: string, op: "requeue" | "outb
       ...(body === undefined ? {} : { "Content-Type": "application/json" }) }
   }));
   return { ok: response.ok, status: response.status, body: await response.json().catch(() => ({})) as any };
+}
+
+/** Decides a pending review item; refuses when another decision got there first. */
+async function decide(env: AuthEnv, id: string, state: "approved" | "dismissed", actor: string) {
+  const result = await env.DB.prepare("UPDATE nathan_scim_reviews SET state=?, decided_by=?, decided_at=unixepoch() WHERE id=? AND state='pending'")
+    .bind(state, actor, id).run();
+  if (!Number(result.meta?.changes ?? 0)) throw reject("Review item is no longer pending (decided meanwhile); nothing changed");
 }
 
 type ReviewRow = { id: string; connection: string; scimId: string; userId: string; action: "link" | "deprovision"; cause: string | null;
@@ -91,10 +98,10 @@ async function approve(env: AuthEnv, connection: string, input: any, actor: stri
       .bind(review.userId, connection, connection, review.scimId).first())
       throw reject("That Nathan user is already linked to a directory user");
   }
-  await commit(env, [
-    statement("UPDATE nathan_scim_reviews SET state='approved', decided_by=?, decided_at=unixepoch() WHERE id=? AND state='pending'", actor, review.id),
-    auditStatement(actor, "scim_review_approve", connection + ":" + review.userId + ":" + review.action, "succeeded")
-  ]);
+  // The audit row says what the conditional update did: another decision in between makes this a
+  // refusal (audited "rejected" by guarded), never a "succeeded" that changed nothing.
+  await decide(env, review.id, "approved", actor);
+  await commit(env, [auditStatement(actor, "scim_review_approve", connection + ":" + review.userId + ":" + review.action, "succeeded")]);
   // The Durable Object re-applies the directory user now; the approval is consumed exactly once.
   const applied = await directory(env, connection, "requeue", { kind: "User", id: review.scimId }).catch(() => null);
   const state = (await env.DB.prepare("SELECT state FROM nathan_scim_reviews WHERE id=?").bind(review.id).first<{ state: string }>())?.state;
@@ -107,10 +114,8 @@ async function approve(env: AuthEnv, connection: string, input: any, actor: stri
 async function dismiss(env: AuthEnv, connection: string, input: any, actor: string) {
   const review = await loadReview(env, connection, input.review);
   if (input.confirm !== "CONFIRM DISMISS " + review.action.toUpperCase() + " " + review.email) throw reject("Exact confirmation required");
-  const statements = [
-    statement("UPDATE nathan_scim_reviews SET state='dismissed', decided_by=?, decided_at=unixepoch() WHERE id=? AND state='pending'", actor, review.id),
-    auditStatement(actor, "scim_review_dismiss", connection + ":" + review.userId + ":" + review.action, "succeeded")
-  ];
+  await decide(env, review.id, "dismissed", actor);
+  const statements = [auditStatement(actor, "scim_review_dismiss", connection + ":" + review.userId + ":" + review.action, "succeeded")];
   if (review.action === "deprovision")
     // Recorded like keep-active, for the directory's current cause: replays of this deprovisioning
     // leave the administrator alone; a new deprovision change opens a new review.
@@ -130,11 +135,13 @@ async function keepActive(env: AuthEnv, connection: string, input: any, actor: s
   if (user.state !== "deprovisioned") throw reject("The directory reports this user active; nothing to keep active");
   const cause = user.deleted === 1 ? "deleted" : "deactivated";
   await commit(env, [
+    // The override is recorded first, so the unban below is not also logged as an out-of-band one
+    // (migration 0016's nathan_scim_ban_changed trigger).
+    statement("UPDATE nathan_scim_users SET override_cause=?, override_by=?, override_at=unixepoch(), scim_banned=0, link_note=?, updated_at=unixepoch() WHERE connection_id=? AND scim_id=?",
+      cause, actor, "Kept active by an administrator", connection, user.scimId),
     // Only Nathan's own SCIM ban is lifted; an administrator's ban stays.
     statement('UPDATE "user" SET "banned"=0, "banReason"=NULL, "banExpires"=NULL, "updatedAt"=? WHERE "id"=? AND "banned" IN (1,\'1\') AND "banReason"=?',
       new Date().toISOString(), user.userId, scimBanReason(connection)),
-    statement("UPDATE nathan_scim_users SET override_cause=?, override_by=?, override_at=unixepoch(), scim_banned=0, link_note=?, updated_at=unixepoch() WHERE connection_id=? AND scim_id=?",
-      cause, actor, "Kept active by an administrator", connection, user.scimId),
     statement("UPDATE nathan_scim_reviews SET state='dismissed', decided_by=?, decided_at=unixepoch() WHERE connection_id=? AND scim_id=? AND action='deprovision' AND state IN ('pending','approved')",
       actor, connection, user.scimId),
     changeStatement({ kind: "user.scim_override", principalType: "user", principalId: user.userId, detail: { connection, cause }, actor }),

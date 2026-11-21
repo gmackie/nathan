@@ -25,6 +25,10 @@ export const SCIM_LIFECYCLE_HTML = `<h3>Directory lifecycle</h3>
   <button id="scim-map">Map group</button><button class="secondary" id="scim-unmap">Remove mapping and its memberships</button>
   <h4>Administrator reviews</h4>
   <p>Load the connection above, then pick a pending review by its ID. Approving applies the directory's change once; dismissing keeps the account as it is until the directory sends a new change.</p>
+  <p>Open reviews are listed first, oldest first, 100 at a time, with the count of each state; a connection opens at most 50 reviews an hour, so a flood from the directory cannot bury a real one.</p>
+  <label>Show reviews<select id="scim-review-filter"><option value="">Open first (pending, then approved), oldest first</option><option value="pending">Pending only</option><option value="approved">Approved, not yet applied</option><option value="applied">Applied</option><option value="dismissed">Dismissed</option><option value="superseded">Superseded</option></select></label>
+  <label>Starting at item<input id="scim-review-offset" type="number" min="0" step="100" value="0"></label>
+  <button class="secondary" id="scim-review-page">Show reviews</button><p id="scim-review-summary" role="status"></p>
   <label>Review ID<input id="scim-review-id" autocomplete="off"></label>
   <button id="scim-review-approve">Approve</button><button class="secondary" id="scim-review-dismiss">Dismiss</button>
   <h4>Directory user overrides</h4>
@@ -46,13 +50,15 @@ export const SCIM_LIFECYCLE_SCRIPT = `
       const fail=e=>{el('scim-life-status').textContent=e.message};
       async function load(){
         try{
-          const v=await j('/studio/api/scim/connection?id='+encodeURIComponent(id()));
+          const v=await j('/studio/api/scim/connection?id='+encodeURIComponent(id())+'&reviewState='+encodeURIComponent(el('scim-review-filter').value)+'&reviewOffset='+encodeURIComponent(el('scim-review-offset').value||'0'));
           view=v;
+          el('scim-review-summary').textContent='Reviews: '+Object.entries(v.reviewCounts).map(e=>e[1]+' '+e[0]).join(', ')+'. Showing '+(v.reviewPage.total?v.reviewPage.offset+1:0)+'–'+Math.min(v.reviewPage.offset+v.reviewPage.limit,v.reviewPage.total)+' of '+v.reviewPage.total+'.';
           el('scim-life-linking').checked=v.connection.linking;el('scim-life-jit').checked=v.connection.jit;
           el('scim-life-view').textContent=JSON.stringify(v,null,2);
         }catch(e){el('scim-life-view').textContent=e.message}
       }
       el('scim-life-load').onclick=load;
+      el('scim-review-page').onclick=load;
       el('scim-life-save').onclick=async()=>{
         const linking=el('scim-life-linking').checked,jit=el('scim-life-jit').checked;
         if(!confirm('Set linking '+(linking?'ON':'OFF')+' and just-in-time creation '+(jit?'ON':'OFF')+' for '+id()+'?\\n\\nEvery staged directory user is re-applied now: matching users are linked, and linked users the directory deactivated or deleted are blocked and lose every session and token (administrators wait for review).'))return;

@@ -334,8 +334,12 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     const session=await auth.api.getSession({headers:request.headers});
     if(!await isAdminPrincipal(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id))
       return reject(403,"Admin enrollment incomplete");
-    try{return Response.json(await scimConnectionView(env,url.searchParams.get("id")),{headers:{"Cache-Control":"no-store"}})}
-    catch{return reject(404,"Unknown SCIM connection");}
+    try{return Response.json(await scimConnectionView(env,url.searchParams.get("id"),
+      {reviewState:url.searchParams.get("reviewState"),reviewOffset:url.searchParams.get("reviewOffset")}),{headers:{"Cache-Control":"no-store"}})}
+    catch(error){
+      if(error instanceof Error&&error.message==="Invalid review filter")return reject(400,"Invalid review filter");
+      return reject(404,"Unknown SCIM connection");
+    }
   }
   if (["/studio/api/scim/settings","/studio/api/scim/mappings"].includes(url.pathname) && request.method === "POST") {
     if(request.headers.get("Origin")!==issuer.origin ||

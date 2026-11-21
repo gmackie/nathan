@@ -8,7 +8,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { d1, migratedDatabase } from "./fixtures/d1-sqlite.mjs";
-import { applyUser, applyGroup, adminProtection, Budget, RECONCILE_LIMITS, scimBanReason } from "../src/auth/scim/lifecycle.ts";
+import { applyUser, applyGroup, adminProtection, Budget, RECONCILE_LIMITS, REVIEW_LIMITS, scimBanReason } from "../src/auth/scim/lifecycle.ts";
+import { scimUserOperation } from "../src/auth/scim/reviews.ts";
+import { scimConnectionView } from "../src/auth/scim/lifecycle-admin.ts";
 
 const policy = { id: "acme", domain: "acme.example", organizationId: null, enabled: true, linking: true, jit: false, domainVerified: true };
 const ADMIN_EMAILS = "root@acme.example";
@@ -249,4 +251,223 @@ test("a mapped group larger than one invocation's budget is applied in bounded b
   do { const b = new Budget(RECONCILE_LIMITS.statementsPerInvocation); r = await applyGroup(b.wrap(t.env), policy, next, { budget: b }); } while (r.partial && ++guard < 20);
   assert.equal(t.count("SELECT count(*) FROM nathan_group_members WHERE group_id='eng'"), 300);
   assert.equal(t.get("SELECT applied_revision AS r FROM nathan_scim_groups WHERE scim_id=?", group.id).r, 2);
+});
+
+// ---- re-review fixes ---------------------------------------------------------------------------
+
+const banOf = (t, userId) => t.get('SELECT "banned" AS banned, "banReason" AS reason, "banExpires" AS expires FROM "user" WHERE "id"=?', userId);
+const overrideAudits = t => t.count("SELECT count(*) FROM nathan_security_audit WHERE action='scim_override_detected'");
+/** Better Auth's session hook (admin plugin): an expired ban is lifted at the next sign-in. */
+const signInLiftsExpiredBan = (t, userId) =>
+  t.run('UPDATE "user" SET "banned"=0, "banReason"=NULL, "banExpires"=NULL WHERE "id"=? AND "banned"=1 AND "banExpires" IS NOT NULL', userId);
+/** Better Auth's banUser: overwrites reason and expiry. */
+const adminBan = (t, userId, reason, expires) =>
+  t.run('UPDATE "user" SET "banned"=1, "banReason"=?, "banExpires"=? WHERE "id"=?', reason, expires, userId);
+
+test("deprovisioning takes over a temporary ban: its expiry never lifts the SCIM block or counts as an override", async () => {
+  const t = setup();
+  t.user("u-t", "t@acme.example"); t.session("u-t");
+  const s = snap({ userName: "t@acme.example" });
+  await applyUser(t.env, policy, s);
+  // An administrator suspended the user for 7 days; then the directory deactivates them.
+  adminBan(t, "u-t", "Suspended for 7 days", new Date(Date.now() + 7 * 86400_000).toISOString());
+  assert.deepEqual(await applyUser(t.env, policy, { ...s, active: false, revision: 2 }), { changed: true, deprovisioned: true });
+  assert.deepEqual(banOf(t, "u-t"), { banned: 1, reason: scimBanReason("acme"), expires: null }, "Nathan's SCIM ban replaces the temporary one");
+  assert.equal(linkRow(t, s.id).scim_banned, 1);
+  assert.equal(t.count('SELECT count(*) FROM "session" WHERE "userId"=\'u-t\''), 0);
+  // Seven days later the user signs in: nothing lapses, and a resync keeps them blocked.
+  signInLiftsExpiredBan(t, "u-t");
+  await applyUser(t.env, policy, { ...s, active: false, revision: 2 }, { force: true });
+  assert.equal(banned(t, "u-t"), true);
+  assert.equal(linkRow(t, s.id).override_cause, null, "no override recorded");
+  assert.equal(overrideAudits(t), 0);
+});
+
+test("a temporary ban that lapsed before Nathan took over is re-banned by a resync, never recorded as an override", async () => {
+  // Rows written before the takeover (or a ban Nathan did not write) look exactly like this.
+  const t = setup();
+  t.user("u-l", "l@acme.example");
+  const s = snap({ userName: "l@acme.example" });
+  await applyUser(t.env, policy, s);
+  adminBan(t, "u-l", "Suspended for 7 days", new Date(Date.now() + 7 * 86400_000).toISOString());
+  t.run("UPDATE nathan_scim_users SET link_state='deprovisioned', active=0, scim_banned=0, applied_revision=2 WHERE scim_id=?", s.id);
+  signInLiftsExpiredBan(t, "u-l");
+  await applyUser(t.env, policy, { ...s, active: false, revision: 2 }, { force: true });
+  assert.deepEqual(banOf(t, "u-l"), { banned: 1, reason: scimBanReason("acme"), expires: null });
+  assert.equal(linkRow(t, s.id).override_cause, null);
+  assert.equal(overrideAudits(t), 0);
+});
+
+test("an administrator's expiring re-ban over the SCIM ban lapses, and the next resync bans again", async () => {
+  const t = setup();
+  t.user("u-x", "x2@acme.example");
+  const s = snap({ userName: "x2@acme.example" });
+  await applyUser(t.env, policy, s);
+  await applyUser(t.env, policy, { ...s, active: false, revision: 2 });
+  assert.equal(banOf(t, "u-x").reason, scimBanReason("acme"));
+  adminBan(t, "u-x", "Cooling off", new Date(Date.now() + 86400_000).toISOString());
+  signInLiftsExpiredBan(t, "u-x");
+  assert.equal(banned(t, "u-x"), false);
+  await applyUser(t.env, policy, { ...s, active: false, revision: 2 }, { force: true });
+  assert.deepEqual(banOf(t, "u-x"), { banned: 1, reason: scimBanReason("acme"), expires: null });
+  assert.equal(linkRow(t, s.id).override_cause, null);
+  assert.equal(overrideAudits(t), 0);
+});
+
+test("lifting Nathan's own SCIM ban is the only out-of-band override, and it is audited once", async () => {
+  const t = setup();
+  t.user("u-k", "k@acme.example");
+  const s = snap({ userName: "k@acme.example" });
+  await applyUser(t.env, policy, s);
+  await applyUser(t.env, policy, { ...s, active: false, revision: 2 });
+  // Better Auth's unbanUser (or by hand) on the ban Nathan wrote.
+  t.run('UPDATE "user" SET "banned"=0, "banReason"=NULL, "banExpires"=NULL WHERE "id"=\'u-k\'');
+  await applyUser(t.env, policy, { ...s, active: false, revision: 2 }, { force: true });
+  await applyUser(t.env, policy, { ...s, active: false, revision: 2 }, { force: true });
+  assert.equal(banned(t, "u-k"), false);
+  assert.equal(linkRow(t, s.id).override_cause, "deactivated");
+  assert.equal(overrideAudits(t), 1);
+});
+
+test("a permanent ban an administrator wrote is kept (not taken over), so reactivation never lifts it", async () => {
+  const t = setup();
+  t.user("u-p", "p@acme.example");
+  const s = snap({ userName: "p@acme.example" });
+  await applyUser(t.env, policy, s);
+  adminBan(t, "u-p", "Fraud investigation", null);
+  await applyUser(t.env, policy, { ...s, active: false, revision: 2 });
+  assert.deepEqual(banOf(t, "u-p"), { banned: 1, reason: "Fraud investigation", expires: null });
+  await applyUser(t.env, policy, { ...s, active: true, revision: 3 });
+  assert.deepEqual(banOf(t, "u-p"), { banned: 1, reason: "Fraud investigation", expires: null });
+});
+
+test("two appliers on a large group: a stale applier commits nothing (no stale removal, no duplicate feed rows)", async () => {
+  const t = setup();
+  t.run("INSERT INTO nathan_groups(id,name,source,created_by) VALUES ('ops','Ops','scim','t')");
+  t.run("INSERT INTO nathan_scim_group_mappings(id,connection_id,ref_type,ref_value,group_id,created_by) VALUES ('m2','acme','externalId','g-ops','ops','t')");
+  const members = [];
+  for (let i = 0; i < 300; i++) {
+    const id = crypto.randomUUID();
+    t.user("o" + i, "o" + i + "@acme.example");
+    t.run("INSERT INTO nathan_scim_users(connection_id,scim_id,external_id,user_name,active,user_id,link_state,applied_revision) VALUES ('acme',?,?,?,1,?,'linked',1)", id, "oe" + i, "o" + i, "o" + i);
+    members.push(id);
+  }
+  const group = { id: crypto.randomUUID(), externalId: "g-ops", displayName: "Ops", deleted: false, revision: 1, members };
+  // The same revision applied twice at once (an alarm racing a directory retry).
+  const settle = async (g, first) => {
+    let r = first, guard = 0;
+    while ((r === "error" || r.partial) && guard++ < 20) r = await applyGroup(t.env, policy, g).catch(() => "error");
+    return r;
+  };
+  const both = await Promise.all([applyGroup(t.env, policy, group).catch(() => "error"), applyGroup(t.env, policy, group).catch(() => "error")]);
+  await Promise.all(both.map(r => settle(group, r)));
+  assert.equal(t.count("SELECT count(*) FROM nathan_group_members WHERE group_id='ops'"), 300);
+  assert.equal(t.count("SELECT count(*) FROM nathan_rbac_changes WHERE kind='member.added' AND json_extract(detail,'$.group')='ops'"), 300, "one feed row per member");
+  // A stale shrink (revision 2) racing the directory's newer full list (revision 3).
+  const stale = { ...group, members: members.slice(0, 100), revision: 2 };
+  const fresh = { ...group, revision: 3 };
+  const race = await Promise.all([applyGroup(t.env, policy, stale).catch(() => "error"), applyGroup(t.env, policy, fresh).catch(() => "error")]);
+  await settle(fresh, race[1]);
+  await settle(stale, race[0]);
+  assert.equal(t.get("SELECT applied_revision AS r FROM nathan_scim_groups WHERE scim_id=?", group.id).r, 3);
+  assert.equal(t.count("SELECT count(*) FROM nathan_group_members WHERE group_id='ops'"), 300, "no stale removal survives the newer revision");
+  const removed = t.count("SELECT count(*) FROM nathan_rbac_changes WHERE kind='member.removed' AND json_extract(detail,'$.group')='ops'");
+  const added = t.count("SELECT count(*) FROM nathan_rbac_changes WHERE kind='member.added' AND json_extract(detail,'$.group')='ops'");
+  assert.equal(added - 300, removed, "every removal the feed reports is matched by a re-add, never duplicated");
+});
+
+test("two administrators in different connections approved for deprovisioning together: at least one stays", async () => {
+  const t = setup();
+  t.run("INSERT INTO nathan_scim_connections(id,domain,created_by,linking_enabled) VALUES ('acme2','acme.example','t',1)");
+  const other = { ...policy, id: "acme2" };
+  for (const [id, connection] of [["a1", "acme"], ["a2", "acme2"]]) {
+    t.user("u-" + id, id + "@acme.example", { role: "admin" });
+    t.run("INSERT INTO nathan_admin_grants(user_id,email,granted_by) VALUES (?,?,'t')", "u-" + id, id + "@acme.example");
+    t.run("INSERT INTO nathan_scim_users(connection_id,scim_id,external_id,user_name,active,user_id,link_state,link_method,applied_revision,linked_at) VALUES (?,?,?,?,1,?,'linked','approved',1,1)",
+      connection, id, "ext-" + id, id + "@acme.example", "u-" + id);
+  }
+  const a1 = snap({ id: "a1", externalId: "ext-a1", userName: "a1@acme.example", active: false, revision: 2 });
+  const a2 = snap({ id: "a2", externalId: "ext-a2", userName: "a2@acme.example", active: false, revision: 2 });
+  await applyUser(t.env, policy, a1); await applyUser(t.env, other, a2);
+  // Each administrator approves the other's deprovisioning.
+  t.run("UPDATE nathan_scim_reviews SET state='approved', decided_by='someone' WHERE action='deprovision'");
+  assert.equal(t.count("SELECT count(*) FROM nathan_scim_reviews WHERE state='approved'"), 2);
+  // The two connections' Durable Objects apply concurrently (no shared serialization).
+  const results = await Promise.all([applyUser(t.env, policy, a1, { force: true }).catch(e => e), applyUser(t.env, other, a2, { force: true }).catch(e => e)]);
+  const active = ["u-a1", "u-a2"].filter(id => !banned(t, id));
+  assert.equal(active.length, 1, "exactly one administrator remains: " + JSON.stringify(results));
+  assert.equal(results.filter(r => r.deprovisioned).length, 1);
+  const kept = active[0] === "u-a1" ? "a1" : "a2";
+  assert.match(linkRow(t, kept, kept === "a1" ? "acme" : "acme2").link_note, /last administrator/);
+  assert.equal(t.get("SELECT state FROM nathan_scim_reviews WHERE scim_id=?", kept).state, "pending", "the refused approval goes back to pending");
+  assert.equal(t.count('SELECT count(*) FROM "session" WHERE "userId"=?', "u-" + kept), 0, "(no sessions were created in this test)");
+});
+
+test("approve and dismiss audit what the conditional update did: a decision racing another is refused, not 'succeeded'", async () => {
+  const t = setup();
+  t.env.NATHAN_ISSUER = "https://id.acme.example";
+  t.user("u-boss", "boss@acme.example", { role: "admin" });
+  t.run("INSERT INTO nathan_bootstrap_status(id,cloudflare_user_id,admin_email,admin_user_id,state) VALUES ('primary','cf','boss@acme.example','u-boss','complete')");
+  t.user("u-ad", "ad@acme.example", { role: "admin" });
+  const s = snap({ userName: "ad@acme.example" });
+  await applyUser(t.env, policy, s);
+  const review = t.get("SELECT id FROM nathan_scim_reviews WHERE scim_id=?", s.id).id;
+  const dismiss = actor => scimUserOperation(t.env, { op: "dismiss", connection: "acme", review, confirm: "CONFIRM DISMISS LINK ad@acme.example" }, actor)
+    .then(() => "ok", e => e.message);
+  const approve = actor => scimUserOperation(t.env, { op: "approve", connection: "acme", review, confirm: "CONFIRM APPROVE LINK ad@acme.example" }, actor)
+    .then(() => "ok", e => e.message);
+  // Both administrators load the pending item; only one decision changes it.
+  const outcomes = await Promise.all([dismiss("admin-1"), approve("admin-2")]);
+  assert.equal(outcomes.filter(o => o === "ok").length, 1, JSON.stringify(outcomes));
+  assert.match(outcomes.find(o => o !== "ok"), /no longer pending/);
+  const audits = t.db.prepare("SELECT action, outcome FROM nathan_security_audit WHERE action IN ('scim_review_dismiss','scim_review_approve')").all().map(r => r.outcome).sort();
+  assert.deepEqual(audits, ["rejected", "succeeded"]);
+  const state = t.get("SELECT state FROM nathan_scim_reviews WHERE id=?", review).state;
+  const row = linkRow(t, s.id);
+  if (state === "dismissed") assert.ok(row.link_hold, "the dismissal's hold is recorded");
+  else assert.equal(row.link_hold, null, "a refused dismissal records no hold");
+});
+
+test("review creation is rate-limited per connection, so a directory cannot flood Studio", async () => {
+  const t = setup();
+  const limit = REVIEW_LIMITS.perConnectionPerHour;
+  const snaps = [];
+  for (let i = 0; i < limit + 5; i++) {
+    t.user("u-f" + i, "f" + i + "@acme.example", { role: "admin" });
+    snaps.push(snap({ userName: "f" + i + "@acme.example" }));
+  }
+  for (const s of snaps) await applyUser(t.env, policy, s);
+  assert.equal(t.count("SELECT count(*) FROM nathan_scim_reviews WHERE connection_id='acme'"), limit);
+  assert.equal(t.count("SELECT count(*) FROM nathan_security_audit WHERE action='scim_admin_review_open'"), limit);
+  const last = linkRow(t, snaps.at(-1).id);
+  assert.equal(last.user_id, null, "still not linked");
+  assert.match(last.link_note, /rate-limited/);
+  // An hour later the next resync opens the review.
+  t.run("UPDATE nathan_scim_reviews SET created_at=created_at-3601");
+  await applyUser(t.env, policy, snaps.at(-1), { force: true });
+  assert.equal(t.get("SELECT state FROM nathan_scim_reviews WHERE scim_id=?", snaps.at(-1).id).state, "pending");
+});
+
+test("Studio lists reviews pending first and oldest first, with counts, a state filter and paging", async () => {
+  const t = setup();
+  t.env.NATHAN_ISSUER = "https://id.acme.example";
+  t.user("u-v", "v@acme.example");
+  const add = (id, state, created) => t.run("INSERT INTO nathan_scim_reviews(id,connection_id,scim_id,user_id,action,reason,revision,state,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+    id, "acme", "s-" + id, "u-v", "link", "r", 1, state, created);
+  for (let i = 0; i < 130; i++) add("d" + i, "dismissed", 2000 + i);   // newer, decided
+  for (let i = 0; i < 120; i++) add("p" + i, "pending", 1000 + i);     // older, still pending
+  const view = await scimConnectionView(t.env, "acme");
+  assert.deepEqual(view.reviewCounts, { dismissed: 130, pending: 120 });
+  assert.equal(view.reviews.length, 100);
+  assert.ok(view.reviews.every(r => r.state === "pending"));
+  assert.equal(view.reviews[0].id, "p0", "oldest pending first");
+  assert.deepEqual(view.reviewPage, { state: null, offset: 0, limit: 100, total: 250 });
+  const page2 = await scimConnectionView(t.env, "acme", { reviewOffset: "100" });
+  assert.equal(page2.reviews[0].id, "p100");
+  assert.equal(page2.reviews.filter(r => r.state === "pending").length, 20);
+  const dismissed = await scimConnectionView(t.env, "acme", { reviewState: "dismissed" });
+  assert.equal(dismissed.reviewPage.total, 130);
+  assert.ok(dismissed.reviews.every(r => r.state === "dismissed"));
+  await assert.rejects(scimConnectionView(t.env, "acme", { reviewState: "bogus" }), /Invalid review filter/);
+  await assert.rejects(scimConnectionView(t.env, "acme", { reviewOffset: "-1" }), /Invalid review filter/);
 });
