@@ -34,7 +34,7 @@ Validate callback URLs and the first sign-in after setup.
 
 ## Enterprise SSO
 
-Better Auth's SSO plugin supports enterprise OIDC and SAML **as inbound identity sources**. The code enables the plugin via `ENTERPRISE_SSO=true`; the admin UI must eventually provide safe provider registration, metadata validation, certificate rotation, domain verification and account-linking policies. **This interface is not yet implemented**. Nathan serving as a SAML IdP downstream is a separate future feature.
+Better Auth's SSO plugin supports enterprise OIDC and SAML **as inbound identity sources**. The code enables the plugin via `ENTERPRISE_SSO=true`. Identity Studio registers enterprise OIDC providers and, since NATH-10, inbound SAML connections with metadata validation, DNS domain verification, disabled-by-default enablement, certificate rotation and per-connection provisioning; see [saml.md](saml.md) for Okta, Entra ID and Google Workspace setup. Nathan serving as a SAML IdP downstream is a separate future feature (NATH-12).
 
 ## Multi-factor authentication
 

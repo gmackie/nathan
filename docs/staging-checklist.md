@@ -58,6 +58,7 @@
 - [ ] Enroll passkey, use it to authenticate, list and remove enrolled credential.
 - [ ] Enroll TOTP, store recovery codes, finish password+TOTP sign-in; verify wrong code rejects.
 - [ ] Verify SAML/OIDC enterprise discovery and account linking, including disabled/upstream deprovisioned accounts.
+- [ ] SAML (NATH-10): connect a real Okta, Entra ID and Google Workspace tenant per [saml.md](saml.md); verify the DNS TXT challenge resolves from the deployed Worker; sign in through **Sign in with SSO**; confirm invitation-only refuses a new person, just-in-time creates one in the domain only; rotate a certificate (add next, activate in the IdP, retire old); confirm an IdP-initiated tile login and a disabled connection are refused.
 - [ ] Test safe admin recovery without creating an unprotected fallback account.
 - [ ] Verify high-assurance or mandatory MFA options **remain disabled** until downstream \`acr\`/\`amr\` evidence is correct.
 - [ ] Run policy tests for role authorization, applications disabled by default and changed permissions.

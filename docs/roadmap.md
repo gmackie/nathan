@@ -33,6 +33,7 @@
 - [x] Explicit additional verified-admin grants, revocation and session invalidation.
 - [x] Runtime-forward-only MFA policy tightening from Identity Studio, never weakening the deployment baseline.
 - [x] Wizard-vs-Studio settings/recovery guide: [setup-lifecycle.md](setup-lifecycle.md).
+- [x] Inbound enterprise SAML (NATH-10): samlify/xmldom proven in workerd; IdP metadata validator (Okta/Entra/Google shapes); hardened plugin (SHA-1 rejected including POSTed XML signatures, 2 minute skew, timestamps, SP-initiated only, InResponseTo and assertion replay protection); Studio connections that start disabled, require DNS-verified domains, rotate certificates and warn before expiry; invitation-only or just-in-time provisioning limited to the verified domain; "Sign in with SSO" domain routing. Runtime-tested in workerd with a test IdP; live IdP tenants pending ([saml.md](saml.md)).
 
 ## Required before first actual production-ready release
 
@@ -53,7 +54,8 @@
 ## Later extensions
 
 - Custom plugin approvals and isolation for out-of-process extensions.
-- SCIM ingress/egress and verified enterprise SAML/OIDC provisioning.
+- SCIM ingress/egress and verified enterprise OIDC provisioning. SAML follow-ups: encrypted assertions, signed AuthnRequests, single logout, scheduled metadata refresh.
+- Nathan as a SAML identity provider for downstream applications (NATH-12).
 - Authentik-style policy and flow designer.
 - RADIUS/LDAP/SSH/non-HTTP outposts via native edge agents.
 
