@@ -56,6 +56,10 @@ async function session(userId) {
     id, new Date(Date.now() + 3600_000).toISOString(), token, now(), now(), userId);
   return { id, cookie: await signedCookie(token) };
 }
+const studioAt = (path, body, who) => auth.fetch(ORIGIN + path, {
+  method: "POST", body: JSON.stringify(body),
+  headers: { Cookie: who.cookie, Origin: ORIGIN, "Content-Type": "application/json", "Sec-Fetch-Site": "same-origin" }
+});
 const studio = (body, who) => auth.fetch(ORIGIN + "/studio/api/mcp", {
   method: "POST", body: JSON.stringify(body),
   headers: { Cookie: who.cookie, Origin: ORIGIN, "Content-Type": "application/json", "Sec-Fetch-Site": "same-origin" }
@@ -209,6 +213,24 @@ test("only an enrolled administrator registers an MCP server, and its catalog ca
   assert.deepEqual(registered.protectedResourceMetadata, { resource: RESOURCE, authorization_servers: [ORIGIN + "/mcp-oauth"] });
   assert.equal(await count("SELECT count(*) AS n FROM nathan_token_audiences WHERE identifier=? AND app_id='notes'", RESOURCE), 1, "an NATH-15 audience bound to the app");
   assert.equal(await count("SELECT count(*) AS n FROM nathan_security_audit WHERE action='mcp_resource_register' AND actor='admin-1'"), 1);
+  // The tokens section cannot turn the MCP server into a Better Auth audience (or move its app binding), and vice versa.
+  for (const body of [
+    { op: "audience.register", identifier: RESOURCE, app: "notes" },
+    { op: "audience.register", identifier: RESOURCE },
+    { op: "audience.remove", identifier: RESOURCE, confirm: "CONFIRM REMOVE AUDIENCE " + RESOURCE },
+    { op: "audience.link", identifier: RESOURCE, clientId: "some-client" }
+  ]) {
+    const refused = await studioAt("/studio/api/tokens", body, admin);
+    assert.equal(refused.status, 409, body.op);
+    assert.match((await refused.json()).error, /remote MCP server/, body.op);
+  }
+  assert.equal(await count('SELECT count(*) AS n FROM "oauthResource" WHERE "identifier"=?', RESOURCE), 0, "never a Better Auth audience");
+  assert.equal(await count("SELECT count(*) AS n FROM nathan_token_audiences WHERE identifier=? AND app_id='notes'", RESOURCE), 1, "binding unchanged");
+  const plain = "https://plain.example.com/api";
+  assert.equal((await studioAt("/studio/api/tokens", { op: "audience.register", identifier: plain }, admin)).status, 200);
+  const crossed = await studio({ op: "resource.register", identifier: plain, app: "notes", ...CATALOG }, admin);
+  assert.equal(crossed.status, 409);
+  assert.match((await crossed.json()).error, /already a Better Auth token audience/);
   const overview = await (await auth.fetch(ORIGIN + "/studio/api/mcp", { headers: { Cookie: admin.cookie } })).json();
   assert.deepEqual(overview.resources[0].scopes.map(s => s.scope), SCOPES, "nathan:* permissions are never scopes");
   assert.equal(overview.resources[0].scopes.find(s => s.scope === "notes:export").sensitive, true);

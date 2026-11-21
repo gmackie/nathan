@@ -155,8 +155,18 @@ export async function tokenOverview(env: AuthEnv) {
 
 export const TOKEN_OPERATIONS = ["audience.register", "audience.remove", "audience.link", "audience.unlink", "client.kind", "machine.create"];
 
+/**
+ * NATH-14: a remote MCP server's identifier is a Nathan audience row but never a Better Auth one.
+ * Its audience and app binding belong to the MCP admin (`/studio/api/mcp`), so this section never
+ * touches it: otherwise Better Auth could issue tokens for it and the two bindings could diverge.
+ */
+async function refuseMcpResource(env: AuthEnv, identifier: string) {
+  const mcp = await env.DB.prepare("SELECT identifier FROM nathan_mcp_resources WHERE identifier=? LIMIT 1").bind(identifier).first();
+  if (mcp) throw Error("Invalid audience: " + identifier + " is a remote MCP server; manage it under Remote MCP servers");
+}
 async function registeredAudience(env: AuthEnv, value: unknown) {
   const identifier = validateAudience(value, new URL(env.NATHAN_ISSUER).origin);
+  await refuseMcpResource(env, identifier);
   const row = await env.DB.prepare("SELECT identifier FROM nathan_token_audiences WHERE identifier=? LIMIT 1").bind(identifier).first();
   if (!row) throw Error("Unknown audience: register it first");
   return identifier;
@@ -187,6 +197,7 @@ export async function applyTokenOperation(auth: any, env: AuthEnv, headers: Head
 
   if (op === "audience.register") {
     const identifier = validateAudience(body.identifier, origin);
+    await refuseMcpResource(env, identifier);
     let app: string | null = null;
     if (body.app !== undefined && body.app !== null && body.app !== "") {
       if (typeof body.app !== "string" || !APP_ID.test(body.app)) throw Error("Invalid application id");
