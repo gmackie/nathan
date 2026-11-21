@@ -3,6 +3,8 @@ import { randomId, seal, unseal, sha256 } from "./crypto";
 import { discover, authorizeUrl, exchangeCode, verifyIdToken } from "./oidc";
 import type { GatewayEnv } from "./env";
 import { handleBackchannelLogout } from "./backchannel";
+import { signPrincipal, PRINCIPAL_HEADER } from "../shared/principal.mjs";
+import type { AccessDecision } from "./env";
 
 const SESSION_COOKIE = "__Host-nathan-session";
 const FLOW_COOKIE = "__Host-nathan-flow";
@@ -94,7 +96,45 @@ async function logout(request: Request, env: GatewayEnv): Promise<Response> {
 function needsRedirect(req: Request): boolean {
   return req.method === "GET" && (req.headers.get("Accept") || "").includes("text/html");
 }
+/**
+ * NATH-13: effective access for a session, resolved by the identity Worker's evaluator over the
+ * NATHAN service binding and reused for at most ACCESS_CACHE_TTL_SECONDS (<= 60) in this isolate,
+ * so a revoked grant, blocked user or disabled app takes effect within that window.
+ */
+const accessCache = new Map<string, { expiresAt: number; decision: AccessDecision }>();
+const ACCESS_CACHE_LIMIT = 5000;
+function accessTtl(env: GatewayEnv): number {
+  const ttl = Number(env.ACCESS_CACHE_TTL_SECONDS ?? "30");
+  if (!Number.isSafeInteger(ttl) || ttl < 0 || ttl > 60) throw Error("ACCESS_CACHE_TTL_SECONDS must be 0..60");
+  return ttl;
+}
+async function resolveAccess(env: GatewayEnv, session: StoredSession): Promise<AccessDecision> {
+  if (!env.NATHAN) throw Error("NATHAN service binding missing");
+  const ttl = accessTtl(env);
+  const key = env.APPLICATION_ID + "|" + session.sessionIdHash;
+  const now = Date.now();
+  const cached = accessCache.get(key);
+  if (cached && cached.expiresAt > now) return cached.decision;
+  accessCache.delete(key);
+  const result = await env.NATHAN.resolveAccess({ applicationId: env.APPLICATION_ID, subject: session.subject });
+  const decision: AccessDecision = {
+    allowed: result?.allowed === true,
+    roles: Array.isArray(result?.roles) ? [...result.roles] : [],
+    permissions: Array.isArray(result?.permissions) ? [...result.permissions] : []
+  };
+  if (ttl > 0) {
+    if (accessCache.size >= ACCESS_CACHE_LIMIT) accessCache.delete(accessCache.keys().next().value as string);
+    accessCache.set(key, { expiresAt: now + ttl * 1000, decision });
+  }
+  return decision;
+}
 async function upstream(request: Request, env: GatewayEnv, session: StoredSession): Promise<Response> {
+  const access = await resolveAccess(env, session);
+  if (!access.allowed) return errorResponse(403, "Access denied. Ask an administrator for a role in this application.");
+  if (!env.NATHAN_PRINCIPAL_KEY) throw Error("NATHAN_PRINCIPAL_KEY missing");
+  const principal = await signPrincipal({
+    sub: session.subject, email: session.email, app: env.APPLICATION_ID, roles: access.roles, permissions: access.permissions
+  }, { key: env.NATHAN_PRINCIPAL_KEY, issuer: origin(env) });
   const headers = new Headers(request.headers);
   for (const key of [...headers.keys()]) {
     if (key.toLowerCase().startsWith("x-nathan-") || key.toLowerCase().startsWith("cf-access-")) headers.delete(key);
@@ -104,6 +144,8 @@ async function upstream(request: Request, env: GatewayEnv, session: StoredSessio
   headers.set("X-Nathan-Subject", session.subject);
   if (session.email) headers.set("X-Nathan-Email", session.email);
   headers.set("X-Nathan-Application", env.APPLICATION_ID);
+  // The only header upstreams should trust: verify it with the SDK's nathan(request, env).
+  headers.set(PRINCIPAL_HEADER, principal);
   const proxied = new Request(request, { headers });
   // The upstream Worker must have no public routes, workers.dev hostname or preview URL.
   const upstreamResponse=await env.UPSTREAM.fetch(proxied);
@@ -135,7 +177,8 @@ export default {
       if (env.REQUIRE_AAL2 === "true" && !(env.ACCEPTED_ACRS || "").split(",").includes(session.acr || "")) {
         return errorResponse(403, "Insufficient authentication assurance");
       }
-      return upstream(request, env, session);
+      // Awaited so that any failure (RPC, signing, upstream) fails closed with the 503 below.
+      return await upstream(request, env, session);
     } catch {
       return errorResponse(503, "Access verification temporarily unavailable");
     }

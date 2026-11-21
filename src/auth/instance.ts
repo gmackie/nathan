@@ -86,10 +86,15 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
       oauthProvider({
         loginPage: "/sign-in",
         consentPage: "/consent",
-        scopes: ["openid", "profile", "email", "offline_access", "nathan:read", "nathan:admin"],
+        scopes: ["openid", "profile", "email", "offline_access", "nathan:read", "nathan:admin", "nathan:directory.read"],
         resources: [{
           identifier: issuer.origin + "/mcp",
           allowedScopes: ["nathan:read", "nathan:admin"],
+          accessTokenTtl: 300
+        }, {
+          // NATH-13: Gatekeeper's directory reads (client-credentials machine clients only).
+          identifier: issuer.origin + "/directory",
+          allowedScopes: ["nathan:directory.read"],
           accessTokenTtl: 300
         }],
         scopeExpirations: {"nathan:read":"15m","nathan:admin":"5m"},

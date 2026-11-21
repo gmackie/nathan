@@ -17,6 +17,8 @@ import { handleMcp, protectedResourceMetadata } from "./mcp";
 import { isAdminUser, listApplications, listSso, upsertApplication,
   setApplicationEnabled, registerEnterpriseOidc, requestEnterpriseVerification, verifyEnterpriseDomain,
   createOAuthClient, listUsers, isAdminPrincipal, isBootstrapOwner, listAdminGrants, grantAdmin, revokeAdminGrant } from "./admin-service";
+import { resolveAccess, directoryPrincipal, directoryChanges, pruneRbacChanges, rbacOverview, listGroups, groupMembers, applyRbacOperation } from "./rbac";
+import { handleDirectory, createDirectoryClient } from "./directory";
 
 function reject(status: number, reason: string) {
   return Response.json({ error: reason }, { status, headers: { "Cache-Control": "no-store" } });
@@ -40,6 +42,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
   const socialProviders=await loadSocialCredentials(env);
   const auth = createAuth(env,socialProviders);
   if (url.pathname === "/mcp") return handleMcp(request,env,auth);
+  if (url.pathname.startsWith("/directory/")) return handleDirectory(request,env,auth);
   if (url.pathname.startsWith("/api/auth/") || url.pathname.startsWith("/.well-known/")) {
     if(isRawManagementEndpoint(url.pathname))return reject(404,"Management route unavailable; use the protected Identity Studio");
     return auth.handler(request);
@@ -322,6 +325,41 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     }
   }
 
+  // NATH-13: roles and minimal RBAC (reads and writes need an enrolled, stepped-up administrator).
+  if (["/studio/api/rbac","/studio/api/rbac/groups","/studio/api/rbac/group"].includes(url.pathname) && request.method === "GET") {
+    const session=await auth.api.getSession({headers:request.headers});
+    if(!await isAdminPrincipal(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id))
+      return reject(403,"Admin enrollment incomplete");
+    try{
+      const value=url.pathname==="/studio/api/rbac/groups"?await listGroups(env)
+        :url.pathname==="/studio/api/rbac/group"?await groupMembers(env,url.searchParams.get("id"))
+        :await rbacOverview(env,url.searchParams.get("app"));
+      return Response.json(value,{headers:{"Cache-Control":"no-store"}});
+    }catch{return reject(404,"Unknown application or group");}
+  }
+  if (["/studio/api/rbac","/studio/api/directory/clients"].includes(url.pathname) && request.method === "POST") {
+    if(request.headers.get("Origin")!==issuer.origin ||
+       request.headers.get("Sec-Fetch-Site")==="cross-site")return reject(403,"Cross-origin request denied");
+    if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")
+      return reject(415,"JSON required");
+    const session=await auth.api.getSession({headers:request.headers});
+    if(!await isAdminPrincipal(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id))
+      return reject(403,"Admin enrollment incomplete");
+    const raw=await request.text();
+    if(raw.length>65536)return reject(413,"Request too large");
+    let body:any;try{body=JSON.parse(raw)}catch{return reject(400,"Invalid JSON")}
+    try{
+      const value=url.pathname==="/studio/api/directory/clients"
+        ?await createDirectoryClient(auth,env,request.headers,body,session!.user.id)
+        :await applyRbacOperation(env,body,session!.user.id);
+      return Response.json(value,{headers:{"Cache-Control":"no-store"}});
+    }catch(error){
+      const message=error instanceof Error && /^(Invalid|Unknown|Explicit|Select|User not found|Declare|Too many|Permission keys|Role keys|Group ids|Grant a role|Membership|Description|Application is not registered)/.test(error.message)
+        ?error.message:"RBAC change rejected";
+      return reject(409,message);
+    }
+  }
+
   return reject(404, "Not found");
 }
 
@@ -329,6 +367,7 @@ export default {
   fetch: (request: Request, env: AuthEnv) => handle(request, env),
   scheduled: async (_: ScheduledEvent,env:AuthEnv) => {
     await env.DB.prepare("DELETE FROM nathan_mcp_limits WHERE expires_at < unixepoch()").run();
+    await pruneRbacChanges(env);
   }
 };
 
@@ -340,14 +379,28 @@ export class NathanVerifier extends WorkerEntrypoint<AuthEnv> {
     if (!session?.user?.id) return null;
     return { sub: session.user.id, email: session.user.email, role: (session.user as any).role ?? "user" };
   }
+  /** Cookie-based check for Workers that hold a Nathan session cookie. Same evaluator as every other path. */
   async authorize(input: { applicationId: string; cookie: string }): Promise<boolean> {
-    if (!input || !/^[a-z][a-z0-9-]{0,62}$/.test(input.applicationId ?? "")) return false;
+    return (await this.access(input)).allowed;
+  }
+  async access(input: { applicationId: string; cookie: string }) {
+    if (!input || !/^[a-z][a-z0-9-]{0,62}$/.test(input.applicationId ?? "")) return resolveAccess(this.env, null, null);
     const principal = await this.getPrincipal(input.cookie);
-    if (!principal) return false;
-    const row = await this.env.DB.prepare("SELECT roles, enabled FROM nathan_applications WHERE id = ?")
-      .bind(input.applicationId).first<{ roles: string; enabled: number }>();
-    if (!row || row.enabled !== 1) return false;
-    const required: unknown = JSON.parse(row.roles);
-    return Array.isArray(required) && required.every(r => typeof r === "string") && (required.length === 0 || required.includes(principal.role));
+    return { ...await resolveAccess(this.env, input.applicationId, principal?.sub ?? null), sub: principal?.sub ?? null };
+  }
+  /**
+   * NATH-13 gateway and SDK path: effective roles and permissions of an OIDC subject for one app.
+   * Only Workers the account owner binds to this entrypoint can call it. Subjects are Nathan user ids
+   * (public subject type); a pairwise subject resolves to no user and is denied.
+   */
+  async resolveAccess(input: { applicationId: string; subject: string }) {
+    return resolveAccess(this.env, input?.applicationId, input?.subject);
+  }
+  /** Directory reads for a same-account Gatekeeper (equivalent to GET /directory/v1/*). */
+  async directoryPrincipal(subject: string) {
+    return directoryPrincipal(this.env, subject);
+  }
+  async directoryChanges(input: { cursor?: string; limit?: number } = {}) {
+    return directoryChanges(this.env, input?.cursor, input?.limit);
   }
 }

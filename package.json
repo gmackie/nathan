@@ -28,7 +28,8 @@
     "wizard": "node scripts/nathan.mjs wizard",
     "setup:installer": "node scripts/setup-installer.mjs",
     "verify:release": "node scripts/verify-release.mjs",
-    "test:runtime": "npm run build:auth && npm run build:gateway && npm run build:installer && node --test --test-concurrency=1 tests/runtime/*.test.mjs"
+    "build:test-upstream": "wrangler deploy --config tests/runtime/fixtures/wrangler.upstream.jsonc --dry-run --outdir ../../../.nathan/build-upstream",
+    "test:runtime": "npm run build:auth && npm run build:gateway && npm run build:installer && npm run build:test-upstream && node --test --test-concurrency=1 tests/runtime/*.test.mjs"
   },
   "dependencies": {
     "better-auth": "1.7.14",

@@ -116,7 +116,7 @@ export async function nathan(request, env, options = {}) {
   let decision = null;
   try {
     if (options.resolve) decision = await options.resolve(subject, payload);
-    else if (env.NATHAN && typeof env.NATHAN.resolveAccess === "function")
+    else if (env.NATHAN)
       decision = await env.NATHAN.resolveAccess({ applicationId: app, subject });
   } catch { decision = null; }
   // Extension point (NATH-15): token role claims are hints only and are never read here.

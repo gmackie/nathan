@@ -1,7 +1,7 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { SignJWT, exportJWK, generateKeyPair } from "jose";
-import { bundle, migrate, randomKey, cookiesOf, start } from "./helpers.mjs";
+import { bundle, migrate, randomKey, cookiesOf, start, COMPAT } from "./helpers.mjs";
 
 const ISSUER = "https://login.example.test/api/auth";
 const ORIGIN = "https://app.example.test";
@@ -40,17 +40,27 @@ async function idp(request) {
 let mf, db;
 before(async () => {
   mf = await start({
-    scriptPath: bundle("gateway"),
-    d1Databases: { SESSIONS: "gateway-sessions" },
-    serviceBindings: { UPSTREAM: () => new Response("upstream ok") },
-    outboundService: idp,
-    bindings: {
-      NATHAN_ISSUER: ISSUER, PUBLIC_ORIGIN: ORIGIN, APPLICATION_ID: "dashboard",
-      OIDC_CLIENT_ID: CLIENT, OIDC_CLIENT_SECRET: "s".repeat(40),
-      SESSION_ENCRYPTION_KEY: randomKey(), SESSION_TTL_SECONDS: "3600", REQUIRE_AAL2: "false"
-    }
+    workers: [{
+      name: "gateway", modules: true, ...COMPAT,
+      scriptPath: bundle("gateway"),
+      d1Databases: { SESSIONS: "gateway-sessions" },
+      serviceBindings: { UPSTREAM: () => new Response("upstream ok"), NATHAN: { name: "nathan-stub", entrypoint: "NathanVerifier" } },
+      outboundService: idp,
+      bindings: {
+        NATHAN_ISSUER: ISSUER, PUBLIC_ORIGIN: ORIGIN, APPLICATION_ID: "dashboard",
+        OIDC_CLIENT_ID: CLIENT, OIDC_CLIENT_SECRET: "s".repeat(40),
+        SESSION_ENCRYPTION_KEY: randomKey(), SESSION_TTL_SECONDS: "3600", REQUIRE_AAL2: "false",
+        NATHAN_PRINCIPAL_KEY: randomKey()
+      }
+    }, {
+      // Access decisions are covered by rbac.test.mjs; this suite exercises login and logout.
+      name: "nathan-stub", modules: true, ...COMPAT,
+      script: 'import { WorkerEntrypoint } from "cloudflare:workers";\n' +
+        'export class NathanVerifier extends WorkerEntrypoint { async resolveAccess() { return { allowed: true, roles: [], permissions: [] }; } }\n' +
+        'export default { fetch() { return new Response(null, { status: 404 }); } };'
+    }]
   });
-  db = await mf.getD1Database("SESSIONS");
+  db = await mf.getD1Database("SESSIONS", "gateway");
   await migrate(db, "migrations/gateway/0001_sessions.sql");
 });
 after(() => mf?.dispose());
@@ -79,7 +89,7 @@ async function login(sub, sid) {
 test("gateway login round trip sets flow and session cookies and proxies upstream", async () => {
   const session = await login("user-1", "sid-1");
   const page = await mf.dispatchFetch(ORIGIN + "/reports", { headers: { Cookie: "__Host-nathan-session=" + session } });
-  assert.equal(page.status, 200);
+  assert.equal(page.status, 200, await page.clone().text());
   assert.equal(await page.text(), "upstream ok");
 });
 
