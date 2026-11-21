@@ -1,0 +1,52 @@
+{
+  "$comment": "Request bodies in the shapes Microsoft Entra ID's provisioning service sends (learn.microsoft.com, 'Tutorial: Develop a sample SCIM endpoint' request/response examples), including its known quirks: capitalized ops, string booleans, filtered email paths, pathless replace with dotted keys, and member removal by value array. USER_ID and GROUP_ID are replaced by the test.",
+  "createUser": {
+    "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User", "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User"],
+    "externalId": "0a21f0f2-8d2a-4f8e-bf98-7363c4aed4ef",
+    "userName": "Test_User_ab6490ee@acme.example",
+    "active": true,
+    "emails": [{ "primary": true, "type": "work", "value": "Test_User_ab6490ee@acme.example" }],
+    "meta": { "resourceType": "User" },
+    "name": { "formatted": "givenName familyName", "familyName": "familyName", "givenName": "givenName" },
+    "roles": [],
+    "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User": { "department": "Engineering" }
+  },
+  "updateUser": {
+    "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+    "Operations": [
+      { "op": "Replace", "path": "emails[type eq \"work\"].value", "value": "updated.email@acme.example" },
+      { "op": "Replace", "path": "name.familyName", "value": "updatedFamilyName" },
+      { "op": "Add", "path": "urn:ietf:params:scim:schemas:extension:enterprise:2.0:User:manager", "value": "26118915-6090-4610-87e4-49d8ca9f808d" }
+    ]
+  },
+  "pathlessReplace": {
+    "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+    "Operations": [{ "op": "Replace", "value": { "displayName": "Test User", "name.givenName": "Test", "title": "Engineer" } }]
+  },
+  "disableUser": {
+    "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+    "Operations": [{ "op": "Replace", "path": "active", "value": "False" }]
+  },
+  "enableUser": {
+    "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+    "Operations": [{ "op": "Replace", "path": "active", "value": "True" }]
+  },
+  "createGroup": {
+    "schemas": ["urn:ietf:params:scim:schemas:core:2.0:Group"],
+    "externalId": "8aa1a0c0-c4c3-4bc0-b4a5-2ef676900159",
+    "displayName": "Entra Engineering",
+    "meta": { "resourceType": "Group" }
+  },
+  "renameGroup": {
+    "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+    "Operations": [{ "op": "Replace", "path": "displayName", "value": "Entra Engineering (renamed)" }]
+  },
+  "addMember": {
+    "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+    "Operations": [{ "op": "Add", "path": "members", "value": [{ "$ref": null, "value": "USER_ID" }] }]
+  },
+  "removeMember": {
+    "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+    "Operations": [{ "op": "Remove", "path": "members", "value": [{ "$ref": null, "value": "USER_ID" }] }]
+  }
+}

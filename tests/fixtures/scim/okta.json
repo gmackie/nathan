@@ -1,0 +1,53 @@
+{
+  "$comment": "Request bodies in the shapes Okta's SCIM 2.0 provisioning client sends (developer.okta.com/docs/reference/scim/scim-20). USER_ID and GROUP_ID are replaced by the test with the ids Nathan returned.",
+  "createUser": {
+    "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+    "userName": "alice@acme.example",
+    "name": { "givenName": "Alice", "familyName": "Example" },
+    "emails": [{ "primary": true, "value": "alice@acme.example", "type": "work" }],
+    "displayName": "Alice Example",
+    "locale": "en-US",
+    "externalId": "00u1a2b3c4D5E6F7g8h9",
+    "groups": [],
+    "password": "1mP0ssible-n0t-st0red",
+    "active": true
+  },
+  "putUser": {
+    "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+    "id": "USER_ID",
+    "userName": "alice@acme.example",
+    "name": { "givenName": "Alice", "familyName": "Example-Smith" },
+    "emails": [{ "primary": true, "value": "alice@acme.example", "type": "work" }],
+    "displayName": "Alice Example-Smith",
+    "locale": "en-US",
+    "externalId": "00u1a2b3c4D5E6F7g8h9",
+    "groups": [],
+    "active": true,
+    "meta": { "resourceType": "User" }
+  },
+  "deactivateUser": {
+    "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+    "Operations": [{ "op": "replace", "value": { "active": false } }]
+  },
+  "reactivateUser": {
+    "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+    "Operations": [{ "op": "replace", "value": { "active": true } }]
+  },
+  "createGroup": {
+    "schemas": ["urn:ietf:params:scim:schemas:core:2.0:Group"],
+    "displayName": "Okta Engineering",
+    "members": []
+  },
+  "renameGroup": {
+    "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+    "Operations": [{ "op": "replace", "value": { "id": "GROUP_ID", "displayName": "Okta Engineering Team" } }]
+  },
+  "addMember": {
+    "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+    "Operations": [{ "op": "add", "path": "members", "value": [{ "value": "USER_ID", "display": "alice@acme.example" }] }]
+  },
+  "removeMember": {
+    "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+    "Operations": [{ "op": "remove", "path": "members[value eq \"USER_ID\"]" }]
+  }
+}
