@@ -50,7 +50,10 @@ export async function createGeneratedConfig(cfg, databaseId, gateway = null) {
     wrangler.routes = [{ pattern: gateway.hostname, custom_domain: true }];
     wrangler.services.find(s => s.binding === "UPSTREAM").service = gateway.workerName;
     // NATH-13: roles and permissions come from the identity Worker's evaluator over RPC.
-    wrangler.services.find(s => s.binding === "NATHAN").service = cfg.name + "-auth";
+    const nathanBinding = wrangler.services.find(s => s.binding === "NATHAN");
+    nathanBinding.service = cfg.name + "-auth";
+    // The identity Worker answers this binding only for the application pinned here.
+    nathanBinding.props = { applicationId: gateway.id };
     wrangler.vars.PUBLIC_ORIGIN = "https://" + gateway.hostname;
     wrangler.vars.APPLICATION_ID = gateway.id;
     wrangler.vars.NATHAN_ISSUER = "https://" + cfg.hostname + "/api/auth";

@@ -46,7 +46,7 @@ node scripts/nathan.mjs protect dashboard           # prints the plan
 node scripts/nathan.mjs protect dashboard --apply   # deploys after proving the upstream is private
 ```
 
-The gateway gets a service binding `NATHAN` to your identity Worker (entrypoint `NathanVerifier`), a fresh `NATHAN_PRINCIPAL_KEY`, and `ACCESS_CACHE_TTL_SECONDS=30`. With your confirmation, the CLI puts the same `NATHAN_PRINCIPAL_KEY` on the upstream Worker as a secret. The key is never written to disk.
+The gateway gets a service binding `NATHAN` to your identity Worker (entrypoint `NathanVerifier`, pinned to this app with `"props": {"applicationId": "dashboard"}`), a fresh `NATHAN_PRINCIPAL_KEY`, and `ACCESS_CACHE_TTL_SECONDS=30`. With your confirmation, the CLI puts the same `NATHAN_PRINCIPAL_KEY` on the upstream Worker as a secret. The key is never written to disk.
 
 Add two plain variables to the upstream Worker's `wrangler.jsonc`:
 
@@ -86,7 +86,7 @@ Open `https://app.example.com`, sign in, and the Worker sees `user.can("invoices
 ## Other ways in
 
 - **Any signed-in user.** Set the access mode to *Any signed-in user* (Studio asks for confirmation; the CLI asks you to type the app id). Everyone who can sign in gets in, with no roles unless granted.
-- **APIs with bearer tokens.** Set `NATHAN_ISSUER` (for example `https://login.example.com/api/auth`) and `NATHAN_AUDIENCE` on the Worker, and bind `NATHAN` to the identity Worker's `NathanVerifier` entrypoint. `nathan(request, env)` then verifies a Nathan `at+jwt` access token and gets roles from the same evaluator. Without that binding, a valid token authenticates but grants nothing. Token role claims arrive with NATH-15 and will be hints only.
+- **APIs with bearer tokens.** Set `NATHAN_ISSUER` (for example `https://login.example.com/api/auth`) and `NATHAN_AUDIENCE` on the Worker, and bind `NATHAN` to the identity Worker's `NathanVerifier` entrypoint, pinned to the app: `{"binding": "NATHAN", "service": "<name>-auth", "entrypoint": "NathanVerifier", "props": {"applicationId": "dashboard"}}`. `nathan(request, env)` then verifies a Nathan user `at+jwt` access token and gets roles from the same evaluator. Without that binding, or with a pin for another app, a valid token authenticates but grants nothing. Machine (client-credentials) tokens and DPoP-bound (`cnf`) tokens are refused on this path. Token role claims arrive with NATH-15 and will be hints only.
 - **Gatekeeper.** For conditions, approvals and resource rules, Gatekeeper reads these roles from Nathan's directory API. See [rbac.md](rbac.md#directory-api-for-gatekeeper).
 
 See [rbac.md](rbac.md) for the model, the legacy migration, the signed principal format and the directory API.

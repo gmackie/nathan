@@ -10,7 +10,8 @@
  *   NATHAN_GATEWAY_ORIGIN pins the gateway that signed it.
  * - API mode: a bearer JWT access token from Nathan (typ at+jwt), verified against Nathan's JWKS
  *   for NATHAN_ISSUER and NATHAN_AUDIENCE. Roles come from the identity Worker's evaluator through
- *   the NATHAN service binding (entrypoint NathanVerifier), or from `options.resolve`.
+ *   the NATHAN service binding (entrypoint NathanVerifier, pinned to this app with binding props
+ *   { applicationId }), or from `options.resolve`.
  *
  * A present but invalid principal header never falls back to a bearer token. Anything that cannot
  * be verified is an anonymous user that can do nothing.

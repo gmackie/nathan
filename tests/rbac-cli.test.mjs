@@ -73,3 +73,14 @@ test("the protect checklist names the signed principal and the upstream secrets"
   assert.deepEqual(plan.principal.upstreamBindings, ["NATHAN_PRINCIPAL_KEY (secret)", "NATHAN_APPLICATION_ID=dashboard", "NATHAN_GATEWAY_ORIGIN=https://app.example.com"]);
   assert.match(plan.principal.next, /rbac sync dashboard/);
 });
+
+test("a generated gateway config pins its NATHAN binding to the gateway's application", async () => {
+  const { createGeneratedConfig } = await import("../scripts/lib/wrangler.mjs");
+  const path = await createGeneratedConfig({ name: "acme", accountId: "a".repeat(32), hostname: "login.example.com" }, "00000000-0000-0000-0000-000000000000",
+    { ...dashboard, oidcClientId: "client" });
+  const generated = JSON.parse(readFileSync(path, "utf8"));
+  const binding = generated.services.find(s => s.binding === "NATHAN");
+  assert.deepEqual(binding, { binding: "NATHAN", service: "acme-auth", entrypoint: "NathanVerifier", props: { applicationId: "dashboard" } });
+  assert.equal(generated.vars.APPLICATION_ID, "dashboard");
+  assert.match(gatewayChecklist({ name: "acme", hostname: "login.example.com" }, dashboard).principal.gatewayBindings[0], /"applicationId":"dashboard"/);
+});

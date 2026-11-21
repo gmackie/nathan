@@ -117,6 +117,10 @@ async function resolveAccess(env: GatewayEnv, session: StoredSession): Promise<A
   if (cached && cached.expiresAt > now) return cached.decision;
   accessCache.delete(key);
   const result = await env.NATHAN.resolveAccess({ applicationId: env.APPLICATION_ID, subject: session.subject });
+  // The binding must be pinned to this gateway's application (props.applicationId); otherwise every
+  // answer is a deny. Surface that misconfiguration as 503 rather than a silent 403 for everyone.
+  if (result?.reason === "binding_not_pinned" || result?.reason === "application_mismatch")
+    throw Error("NATHAN binding is not pinned to APPLICATION_ID");
   const decision: AccessDecision = {
     allowed: result?.allowed === true,
     roles: Array.isArray(result?.roles) ? [...result.roles] : [],

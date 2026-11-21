@@ -19,7 +19,11 @@
     {
       "binding": "NATHAN",
       "service": "nathan-auth",
-      "entrypoint": "NathanVerifier"
+      "entrypoint": "NathanVerifier",
+      // Pins the binding to this gateway's application; must equal vars.APPLICATION_ID.
+      "props": {
+        "applicationId": "dashboard"
+      }
     }
   ],
   "d1_databases": [

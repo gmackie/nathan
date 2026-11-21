@@ -12,6 +12,7 @@ import { signInPage, consentPage, studioPage } from "./ui";
 import { securityPage } from "./security-ui";
 import { loadVerifiedRealm, listRealmClients,registerRealmClient,registerRealmClientsBatch,updateRealmClientStatus } from "./domain-realm";
 import type { AuthEnv } from "./env";
+import { scopedApplication, outOfScope, type BindingProps } from "./app-binding";
 import pluginCatalog from "../../plugins/catalog.json";
 import { handleMcp, protectedResourceMetadata } from "./mcp";
 import { isAdminUser, listApplications, listSso, upsertApplication,
@@ -371,8 +372,14 @@ export default {
   }
 };
 
-export class NathanVerifier extends WorkerEntrypoint<AuthEnv> {
+/**
+ * App-scoped service binding for gateways and API Workers (see ./app-binding.ts). Each binding pins
+ * its application in props ({ applicationId }); every method answers only for that application.
+ * Directory reads are not offered here: use the authenticated GET /directory/v1/* API.
+ */
+export class NathanVerifier extends WorkerEntrypoint<AuthEnv, BindingProps> {
   async getPrincipal(cookie: string): Promise<{ sub: string; email: string; role: string } | null> {
+    if (!scopedApplication(this.ctx.props, undefined).ok) return null;
     if (typeof cookie !== "string" || cookie.length > 8192) return null;
     const auth = createAuth(this.env, await loadSocialCredentials(this.env));
     const session = await auth.api.getSession({ headers: new Headers({ Cookie: cookie }) });
@@ -380,27 +387,23 @@ export class NathanVerifier extends WorkerEntrypoint<AuthEnv> {
     return { sub: session.user.id, email: session.user.email, role: (session.user as any).role ?? "user" };
   }
   /** Cookie-based check for Workers that hold a Nathan session cookie. Same evaluator as every other path. */
-  async authorize(input: { applicationId: string; cookie: string }): Promise<boolean> {
+  async authorize(input: { applicationId?: string; cookie: string }): Promise<boolean> {
     return (await this.access(input)).allowed;
   }
-  async access(input: { applicationId: string; cookie: string }) {
-    if (!input || !/^[a-z][a-z0-9-]{0,62}$/.test(input.applicationId ?? "")) return resolveAccess(this.env, null, null);
-    const principal = await this.getPrincipal(input.cookie);
-    return { ...await resolveAccess(this.env, input.applicationId, principal?.sub ?? null), sub: principal?.sub ?? null };
+  async access(input: { applicationId?: string; cookie: string }) {
+    const scope = scopedApplication(this.ctx.props, input?.applicationId);
+    if (!scope.ok) return { ...outOfScope(scope.reason), sub: null };
+    const principal = await this.getPrincipal(input?.cookie);
+    return { ...await resolveAccess(this.env, scope.app, principal?.sub ?? null), sub: principal?.sub ?? null };
   }
   /**
-   * NATH-13 gateway and SDK path: effective roles and permissions of an OIDC subject for one app.
-   * Only Workers the account owner binds to this entrypoint can call it. Subjects are Nathan user ids
-   * (public subject type); a pairwise subject resolves to no user and is denied.
+   * NATH-13 gateway and SDK path: effective roles and permissions of an OIDC subject for the pinned
+   * app. Subjects are Nathan user ids (public subject type); a pairwise subject resolves to no user
+   * and is denied. `applicationId`, when given, must equal the pinned application.
    */
-  async resolveAccess(input: { applicationId: string; subject: string }) {
-    return resolveAccess(this.env, input?.applicationId, input?.subject);
-  }
-  /** Directory reads for a same-account Gatekeeper (equivalent to GET /directory/v1/*). */
-  async directoryPrincipal(subject: string) {
-    return directoryPrincipal(this.env, subject);
-  }
-  async directoryChanges(input: { cursor?: string; limit?: number } = {}) {
-    return directoryChanges(this.env, input?.cursor, input?.limit);
+  async resolveAccess(input: { applicationId?: string; subject: string }) {
+    const scope = scopedApplication(this.ctx.props, input?.applicationId);
+    if (!scope.ok) return outOfScope(scope.reason);
+    return resolveAccess(this.env, scope.app, input?.subject);
   }
 }

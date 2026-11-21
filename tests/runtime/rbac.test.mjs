@@ -45,7 +45,7 @@ before(async () => {
       {
         name: "gateway", modules: true, ...COMPAT, scriptPath: bundle("gateway"),
         d1Databases: { SESSIONS: "rbac-gateway-sessions" },
-        serviceBindings: { UPSTREAM: "upstream", NATHAN: { name: "auth", entrypoint: "NathanVerifier" } },
+        serviceBindings: { UPSTREAM: "upstream", NATHAN: { name: "auth", entrypoint: "NathanVerifier", props: { applicationId: "billing" } } },
         outboundService: idp,
         bindings: {
           NATHAN_ISSUER: ISSUER, PUBLIC_ORIGIN: ORIGIN, APPLICATION_ID: "billing",
@@ -56,7 +56,7 @@ before(async () => {
       },
       {
         name: "upstream", modules: true, ...COMPAT, scriptPath: ".nathan/build-upstream/worker.js",
-        serviceBindings: { NATHAN: { name: "auth", entrypoint: "NathanVerifier" } },
+        serviceBindings: { NATHAN: { name: "auth", entrypoint: "NathanVerifier", props: { applicationId: "billing" } } },
         outboundService: idp,
         bindings: { NATHAN_PRINCIPAL_KEY: PRINCIPAL_KEY, NATHAN_APPLICATION_ID: "billing", NATHAN_GATEWAY_ORIGIN: ORIGIN,
           NATHAN_ISSUER: ISSUER, NATHAN_AUDIENCE: API_AUDIENCE }

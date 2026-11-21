@@ -18,7 +18,7 @@ export function gatewayChecklist(cfg, app) {
     // NATH-13: the gateway resolves roles from Nathan and forwards a signed, <= 60 s principal.
     principal:{
       header:"X-Nathan-Principal",
-      gatewayBindings:["NATHAN -> "+(cfg.name?cfg.name+"-auth":"<nathan auth Worker>")+" (entrypoint NathanVerifier)","NATHAN_PRINCIPAL_KEY (secret)","ACCESS_CACHE_TTL_SECONDS=30"],
+      gatewayBindings:["NATHAN -> "+(cfg.name?cfg.name+"-auth":"<nathan auth Worker>")+" (entrypoint NathanVerifier, props {\"applicationId\":\""+app.id+"\"})","NATHAN_PRINCIPAL_KEY (secret)","ACCESS_CACHE_TTL_SECONDS=30"],
       upstreamBindings:["NATHAN_PRINCIPAL_KEY (secret)","NATHAN_APPLICATION_ID="+app.id,"NATHAN_GATEWAY_ORIGIN=https://"+app.hostname],
       sdk:'const user = await nathan(request, env); const denied = user.require("invoices:write"); if (denied) return denied;',
       next:"Declare permissions/roles under applications[].rbac, run `nathan rbac sync "+app.id+" --apply`, then grant roles in Identity Studio. New apps deny everyone until a role is granted."

@@ -7,8 +7,8 @@
  * Authentication: a Nathan JWT access token (typ at+jwt) for the resource <origin>/directory with
  * scope nathan:directory.read, obtained with the OAuth client-credentials grant by a confidential
  * client an administrator registered for this purpose. The client is re-checked online on every
- * request, so disabling it in Identity Studio cuts access immediately. Same-account Workers can use
- * the NathanVerifier service binding (directoryPrincipal/directoryChanges) instead.
+ * request, so disabling it in Identity Studio cuts access immediately. This is the only way to read
+ * the directory: the app-scoped NathanVerifier binding deliberately has no directory methods.
  * Reads are not audited; every write that changes them is.
  */
 import { createLocalJWKSet, jwtVerify } from "jose";
