@@ -48,7 +48,8 @@ test("rbac plan is read-only; sync registers a missing app disabled and applies 
   const app = api.db.prepare("SELECT enabled, access_mode AS m FROM nathan_applications WHERE id='dashboard'").get();
   assert.deepEqual({ ...app }, { enabled: 0, m: "approved" }, "registered disabled and deny-by-default");
   assert.deepEqual(api.db.prepare("SELECT key FROM nathan_rbac_roles WHERE app_id='dashboard' ORDER BY key").all().map(r => r.key), ["editor", "viewer"]);
-  assert.equal(api.db.prepare("SELECT count(*) AS n FROM nathan_security_audit WHERE actor='cli:acct' AND action='rbac_manifest_sync'").get().n, 1);
+  assert.deepEqual(api.db.prepare("SELECT outcome FROM nathan_security_audit WHERE actor='cli:acct' AND action='rbac_manifest_sync' ORDER BY rowid").all().map(r => r.outcome),
+    ["attempted", "succeeded"]);
   const again = await syncApplicationRbac({ api, databaseId: "db", app: dashboard, actor: "cli:acct", apply: true, confirm: async () => true });
   assert.deepEqual(again.ops, [], "idempotent");
 });
@@ -83,4 +84,42 @@ test("a generated gateway config pins its NATHAN binding to the gateway's applic
   assert.deepEqual(binding, { binding: "NATHAN", service: "acme-auth", entrypoint: "NathanVerifier", props: { applicationId: "dashboard" } });
   assert.equal(generated.vars.APPLICATION_ID, "dashboard");
   assert.match(gatewayChecklist({ name: "acme", hostname: "login.example.com" }, dashboard).principal.gatewayBindings[0], /"applicationId":"dashboard"/);
+});
+
+test("a sync that fails part-way leaves an attempted and a partial audit, then rethrows", async () => {
+  const api = fakeApi();
+  const writes = [];
+  const query = api.queryDatabase;
+  // The REST API runs one statement per call, so a sync cannot be one transaction: fail the 4th write.
+  api.queryDatabase = async (id, sql, params) => {
+    if (!/^SELECT/i.test(sql)) {
+      writes.push(sql);
+      if (writes.length === 4) throw Error("Cloudflare API rejected request: 7500: network");
+    }
+    return query(id, sql, params);
+  };
+  await assert.rejects(() => syncApplicationRbac({ api, databaseId: "db", app: dashboard, actor: "cli:acct", apply: true, confirm: async () => true }), /7500/);
+  assert.match(writes[0], /INTO nathan_security_audit/, "the attempt is audited before any change");
+  const audits = api.db.prepare("SELECT outcome, target FROM nathan_security_audit WHERE actor='cli:acct' ORDER BY rowid").all().map(r => ({ ...r }));
+  assert.equal(audits[0].outcome, "attempted");
+  assert.equal(audits.at(-1).outcome, "partial");
+  assert.match(audits.at(-1).target, /^dashboard \(2 of \d+ statements applied\)$/);
+  assert.equal(audits.filter(a => a.outcome === "succeeded" && /rbac/.test(a.target)).length, 0);
+  // Re-running converges.
+  api.queryDatabase = query;
+  await syncApplicationRbac({ api, databaseId: "db", app: dashboard, actor: "cli:acct", apply: true, confirm: async () => true });
+  assert.deepEqual((await syncApplicationRbac({ api, databaseId: "db", app: dashboard, actor: "cli:acct", apply: false })).ops, []);
+});
+
+test("a sync whose first change fails is audited as failed", async () => {
+  const api = fakeApi();
+  const query = api.queryDatabase;
+  let writes = 0;
+  api.queryDatabase = async (id, sql, params) => {
+    if (!/^SELECT/i.test(sql) && ++writes === 2) throw Error("boom");
+    return query(id, sql, params);
+  };
+  await assert.rejects(() => syncApplicationRbac({ api, databaseId: "db", app: dashboard, actor: "cli:acct", apply: true, confirm: async () => true }), /boom/);
+  assert.deepEqual(api.db.prepare("SELECT outcome FROM nathan_security_audit WHERE actor='cli:acct' ORDER BY rowid").all().map(r => r.outcome), ["attempted", "failed"]);
+  assert.equal(api.db.prepare("SELECT count(*) AS n FROM nathan_applications").get().n, 0);
 });

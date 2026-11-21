@@ -90,6 +90,13 @@ test("an enrolled administrator manages permissions, roles, groups and grants; e
     assert.equal(response.status, 409, JSON.stringify(body));
     assert.match((await response.json()).error, message);
   }
+  // Rejected before commit, yet every attempt by the administrator is in the audit log.
+  const refusals = (await db.prepare("SELECT action, target, actor FROM nathan_security_audit WHERE outcome='rejected' ORDER BY created_at, rowid").all()).results;
+  assert.deepEqual(refusals.map(r => [r.action, r.target]), [
+    ["rbac_role_upsert", "billing:ghost"], ["rbac_access_mode", "billing:any_signed_in"], ["rbac_permission_upsert", "billing:invoices:*"],
+    ["rbac_member_add", "finance:nobody@example.test"], ["rbac_grant_create", "missing:editor"], ["rbac_unknown", "drop.tables"]
+  ]);
+  assert.ok(refusals.every(r => r.actor === "admin-1"));
   const overview = await (await get("/studio/api/rbac?app=billing")).json();
   assert.equal(overview.app.accessMode, "approved");
   assert.equal(overview.app.enabled, false);
@@ -141,6 +148,7 @@ const directory = (path, token) => mf.dispatchFetch(ORIGIN + path, { headers: to
 test("an administrator registers a directory client; it gets a client-credentials token for the directory", async () => {
   const refused = await post("/studio/api/directory/clients", { name: "Gatekeeper PIP" });
   assert.equal(refused.status, 409, "needs explicit confirmation");
+  assert.equal(await count("SELECT count(*) AS n FROM nathan_security_audit WHERE action='directory_client_create' AND outcome='rejected' AND target='Gatekeeper PIP'"), 1);
   const created = await post("/studio/api/directory/clients", { name: "Gatekeeper PIP", confirm: "CONFIRM DIRECTORY CLIENT Gatekeeper PIP" });
   assert.equal(created.status, 200, await created.clone().text());
   const client = await created.json();

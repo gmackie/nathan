@@ -90,8 +90,12 @@ export async function handleDirectory(request: Request, env: AuthEnv, auth: any)
  */
 export async function createDirectoryClient(auth: any, env: AuthEnv, headers: Headers, input: any, actor: string) {
   const name = typeof input?.name === "string" ? input.name.trim() : "";
-  if (!name || name.length > 100 || /[\x00-\x1f\x7f]/.test(name)) throw Error("Invalid client name");
-  if (input?.confirm !== "CONFIRM DIRECTORY CLIENT " + name) throw Error("Explicit confirmation required");
+  const refuse = async (message: string) => {
+    await audit(env, actor, "directory_client_create", name.replace(/[\x00-\x1f\x7f]/g, "").slice(0, 100) || "-", "rejected").catch(() => {});
+    return Error(message);
+  };
+  if (!name || name.length > 100 || /[\x00-\x1f\x7f]/.test(name)) throw await refuse("Invalid client name");
+  if (input?.confirm !== "CONFIRM DIRECTORY CLIENT " + name) throw await refuse("Explicit confirmation required");
   await audit(env, actor, "directory_client_create", name, "attempted");
   try {
     const client = await auth.api.adminCreateOAuthClient({

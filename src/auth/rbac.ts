@@ -91,12 +91,18 @@ export async function groupMembers(env: AuthEnv, groupId: unknown) {
 // ---- Identity Studio writes --------------------------------------------------------------------
 
 type Change = Parameters<typeof changeStatement>[0];
+/** Errors already audited as "failed" by a commit; anything else thrown is a rejection before commit. */
+const auditedFailures = new WeakSet<object>();
+async function auditFailure(env: AuthEnv, actor: string, action: string, target: string, error: unknown) {
+  await audit(env, actor, action, target, "failed").catch(() => {});
+  if (error && typeof error === "object") auditedFailures.add(error);
+}
 /** One atomic batch: the change, its change-feed row and the success audit. A failure is audited separately. */
 async function commit(env: AuthEnv, actor: string, action: string, target: string, statements: Statement[], change: Omit<Change, "actor">) {
   try {
     await env.DB.batch([...statements, changeStatement({ ...change, actor }), auditStatement(actor, action, target, "succeeded")].map(s => prepare(env, s)));
   } catch (error) {
-    await audit(env, actor, action, target, "failed").catch(() => {});
+    await auditFailure(env, actor, action, target, error);
     throw error;
   }
 }
@@ -133,11 +139,36 @@ const description = (value: unknown) => {
 export const RBAC_OPERATIONS = ["access_mode", "permission.upsert", "permission.delete", "role.upsert", "role.delete",
   "group.upsert", "group.delete", "member.add", "member.remove", "grant.create", "grant.revoke", "sync"] as const;
 
+/** Audit action of an operation, e.g. grant.create -> rbac_grant_create. */
+function auditAction(op: unknown) {
+  if (op === "sync") return "rbac_manifest_sync";
+  return RBAC_OPERATIONS.includes(op as any) ? "rbac_" + String(op).replace(".", "_") : "rbac_unknown";
+}
+/** Best-effort, bounded description of what an administrator tried to change (for the audit log). */
+function attemptTarget(body: any) {
+  const parts = RBAC_OPERATIONS.includes(body?.op)
+    ? [body.app ?? body.group, body.key ?? body.role ?? body.accessMode ?? body.id ?? body.email]
+    : [body?.op];
+  const text = parts.filter(p => typeof p === "string" && p).join(":");
+  return text.replace(/[\x00-\x1f\x7f]/g, "").slice(0, 200) || "-";
+}
+
 /**
  * Applies one administrator RBAC operation. The caller must already have verified an enrolled,
  * stepped-up administrator session (isAdminPrincipal + mayAdminister) and same-origin JSON.
+ * Every outcome is audited: "succeeded" or "failed" with the commit, "rejected" when validation
+ * refuses the attempt before anything is written.
  */
 export async function applyRbacOperation(env: AuthEnv, body: any, actor: string): Promise<Record<string, unknown>> {
+  try {
+    return await applyOperation(env, body, actor);
+  } catch (error) {
+    if (!(error && typeof error === "object" && auditedFailures.has(error)))
+      await audit(env, actor, auditAction(body?.op), attemptTarget(body), "rejected").catch(() => {});
+    throw error;
+  }
+}
+async function applyOperation(env: AuthEnv, body: any, actor: string): Promise<Record<string, unknown>> {
   const op = body?.op;
   if (!RBAC_OPERATIONS.includes(op)) throw Error("Unknown RBAC operation");
 
@@ -271,7 +302,7 @@ export async function applyRbacOperation(env: AuthEnv, body: any, actor: string)
   const statements = syncStatements(app, ops, actor);
   if (statements.length) {
     try { await env.DB.batch(statements.map(s => prepare(env, s))); }
-    catch (error) { await audit(env, actor, "rbac_manifest_sync", app, "failed").catch(() => {}); throw error; }
+    catch (error) { await auditFailure(env, actor, "rbac_manifest_sync", app, error); throw error; }
   }
   return { app, ops, applied: ops.length };
 }

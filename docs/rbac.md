@@ -85,7 +85,7 @@ A present but invalid principal header never falls back to a bearer token. DPoP-
 
 `access_mode`, `permission.upsert`, `permission.delete`, `role.upsert`, `role.delete`, `group.upsert`, `group.delete`, `member.add`, `member.remove`, `grant.create`, `grant.revoke`, `sync`.
 
-Every call needs a verified, allowlisted, enrolled administrator with the current step-up (`isAdminPrincipal` + `mayAdminister`), same-origin JSON, and a size limit. Every write commits its change, a change-feed row and a `succeeded` audit row in one D1 batch; failures are audited as `failed`. These need explicit confirmation strings:
+Every call needs a verified, allowlisted, enrolled administrator with the current step-up (`isAdminPrincipal` + `mayAdminister`), same-origin JSON, and a size limit. Every write commits its change, a change-feed row and a `succeeded` audit row in one D1 batch; failures are audited as `failed`. An administrator's attempt that validation refuses before anything is written (unknown role, missing confirmation, undeclared permission, unknown user and so on) is audited as `rejected`, with the action and a bounded target such as `billing:editor`. Requests refused because the caller is not an enrolled, stepped-up administrator are not written to the audit log, so anonymous traffic cannot fill it. These need explicit confirmation strings:
 
 - widening to any signed-in user: `CONFIRM ANY SIGNED IN <app>`
 - deleting a role: `CONFIRM DELETE ROLE <app>/<role>`

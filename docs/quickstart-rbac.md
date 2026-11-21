@@ -37,7 +37,7 @@ CLOUDFLARE_API_TOKEN=… node scripts/nathan.mjs rbac plan dashboard          # 
 CLOUDFLARE_API_TOKEN=… node scripts/nathan.mjs rbac sync dashboard --apply  # apply, after confirmation
 ```
 
-If `dashboard` is not registered yet, sync registers it **disabled** in the `approved` access mode. The sync is idempotent and audited as `cli:<accountId>`. `--prune` also deletes code-managed roles and permissions that you removed from the file; it asks you to type `PRUNE`, because deleting a role deletes its grants. You can paste the same `rbac` object into **Identity Studio → Roles and access → Permissions and roles as code** instead.
+If `dashboard` is not registered yet, sync registers it **disabled** in the `approved` access mode. The sync is idempotent and audited as `cli:<accountId>`. Cloudflare's D1 REST API runs one statement per call, so a sync is not one transaction: the CLI audits `attempted` before the first change, then `succeeded`, or `partial`/`failed` with how many statements were applied. A failure part-way only ever leaves less access, and re-running the sync converges. `--prune` also deletes code-managed roles and permissions that you removed from the file; it asks you to type `PRUNE`, because deleting a role deletes its grants. You can paste the same `rbac` object into **Identity Studio → Roles and access → Permissions and roles as code** instead.
 
 ## 3. Put the gateway in front (2 minutes)
 

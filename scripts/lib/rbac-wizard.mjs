@@ -13,6 +13,7 @@ import { auditStatement, changeStatement } from "../../src/shared/rbac-store.mjs
  * Plans (and with apply, applies) one application's manifest through a D1 query API.
  * Statements run one at a time and are idempotent; a failure part-way leaves less access, never
  * more (a role's permissions are cleared before they are re-added), and re-running converges.
+ * Audit: "attempted" before the first change, then "succeeded", or "partial"/"failed" on error.
  * @param {{ api: { queryDatabase(id: string, sql: string, params?: unknown[]): Promise<any[]> }, databaseId: string,
  *   app: any, actor: string, apply: boolean, prune?: boolean, confirm?: (message: string, ops: any[]) => Promise<boolean> }} input
  */
@@ -32,14 +33,27 @@ export async function syncApplicationRbac({ api, databaseId, app, actor, apply, 
   if (!apply) return { app: app.id, registered: false, wouldRegister: registered, ops };
   if (!ops.length && !registered) return { app: app.id, registered: false, ops };
   if (!confirm || !await confirm("Apply " + ops.length + " RBAC change(s) to " + app.id + "?", ops)) throw Error("Cancelled");
-  if (registered) {
-    for (const statement of [
+  const statements = [
+    ...(registered ? [
       { sql: "INSERT INTO nathan_applications(id,hostname,roles,enabled) VALUES (?,?,'[]',0) ON CONFLICT(id) DO NOTHING", params: [app.id, app.hostname] },
       changeStatement({ kind: "app.registered", appId: app.id, actor }),
       auditStatement(actor, "application_upsert", app.id, "succeeded")
-    ]) await api.queryDatabase(databaseId, statement.sql, statement.params);
+    ] : []),
+    ...syncStatements(app.id, ops, actor)
+  ];
+  // The D1 REST query API runs one statement per call, so a sync cannot be a single transaction.
+  // The attempt is audited before the first change, and a failure part-way is audited with how
+  // far it got, so the log never shows less than what happened.
+  const run = statement => api.queryDatabase(databaseId, statement.sql, statement.params);
+  await run(auditStatement(actor, "rbac_manifest_sync", app.id, "attempted"));
+  let applied = 0;
+  try {
+    for (const statement of statements) { await run(statement); applied++; }
+  } catch (error) {
+    await run(auditStatement(actor, "rbac_manifest_sync", app.id + " (" + applied + " of " + statements.length + " statements applied)",
+      applied ? "partial" : "failed")).catch(() => {});
+    throw error;
   }
-  for (const statement of syncStatements(app.id, ops, actor)) await api.queryDatabase(databaseId, statement.sql, statement.params);
   return { app: app.id, registered, ops };
 }
 
