@@ -168,6 +168,7 @@ The intended stable command will eventually be `npx nathan init` with a browser 
 - [Threat model and operational assumptions](docs/threat-model.md)
 - [Backups, rotation, and incident response](docs/operations.md)
 - [Initial admin, OAuth, SCIM and MFA lifecycle](docs/setup-lifecycle.md)
+- [Account admission and invitations](docs/admission.md)
 - [Domain-wide SSO for root and approved subdomains](docs/domain-wide-sso.md)
 - [OAuth/OIDC client integration](docs/oidc.md)
 - [Plugin architecture and tiers](docs/plugins.md)

@@ -44,6 +44,8 @@ A refused sign-in creates no user row and shows a clear reason. Better Auth erro
 - Studio lists invitations with their state (`pending`, `used`, `expired`, `revoked`), creator, and the account and method that used them. Rows are never deleted.
 - Every change is audited (`admission_mode_change`, `invitation_create`, `invitation_revoke`, outcomes `succeeded` or `rejected`). Admission decisions are audited as `account_admission` with the method (`password`, `social:github`, `saml:<connection>`, `scim:<connection>`) and outcome `admitted_invitation`, `admitted_self_service`, `admitted_bootstrap` or `refused`. Refusals are recorded at most once per method per minute.
 
+An invitation is claimed atomically when the account is about to be created. If Better Auth then fails to create it (for example, a concurrent sign-up created the same address first), the invitation stays used: create a new one.
+
 There is no invitation token or link. The person signs in with the invited address through any enabled method. So invite only addresses whose owner you trust: whoever proves control of that address through an enabled method gets the account.
 
 **Known limitation: password sign-up.** An invitation is used when the account is created, before its address is verified. Someone who knows an invited address could sign up with a password for it. That uses the invitation, but the account cannot sign in until the address is verified, so they gain nothing; the real person then needs a new invitation. Studio shows which method used each invitation, and the users list shows whether the address is verified. If this matters, keep password sign-in disabled (`ENABLE_PASSWORD=false`, the default).
