@@ -7,6 +7,7 @@ import { ask, yesNo, secretPrompt } from "./lib/prompts.mjs";
 import { discoverWrangler, runCli, createGeneratedConfig } from "./lib/wrangler.mjs";
 import { providerCommand } from "./lib/provider-wizard.mjs";
 import { protectCommand } from "./lib/protect-wizard.mjs";
+import { rbacCommand } from "./lib/rbac-wizard.mjs";
 import { adminCommand } from "./lib/admin-wizard.mjs";
 import { domainCommand } from "./lib/domain-wizard.mjs";
 import { realmForLoginHostname } from "../src/shared/realm.mjs";
@@ -253,7 +254,8 @@ async function wizard(){
   if (command === "deploy") return provision();
   if (command === "providers") return providerCommand(args.filter(a=>a!=="--apply"&&!a.endsWith(".json")),file,apply);
   if (command === "protect") return protectCommand(args.filter(a=>a!=="--apply"&&!a.endsWith(".json")),file,apply);
+  if (command === "rbac") return rbacCommand(args.filter(a=>a!=="--apply"&&!a.endsWith(".json")),file,apply);
   if (command === "admin") return adminCommand(args.filter(a=>a!=="--apply"&&!a.endsWith(".json")),file,apply);
   if (command === "domains") return domainCommand(args.filter(a=>!a.endsWith(".json")),file);
-  console.log("Nathan CLI\n  wizard               guided end-to-end installer\n  init                 guided local config\n  plan                 read-only plan + optional Cloudflare discovery\n  doctor [--live]      validate config and optionally OIDC discovery\n  deploy --apply       provision D1 and deploy Worker (requires Cloudflare token)\n  providers guide      OAuth callback and provider-specific setup\n  providers add --apply    configure provider secrets securely\n  protect <app>        plan a gateway for a private upstream\n  protect <app> --apply   deploy only after public-origin isolation\n  admin promote --apply     elevate a verified allowlisted user\n  domains discover         Cloudflare DNS/Worker host inventory and exact OIDC callbacks\n  domains callback <host>  Exact root/subdomain OIDC callback\n  domains routes           Wildcard proxy routing preview (not applied)\n\nNo password or OAuth client secret is accepted as a CLI flag.");
+  console.log("Nathan CLI\n  wizard               guided end-to-end installer\n  init                 guided local config\n  plan                 read-only plan + optional Cloudflare discovery\n  doctor [--live]      validate config and optionally OIDC discovery\n  deploy --apply       provision D1 and deploy Worker (requires Cloudflare token)\n  providers guide      OAuth callback and provider-specific setup\n  providers add --apply    configure provider secrets securely\n  protect <app>        plan a gateway for a private upstream\n  protect <app> --apply   deploy only after public-origin isolation\n  rbac plan <app>          diff permissions/roles in nathan.config.json against Nathan\n  rbac sync <app> --apply  apply them (grants stay in Identity Studio; --prune removes undeclared)\n  admin promote --apply     elevate a verified allowlisted user\n  domains discover         Cloudflare DNS/Worker host inventory and exact OIDC callbacks\n  domains callback <host>  Exact root/subdomain OIDC callback\n  domains routes           Wildcard proxy routing preview (not applied)\n\nNo password or OAuth client secret is accepted as a CLI flag.");
 })().catch(e => { console.error("Nathan error:",e.message); process.exitCode=1; });
