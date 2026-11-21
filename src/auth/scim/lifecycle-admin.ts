@@ -15,16 +15,16 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** Messages safe to show an administrator; anything else becomes a generic rejection. */
 export const SCIM_ADMIN_ERRORS = /^(Unknown SCIM connection|Exact confirmation|Invalid|Just-in-time creation needs|Map an empty|Only Identity Studio groups|This Nathan group|That SCIM group|Unknown group|No mapping)/;
 
-class Rejected extends Error {}
-const reject = (message: string) => new Rejected(message);
-async function guarded<T>(env: AuthEnv, actor: string, action: string, target: string, fn: () => Promise<T>): Promise<T> {
+export class Rejected extends Error {}
+export const reject = (message: string) => new Rejected(message);
+export async function guarded<T>(env: AuthEnv, actor: string, action: string, target: string, fn: () => Promise<T>): Promise<T> {
   try { return await fn(); }
   catch (error) {
     await audit(env, actor, action, target.slice(0, 200) || "-", error instanceof Rejected ? "rejected" : "failed").catch(() => {});
     throw error;
   }
 }
-async function requireConnection(env: AuthEnv, id: unknown) {
+export async function requireConnection(env: AuthEnv, id: unknown) {
   if (typeof id !== "string" || !CID.test(id)) throw reject("Invalid SCIM connection id");
   const row = await env.DB.prepare("SELECT id FROM nathan_scim_connections WHERE id=?").bind(id).first();
   if (!row) throw reject("Unknown SCIM connection");
@@ -39,7 +39,8 @@ export async function resyncConnection(env: AuthEnv, connectionId: string): Prom
       headers: { "X-Nathan-SCIM-Base": new URL(env.NATHAN_ISSUER).origin + "/scim/v2/" + connectionId, "X-Nathan-SCIM-Admin": "resync" }
     }));
     const body: any = await response.json().catch(() => ({}));
-    return response.ok ? { applied: true } : { applied: false, pending: Number(body?.pending ?? 0) };
+    // `pending` > 0 with 200: a large directory continues in the background (the connection's alarm).
+    return response.ok ? { applied: true, pending: Number(body?.pending ?? 0) } : { applied: false, pending: Number(body?.pending ?? 0) };
   } catch { return { applied: false }; }
 }
 
@@ -120,11 +121,12 @@ async function unmapGroup(env: AuthEnv, input: any, actor: string) {
 /** Studio view of one connection: policy, link status, mappings, last sync, error log, logout queue. */
 export async function scimConnectionView(env: AuthEnv, id: unknown) {
   if (typeof id !== "string" || !CID.test(id)) throw reject("Invalid SCIM connection id");
-  const [connections, users, groups, mappings, errors, deliveries] = (await env.DB.batch([
+  const [connections, users, groups, mappings, errors, deliveries, reviews] = (await env.DB.batch([
     env.DB.prepare("SELECT id, domain, organization_id AS organizationId, enabled, linking_enabled AS linking, jit_enabled AS jit, " +
       "last_sync_at AS lastSyncAt, last_error_at AS lastErrorAt FROM nathan_scim_connections WHERE id=?").bind(id),
     env.DB.prepare('SELECT s.scim_id AS scimId, s.external_id AS externalId, s.user_name AS userName, s.active, s.deleted, s.link_state AS linkState, ' +
-      's.link_method AS linkMethod, s.link_note AS note, s.user_id AS userId, u."email" AS email, s.updated_at AS updatedAt ' +
+      's.link_method AS linkMethod, s.link_note AS note, s.user_id AS userId, u."email" AS email, s.link_hold AS linkHold, ' +
+      's.override_cause AS overrideCause, s.override_by AS overrideBy, s.override_at AS overrideAt, s.updated_at AS updatedAt ' +
       'FROM nathan_scim_users s LEFT JOIN "user" u ON u."id"=s.user_id WHERE s.connection_id=? ORDER BY s.user_name LIMIT 500').bind(id),
     env.DB.prepare("SELECT scim_id AS scimId, external_id AS externalId, display_name AS displayName, members, deleted, updated_at AS updatedAt " +
       "FROM nathan_scim_groups WHERE connection_id=? ORDER BY display_name LIMIT 500").bind(id),
@@ -132,7 +134,11 @@ export async function scimConnectionView(env: AuthEnv, id: unknown) {
       "FROM nathan_scim_group_mappings m JOIN nathan_groups g ON g.id=m.group_id WHERE m.connection_id=? ORDER BY m.group_id").bind(id),
     env.DB.prepare("SELECT resource_type AS resourceType, resource_id AS resourceId, message, created_at AS createdAt FROM nathan_scim_errors " +
       "WHERE connection_id=? ORDER BY created_at DESC LIMIT 50").bind(id),
-    env.DB.prepare("SELECT state, count(*) AS n FROM nathan_backchannel_deliveries WHERE connection_id=? GROUP BY state").bind(id)
+    env.DB.prepare("SELECT state, count(*) AS n FROM nathan_backchannel_deliveries WHERE connection_id=? GROUP BY state").bind(id),
+    env.DB.prepare('SELECT r.id, r.scim_id AS scimId, s.user_name AS userName, r.user_id AS userId, u."email" AS email, r.action, r.cause, r.reason, r.state, ' +
+      'r.created_at AS createdAt, r.decided_by AS decidedBy, r.decided_at AS decidedAt FROM nathan_scim_reviews r LEFT JOIN "user" u ON u."id"=r.user_id ' +
+      "LEFT JOIN nathan_scim_users s ON s.connection_id=r.connection_id AND s.scim_id=r.scim_id " +
+      "WHERE r.connection_id=? ORDER BY r.state IN ('pending','approved') DESC, r.created_at DESC LIMIT 100").bind(id)
   ])).map(r => (r.results ?? []) as any[]);
   const c = connections[0];
   if (!c) throw reject("Unknown SCIM connection");
@@ -147,6 +153,8 @@ export async function scimConnectionView(env: AuthEnv, id: unknown) {
     users: users.map(u => ({ ...u, active: u.active === 1, deleted: u.deleted === 1 })),
     groups: groups.map(g => ({ ...g, deleted: g.deleted === 1 })),
     mappings, errors,
+    // Directory changes held for an administrator (src/auth/scim/reviews.ts): pending first.
+    reviews,
     logoutDeliveries: Object.fromEntries(deliveries.map(d => [d.state, d.n]))
   };
 }

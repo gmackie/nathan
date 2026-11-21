@@ -96,6 +96,8 @@ before(async () => {
 
   // acme.example is verified through Better Auth's enterprise SSO domain verification.
   await sql('INSERT INTO "ssoProvider"("id","issuer","userId","providerId","domain","domainVerified") VALUES (\'sso-1\',\'https://idp.acme.example\',\'admin-1\',\'acme-sso\',\'acme.example\',1)');
+  // example.test (the bootstrap owner's domain) is verified too, for the corp connection.
+  await sql('INSERT INTO "ssoProvider"("id","issuer","userId","providerId","domain","domainVerified") VALUES (\'sso-2\',\'https://idp.example.test\',\'admin-1\',\'corp-sso\',\'example.test\',1)');
   // The gateway is a registered OIDC client that supports back-channel logout.
   await sql('INSERT INTO "oauthClient"("id","clientId","redirectUris","backchannelLogoutUri","disabled","subjectType","createdAt","updatedAt") VALUES (?,?,?,?,0,\'public\',?,?)',
     "oc-1", CLIENT, JSON.stringify([ORIGIN + "/__nathan/callback"]), ORIGIN + "/__nathan/backchannel", now(), now());
@@ -108,7 +110,7 @@ before(async () => {
   // Only the group grant carries access; mapping a SCIM group never grants anything by itself.
   await sql("INSERT INTO nathan_rbac_grants(id,app_id,role_key,principal_type,principal_id,created_by) VALUES ('g-eng','billing','viewer','group','engineering','test')");
 
-  for (const [id, domain] of [["acme", "acme.example"], ["acme2", "acme.example"], ["other", "other.example"]]) {
+  for (const [id, domain] of [["acme", "acme.example"], ["acme2", "acme.example"], ["other", "other.example"], ["corp", "example.test"]]) {
     const created = await studio("/studio/api/scim/connections", { id, domain });
     assert.equal(created.status, 200, await created.clone().text());
     tokens[id] = (await created.json()).bearerToken;
@@ -159,7 +161,23 @@ async function login(sub) {
 const viaGateway = cookie => gateway.fetch(ORIGIN + "/whoami", { headers: { Cookie: cookie } });
 const nathanSession = async cookie => (await auth.fetch(ISSUER + "/get-session", { headers: { Cookie: cookie } })).json();
 const feed = async userId => (await all("SELECT kind FROM nathan_rbac_changes WHERE principal_id=? ORDER BY seq", userId)).map(r => r.kind);
-const link = (connection, externalId) => one("SELECT * FROM nathan_scim_users WHERE connection_id=? AND external_id=?", connection, externalId);
+/** The live identity for an externalId (after a rehire, the deleted one shares it). */
+const link = (connection, externalId) => one("SELECT * FROM nathan_scim_users WHERE connection_id=? AND external_id=? ORDER BY deleted LIMIT 1", connection, externalId);
+
+const view = async (connection = "acme") => ok(await auth.fetch(AUTH_ORIGIN + "/studio/api/scim/connection?id=" + connection, { headers: { Cookie: admin.cookie } }));
+const banned = async userId => Boolean((await one('SELECT "banned" AS banned FROM "user" WHERE "id"=?', userId)).banned);
+const resync = connection => studio("/studio/api/scim/settings", { id: connection, linking: true, jit: false, confirm: "CONFIRM SCIM SETTINGS " + connection });
+const directoryUser = (email, externalId) => ({ ...okta.createUser, userName: email, externalId, emails: [{ value: email, primary: true, type: "work" }] });
+/** Another administrator (enabled admin grant, enrolled); `fresh` controls the passkey step-up's age. */
+async function otherAdmin(id, email, { fresh = true } = {}) {
+  await sql('INSERT INTO "user"("id","name","email","emailVerified","createdAt","updatedAt","role") VALUES (?,?,?,1,?,?,\'admin\')', id, id, email, now(), now());
+  await sql("INSERT INTO nathan_admin_grants(user_id,email,granted_by) VALUES (?,?,'admin-1')", id, email);
+  await sql('INSERT INTO "passkey"("id","publicKey","userId","credentialID","counter","deviceType","backedUp") VALUES (?,\'x\',?,?,0,\'singleDevice\',0)', "pk-" + id, id, "cred-" + id);
+  await sql('INSERT INTO "twoFactor"("id","secret","backupCodes","userId","verified") VALUES (?,\'x\',\'x\',?,1)', "tf-" + id, id);
+  const session = await insertSession(db, BETTER_AUTH_SECRET, id);
+  await sql("INSERT INTO nathan_admin_assurance(session_id,user_id,method,verified_at) VALUES (?,?,'passkey',unixepoch()-?)", session.id, id, fresh ? 0 : 3600);
+  return session;
+}
 
 let alice, oktaGroup, aliceCookie, aliceSession, gatewayCookie;
 
@@ -171,7 +189,7 @@ test("lifecycle settings and group mappings: admin-only, explicitly confirmed an
     headers: { Cookie: admin.cookie, Origin: "https://evil.example", "Content-Type": "application/json" } })).status, 403, "cross-origin is refused");
   const saved = await ok(await studio("/studio/api/scim/settings", settings));
   assert.deepEqual({ id: saved.id, linking: saved.linking, jit: saved.jit }, { id: "acme", linking: true, jit: false });
-  for (const id of ["acme2", "other"])
+  for (const id of ["acme2", "other", "corp"])
     await ok(await studio("/studio/api/scim/settings", { id, linking: true, jit: false, confirm: "CONFIRM SCIM SETTINGS " + id }));
 
   const map = { op: "map", connection: "acme", refType: "displayName", ref: "x", group: "engineering", confirm: "CONFIRM MAP acme/x TO engineering" };
@@ -260,6 +278,33 @@ test("a replayed PATCH is a no-op: same version, no new feed, audit or delivery"
   assert.equal((await scim("acme", "PATCH", "/Users/" + alice.id, okta.reactivateUser, { "If-Match": 'W/"1"' })).status, 412);
 });
 
+test("the connection's alarm racing directory retries applies a pending deprovisioning exactly once", async () => {
+  // Duplicate outbox rows and two appliers on one revision are exercised directly in tests/scim-apply.test.mjs.
+  await user("u-race", "race@acme.example");
+  const race = await ok(await scim("acme", "POST", "/Users", directoryUser("race@acme.example", "00u-race")), 201);
+  const session = await insertSession(db, BETTER_AUTH_SECRET, "u-race");
+  await issueTokens("u-race", session.id);
+  await sql("ALTER TABLE nathan_backchannel_deliveries RENAME TO hidden_deliveries");
+  let failed;
+  try { failed = await scim("acme", "PATCH", "/Users/" + race.id, okta.deactivateUser); }
+  finally { await sql("ALTER TABLE hidden_deliveries RENAME TO nathan_backchannel_deliveries"); }
+  assert.equal(failed.status, 503, "staged, not applied; the alarm retries in about 2 s");
+  assert.equal(await banned("u-race"), false);
+  // Directory retries arrive around the alarm's due time, concurrently.
+  await sleep(1700);
+  const retries = await Promise.all([0, 100, 200, 300, 400, 500].map(async delay => {
+    await sleep(delay);
+    return (await scim("acme", "PATCH", "/Users/" + race.id, okta.deactivateUser)).status;
+  }));
+  assert.ok(retries.every(status => status === 200), retries.join());
+  assert.equal(await banned("u-race"), true);
+  assert.equal(await nathanSession(session.cookie), null);
+  assert.deepEqual((await feed("u-race")).filter(k => k === "user.deprovisioned"), ["user.deprovisioned"], "one transition");
+  assert.equal((await one("SELECT count(*) AS n FROM nathan_security_audit WHERE action='scim_user_deprovision' AND target='acme:u-race'")).n, 1);
+  assert.equal((await one("SELECT count(*) AS n FROM nathan_backchannel_deliveries WHERE user_id='u-race'")).n, 1, "one logout delivery");
+  assert.equal((await link("acme", "00u-race")).applied_revision, 2);
+});
+
 test("reactivation lifts the SCIM ban but does not restore sessions", async () => {
   await ok(await scim("acme", "PATCH", "/Users/" + alice.id, okta.reactivateUser));
   const user = await one('SELECT "banned" AS banned FROM "user" WHERE "id"=\'u-alice\'');
@@ -313,22 +358,34 @@ test("unverified email or domain never links, and a link never moves across conn
   assert.ok(!(await one('SELECT "banned" AS banned FROM "user" WHERE "id"=\'u-alice\'')).banned);
 });
 
-test("revocation failure returns 5xx and reports nothing early; the directory's retry completes it", async () => {
+test("while an earlier change is pending, a different later change is refused (503) unstaged; then both apply in order", async () => {
+  await user("u-kim", "kim@acme.example");
+  const kim = await ok(await scim("acme", "POST", "/Users", directoryUser("kim@acme.example", "00u-kim")), 201);
   const session = await insertSession(db, BETTER_AUTH_SECRET, "u-alice");
   await issueTokens("u-alice", session.id);
+  const addKim = fill(okta.addMember, { USER_ID: kim.id });
   await sql("ALTER TABLE nathan_backchannel_deliveries RENAME TO hidden_deliveries");
-  let failed;
-  try { failed = await scim("acme", "PATCH", "/Users/" + alice.id, entra.disableUser); }
-  finally { await sql("ALTER TABLE hidden_deliveries RENAME TO nathan_backchannel_deliveries"); }
-  assert.ok(failed.status >= 500, "got " + failed.status);
-  assert.ok(!(await one('SELECT "banned" AS banned FROM "user" WHERE "id"=\'u-alice\'')).banned, "nothing was applied");
+  let earlier, later, staged;
+  try {
+    earlier = await scim("acme", "PATCH", "/Users/" + alice.id, entra.disableUser);
+    later = await scim("acme", "PATCH", "/Groups/" + oktaGroup.id, addKim);
+    staged = await ok(await scim("acme", "GET", "/Groups/" + oktaGroup.id));
+  } finally { await sql("ALTER TABLE hidden_deliveries RENAME TO nathan_backchannel_deliveries"); }
+  assert.equal(earlier.status, 503, "the deactivation could not be applied");
+  assert.equal(later.status, 503, "a different change is refused while an earlier one is pending");
+  assert.equal(later.headers.get("Retry-After"), "10");
+  assert.ok(!staged.members.some(m => m.value === kim.id), "the refused change was not staged");
+  assert.equal(await banned("u-alice"), false, "nothing was applied");
   assert.equal((await nathanSession(session.cookie))?.user?.id, "u-alice");
-  assert.equal((await link("acme", okta.createUser.externalId)).link_state, "linked");
-  // The directory retries the same request: the pending change is applied first, then answered.
-  await ok(await scim("acme", "PATCH", "/Users/" + alice.id, entra.disableUser));
-  assert.equal((await one('SELECT "banned" AS banned FROM "user" WHERE "id"=\'u-alice\'')).banned, 1);
+  assert.equal(await one("SELECT 1 FROM nathan_group_members WHERE group_id='engineering' AND user_id='u-kim'"), null);
+  // The directory retries the later change: the earlier one is applied first, then this one.
+  await ok(await scim("acme", "PATCH", "/Groups/" + oktaGroup.id, addKim));
+  assert.equal(await banned("u-alice"), true);
   assert.equal(await nathanSession(session.cookie), null);
   assert.equal((await link("acme", okta.createUser.externalId)).link_state, "deprovisioned");
+  assert.ok(await one("SELECT 1 FROM nathan_group_members WHERE group_id='engineering' AND user_id='u-kim'"));
+  const order = await all("SELECT seq, principal_id AS who FROM nathan_rbac_changes WHERE (principal_id='u-alice' AND kind='user.deprovisioned') OR (principal_id='u-kim' AND kind='member.added') ORDER BY seq DESC LIMIT 2");
+  assert.deepEqual(order.map(r => r.who), ["u-kim", "u-alice"], "applied in the order the directory sent them");
   const errors = await all("SELECT message FROM nathan_scim_errors WHERE connection_id='acme'");
   assert.ok(errors.length >= 1, "the failure is in the connection's error log");
   await ok(await scim("acme", "PATCH", "/Users/" + alice.id, entra.enableUser));
@@ -440,4 +497,178 @@ test("Studio connection view: link status, mappings, last sync and error log (ad
   const unmap = await studio("/studio/api/scim/mappings", { op: "unmap", connection: "acme", group: "support", confirm: "CONFIRM UNMAP support" });
   await ok(unmap);
   assert.equal((await one("SELECT source FROM nathan_groups WHERE id='support'")).source, "studio");
+});
+
+test("every SCIM lifecycle route refuses an administrator without a fresh passkey step-up", async () => {
+  const stale = await otherAdmin("u-stale", "stale@example.test", { fresh: false });
+  const get = path => auth.fetch(AUTH_ORIGIN + path, { headers: { Cookie: stale.cookie } });
+  const writes = [
+    ["/studio/api/scim/settings", { id: "acme", linking: true, jit: false, confirm: "CONFIRM SCIM SETTINGS acme" }],
+    ["/studio/api/scim/mappings", { op: "map", connection: "acme", refType: "externalId", ref: "x", group: "finance", confirm: "CONFIRM MAP acme/x TO finance" }],
+    ["/studio/api/scim/mappings", { op: "unmap", connection: "acme", group: "engineering", confirm: "CONFIRM UNMAP engineering" }],
+    ["/studio/api/scim/users", { op: "approve", connection: "acme", review: crypto.randomUUID(), confirm: "x" }],
+    ["/studio/api/scim/users", { op: "dismiss", connection: "acme", review: crypto.randomUUID(), confirm: "x" }],
+    ["/studio/api/scim/users", { op: "keep-active", connection: "acme", scimId: alice.id, confirm: "CONFIRM KEEP ACTIVE alice@acme.example" }],
+    ["/studio/api/scim/users", { op: "unlink", connection: "acme", scimId: alice.id, confirm: "CONFIRM UNLINK alice@acme.example" }],
+    ["/studio/api/scim/outbox", { op: "skip", connection: "acme", kind: "User", id: alice.id, seq: 1, confirm: "CONFIRM SKIP USER " + alice.id }]
+  ];
+  for (const path of ["/studio/api/scim/connection?id=acme", "/studio/api/scim/outbox?id=acme"])
+    assert.equal((await get(path)).status, 403, path);
+  for (const [path, body] of writes)
+    assert.equal((await studio(path, body, stale.cookie)).status, 403, path + " " + body.op);
+  assert.equal((await one("SELECT source FROM nathan_groups WHERE id='engineering'")).source, "scim", "nothing changed");
+  // The same administrator after a fresh step-up is let through: the refusals were the step-up.
+  await sql("UPDATE nathan_admin_assurance SET verified_at=unixepoch() WHERE session_id=?", stale.id);
+  assert.equal((await get("/studio/api/scim/outbox?id=acme")).status, 200);
+});
+
+test("SCIM never links or deprovisions a Nathan administrator by itself; an approved review does, once", async () => {
+  const bossSession = await otherAdmin("u-boss", "boss@acme.example");
+  await issueTokens("u-boss", bossSession.id);
+  const boss = await ok(await scim("acme", "POST", "/Users", directoryUser("boss@acme.example", "00u-boss")), 201);
+  let row = await link("acme", "00u-boss");
+  assert.equal(row.user_id, null, "not linked automatically");
+  assert.match(row.link_note, /administrator review/);
+  const linkReview = (await view()).reviews.find(r => r.userId === "u-boss" && r.action === "link");
+  assert.equal(linkReview.state, "pending");
+  assert.equal((await studio("/studio/api/scim/users", { op: "approve", connection: "acme", review: linkReview.id, confirm: "yes" })).status, 409, "exact confirmation");
+  assert.equal((await studio("/studio/api/scim/users", { op: "approve", connection: "acme", review: linkReview.id, confirm: "CONFIRM APPROVE LINK boss@acme.example" }, member.cookie)).status, 403);
+  const linked = await ok(await studio("/studio/api/scim/users", { op: "approve", connection: "acme", review: linkReview.id, confirm: "CONFIRM APPROVE LINK boss@acme.example" }));
+  assert.equal(linked.state, "applied", JSON.stringify(linked));
+  row = await link("acme", "00u-boss");
+  assert.deepEqual([row.user_id, row.link_method], ["u-boss", "approved"]);
+
+  // Deactivation (as a leaked SCIM token could send it) is held: no ban, no session or token revoked.
+  await ok(await scim("acme", "PATCH", "/Users/" + boss.id, okta.deactivateUser));
+  assert.equal(await banned("u-boss"), false);
+  assert.equal((await nathanSession(bossSession.cookie))?.user?.id, "u-boss", "the administrator's session still works");
+  assert.equal((await one('SELECT count(*) AS n FROM "oauthRefreshToken" WHERE "userId"=\'u-boss\' AND "revoked" IS NULL')).n, 1);
+  assert.equal((await one("SELECT count(*) AS n FROM nathan_backchannel_deliveries WHERE user_id='u-boss'")).n, 0);
+  assert.ok(!(await feed("u-boss")).includes("user.deprovisioned"));
+  assert.ok(await one("SELECT 1 FROM nathan_security_audit WHERE action='scim_admin_review_open' AND target='acme:u-boss:deprovision'"), "the held change is audited");
+  // A forced resync does not apply it either.
+  await ok(await resync("acme"));
+  assert.equal(await banned("u-boss"), false);
+  const held = (await view()).reviews.filter(r => r.userId === "u-boss" && r.action === "deprovision");
+  assert.deepEqual(held.map(r => r.state), ["pending"], "one review item, not one per replay");
+  // Another administrator approves with exact confirmation: applied once.
+  const done = await ok(await studio("/studio/api/scim/users", { op: "approve", connection: "acme", review: held[0].id, confirm: "CONFIRM APPROVE DEPROVISION boss@acme.example" }));
+  assert.equal(done.state, "applied", JSON.stringify(done));
+  assert.equal(await banned("u-boss"), true);
+  assert.equal(await nathanSession(bossSession.cookie), null);
+  assert.equal((await one('SELECT count(*) AS n FROM "oauthRefreshToken" WHERE "userId"=\'u-boss\' AND "revoked" IS NULL')).n, 0);
+  assert.deepEqual((await feed("u-boss")).filter(k => k === "user.deprovisioned"), ["user.deprovisioned"]);
+  assert.ok(await one("SELECT 1 FROM nathan_security_audit WHERE action='scim_review_approve' AND outcome='succeeded' AND actor='admin-1'"));
+  await ok(await resync("acme"));
+  assert.deepEqual((await feed("u-boss")).filter(k => k === "user.deprovisioned"), ["user.deprovisioned"], "a replay does not repeat it");
+});
+
+test("the bootstrap owner, the last administrator, is never deprovisioned by SCIM", async () => {
+  const owner = await ok(await scim("corp", "POST", "/Users", directoryUser("admin@example.test", "00u-owner")), 201);
+  assert.equal((await link("corp", "00u-owner")).user_id, null);
+  const linkReview = (await view("corp")).reviews.find(r => r.userId === "admin-1" && r.action === "link");
+  assert.equal((await ok(await studio("/studio/api/scim/users", { op: "approve", connection: "corp", review: linkReview.id,
+    confirm: "CONFIRM APPROVE LINK admin@example.test" }))).state, "applied");
+  for (const change of [() => scim("corp", "PATCH", "/Users/" + owner.id, okta.deactivateUser), () => scim("corp", "DELETE", "/Users/" + owner.id)])
+    assert.ok((await change()).status < 300);
+  assert.equal(await banned("admin-1"), false);
+  assert.equal((await nathanSession(admin.cookie))?.user?.id, "admin-1", "the owner is still signed in");
+  assert.match((await link("corp", "00u-owner")).link_note, /administrator review/);
+  const review = (await view("corp")).reviews.find(r => r.userId === "admin-1" && r.action === "deprovision" && r.state === "pending");
+  const self = await studio("/studio/api/scim/users", { op: "approve", connection: "corp", review: review.id, confirm: "CONFIRM APPROVE DEPROVISION admin@example.test" });
+  assert.equal(self.status, 409);
+  assert.match((await self.json()).error, /own deprovisioning/);
+  // Dismissed: the deletion is kept from applying, through resyncs too.
+  await ok(await studio("/studio/api/scim/users", { op: "dismiss", connection: "corp", review: review.id, confirm: "CONFIRM DISMISS DEPROVISION admin@example.test" }));
+  await ok(await resync("corp"));
+  assert.equal(await banned("admin-1"), false);
+  assert.equal((await view("corp")).reviews.filter(r => r.userId === "admin-1" && r.state === "pending").length, 0);
+  assert.ok(await one("SELECT 1 FROM nathan_security_audit WHERE action='scim_review_approve' AND outcome='rejected'"), "the refused approval is audited");
+});
+
+test("keep active survives a forced resync; only a new deprovision change from the directory blocks again", async () => {
+  await user("u-lee", "lee@acme.example");
+  const lee = await ok(await scim("acme", "POST", "/Users", directoryUser("lee@acme.example", "00u-lee")), 201);
+  await ok(await scim("acme", "PATCH", "/Users/" + lee.id, okta.deactivateUser));
+  assert.equal(await banned("u-lee"), true);
+  const keep = { op: "keep-active", connection: "acme", scimId: lee.id, confirm: "CONFIRM KEEP ACTIVE lee@acme.example" };
+  assert.equal((await studio("/studio/api/scim/users", { ...keep, confirm: "CONFIRM KEEP ACTIVE someone@acme.example" })).status, 409);
+  await ok(await studio("/studio/api/scim/users", keep));
+  assert.equal(await banned("u-lee"), false);
+  let row = await link("acme", "00u-lee");
+  assert.deepEqual([row.override_cause, row.override_by], ["deactivated", "admin-1"]);
+  assert.ok(row.override_at);
+  await ok(await resync("acme"));
+  assert.equal(await banned("u-lee"), false, "resync leaves the administrator's decision alone");
+  await ok(await scim("acme", "PATCH", "/Users/" + lee.id, okta.deactivateUser));
+  assert.equal(await banned("u-lee"), false, "a replay of the same deactivation too");
+  // The directory reactivates and later deactivates again: a new deprovision change.
+  await ok(await scim("acme", "PATCH", "/Users/" + lee.id, okta.reactivateUser));
+  assert.equal((await link("acme", "00u-lee")).override_cause, null);
+  await ok(await scim("acme", "PATCH", "/Users/" + lee.id, okta.deactivateUser));
+  assert.equal(await banned("u-lee"), true);
+  // An unban made directly in D1 is detected and kept the same way.
+  await sql('UPDATE "user" SET "banned"=0, "banReason"=NULL WHERE "id"=\'u-lee\'');
+  await ok(await resync("acme"));
+  assert.equal(await banned("u-lee"), false);
+  row = await link("acme", "00u-lee");
+  assert.match(row.override_by, /out-of-band/);
+  assert.ok(await one("SELECT 1 FROM nathan_security_audit WHERE action='scim_user_keep_active' AND outcome='succeeded'"));
+  await ok(await scim("acme", "PATCH", "/Users/" + lee.id, okta.reactivateUser));
+});
+
+test("unlink: an administrator detaches a directory user, its directory memberships go, and it is not re-linked", async () => {
+  const lee = (await ok(await scim("acme", "GET", "/Users?filter=" + encodeURIComponent('externalId eq "00u-lee"')))).Resources[0];
+  await ok(await scim("acme", "PATCH", "/Groups/" + oktaGroup.id, fill(okta.addMember, { USER_ID: lee.id })));
+  assert.ok(await one("SELECT 1 FROM nathan_group_members WHERE group_id='engineering' AND user_id='u-lee'"));
+  const unlink = { op: "unlink", connection: "acme", scimId: lee.id, confirm: "CONFIRM UNLINK lee@acme.example" };
+  assert.equal((await studio("/studio/api/scim/users", { ...unlink, confirm: "CONFIRM UNLINK" })).status, 409);
+  await ok(await studio("/studio/api/scim/users", unlink));
+  const row = await link("acme", "00u-lee");
+  assert.equal(row.user_id, null);
+  assert.match(row.link_hold, /Unlinked by an administrator/);
+  assert.equal(await one("SELECT 1 FROM nathan_group_members WHERE group_id='engineering' AND user_id='u-lee'"), null);
+  assert.ok((await feed("u-lee")).includes("user.unlinked"));
+  await ok(await resync("acme"));
+  assert.equal((await link("acme", "00u-lee")).user_id, null, "not linked again automatically");
+  assert.ok(await one("SELECT 1 FROM nathan_security_audit WHERE action='scim_user_unlink' AND outcome='succeeded'"));
+});
+
+test("after a linked Nathan account is deleted, no connection re-links its email without an administrator", async () => {
+  await user("u-ivy", "ivy@acme.example");
+  await ok(await scim("acme", "POST", "/Users", directoryUser("ivy@acme.example", "00u-ivy")), 201);
+  assert.equal((await link("acme", "00u-ivy")).user_id, "u-ivy");
+  await sql('DELETE FROM "user" WHERE "id"=\'u-ivy\'');
+  await user("u-ivy2", "ivy@acme.example");
+  // Another connection for the same verified domain cannot take the new account...
+  await ok(await scim("acme2", "POST", "/Users", directoryUser("ivy@acme.example", "00u-ivy-other")), 201);
+  assert.equal((await link("acme2", "00u-ivy-other")).user_id, null);
+  // ...nor does the original connection re-link silently on a resync.
+  await ok(await resync("acme"));
+  assert.equal((await link("acme", "00u-ivy")).user_id, null);
+  const [mine] = (await view("acme")).reviews.filter(r => r.userId === "u-ivy2" && r.state === "pending");
+  const [theirs] = (await view("acme2")).reviews.filter(r => r.userId === "u-ivy2" && r.state === "pending");
+  assert.ok(mine && theirs, "each claim waits for an administrator");
+  assert.match(theirs.reason, /connection acme/);
+  // The administrator decides: the original connection gets the link, the other one cannot.
+  await ok(await studio("/studio/api/scim/users", { op: "approve", connection: "acme", review: mine.id, confirm: "CONFIRM APPROVE LINK ivy@acme.example" }));
+  assert.equal((await link("acme", "00u-ivy")).user_id, "u-ivy2");
+  const refused = await studio("/studio/api/scim/users", { op: "approve", connection: "acme2", review: theirs.id, confirm: "CONFIRM APPROVE LINK ivy@acme.example" });
+  assert.equal(refused.status, 409);
+  assert.match((await refused.json()).error, /already linked/);
+});
+
+test("a rehire after DELETE reuses userName and externalId (and a group its displayName)", async () => {
+  await user("u-rae", "rae@acme.example");
+  const rae = await ok(await scim("acme", "POST", "/Users", directoryUser("rae@acme.example", "00u-rae")), 201);
+  await ok(await scim("acme", "DELETE", "/Users/" + rae.id), 204);
+  assert.equal(await banned("u-rae"), true);
+  const again = await ok(await scim("acme", "POST", "/Users", directoryUser("rae@acme.example", "00u-rae")), 201);
+  assert.notEqual(again.id, rae.id);
+  assert.equal((await link("acme", "00u-rae")).user_id, "u-rae", "the rehire takes over the deleted identity's link");
+  assert.equal(await banned("u-rae"), false, "and the SCIM ban is lifted for the active directory user");
+  assert.equal((await scim("acme", "GET", "/Users/" + rae.id)).status, 404, "the deleted identity stays deleted");
+  const group = await ok(await scim("acme", "POST", "/Groups", { ...okta.createGroup, displayName: "Rehire group" }), 201);
+  await ok(await scim("acme", "DELETE", "/Groups/" + group.id), 204);
+  await ok(await scim("acme", "POST", "/Groups", { ...okta.createGroup, displayName: "Rehire group" }), 201);
 });
