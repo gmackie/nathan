@@ -372,25 +372,30 @@ test("a malformed percent-escape cannot smuggle a second SAMLResponse past the g
   assert.equal(await db.prepare('SELECT id FROM "user" WHERE email=?').bind(sha1user).first(), null, "no user created");
 });
 
-/** Sends a raw HTTP/1.1 request to the Miniflare entry (fetch() refuses a GET with a body). */
+/**
+ * Sends a raw HTTP/1.1 request to the Miniflare entry (fetch() refuses a GET with a body). Headers
+ * and body go out in one write, and the result is taken on `close`: the gate may answer and close
+ * the connection before the body is fully read, which can surface as EPIPE/ECONNRESET. That is the
+ * server refusing early, so a socket error after a response arrived is not a test failure.
+ */
 async function rawRequest(method, path, headers, body) {
   const { connect } = await import("node:net");
   const base = new URL(await mf.ready);
   const payload = Buffer.from(body ?? "");
   // MF-Original-URL is how dispatchFetch tells Miniflare's entry the public URL (https issuer origin).
-  const lines = [method + " " + path + " HTTP/1.1", "Host: " + HOST, "Connection: close", "MF-Original-URL: https://" + HOST + path,
-    "Content-Length: " + payload.length, ...Object.entries(headers).map(([k, v]) => k + ": " + v)];
+  const head = [method + " " + path + " HTTP/1.1", "Host: " + HOST, "Connection: close", "MF-Original-URL: https://" + HOST + path,
+    "Content-Length: " + payload.length, ...Object.entries(headers).map(([k, v]) => k + ": " + v)].join("\r\n") + "\r\n\r\n";
   return new Promise((resolve, reject) => {
-    const socket = connect(Number(base.port), base.hostname, () => {
-      socket.write(lines.join("\r\n") + "\r\n\r\n"); socket.write(payload);
-    });
     const chunks = [];
+    let socketError = null;
+    const socket = connect(Number(base.port), base.hostname, () => socket.end(Buffer.concat([Buffer.from(head), payload])));
     socket.on("data", c => chunks.push(c));
-    socket.on("end", () => {
+    socket.on("error", e => { socketError = e; });
+    socket.on("close", () => {
       const text = Buffer.concat(chunks).toString("utf8");
+      if (!text) return reject(socketError ?? new Error("no response"));
       resolve({ status: Number(text.split(" ")[1]), text, sessionSet: /session_token=[^;\s]/.test(text) });
     });
-    socket.on("error", reject);
   });
 }
 
