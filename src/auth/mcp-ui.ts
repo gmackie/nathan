@@ -32,7 +32,10 @@ export function mcpPage(title: string, body: string, status = 200, formTargets: 
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
       "Content-Security-Policy": "default-src 'none'; img-src 'none'; style-src 'nonce-" + nonce + "'; script-src 'none'; form-action " + formAction + "; base-uri 'none'; frame-ancestors 'none'",
-      "Referrer-Policy": "no-referrer",
+      // Not no-referrer: under it browsers send `Origin: null` with this page's same-origin form
+      // posts, and the consent and connections handlers (rightly) refuse an opaque origin.
+      // same-origin still sends no referrer to the client's callback or any other site.
+      "Referrer-Policy": "same-origin",
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY",
       "Cross-Origin-Opener-Policy": "same-origin",

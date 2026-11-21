@@ -121,9 +121,10 @@ The catalog is the app's permissions, read live, plus metadata stored with the M
 
 The consent page runs no script. It shows the client's self-reported name and id, the MCP server, the signed-in user and the callback origin, and one checkbox per scope the user can grant now, preselected from the request. The user can untick any of them or tick others, and tick Full access (which makes the server ignore the individual non-sensitive boxes). Requested scopes the user does not hold are listed as unavailable. A request naming a scope outside the catalog is refused with `invalid_scope` before the page; a user with nothing to grant sends the client `access_denied`.
 
-- The page carries a single-use ticket bound to the user and the browser session that loaded it. The answer must come from Nathan's origin (`Origin` and `Sec-Fetch-Site` checked).
+- The page carries a single-use ticket bound to the user and the browser session that loaded it. The answer must come from Nathan's origin (`Origin` and `Sec-Fetch-Site` checked). A missing or opaque `Origin: null` is refused.
+- The consent and connections pages are served with `Referrer-Policy: same-origin`, not `no-referrer`: under `no-referrer` browsers send `Origin: null` with a same-origin HTML form post (verified in Chromium; `fetch()` is unaffected), so Allow, Deny, Save and Disconnect would all be refused. `same-origin` still sends no referrer to the client's callback or any other site. The workerd tests derive each form post's `Origin` from the page's policy rather than setting it by hand.
 - An empty or invalid selection re-renders the page with an error and leaves the ticket usable. A used, expired or foreign ticket is refused and grants nothing.
-- The CSP is `default-src 'none'; script-src 'none'; form-action 'self' <callback origin>`. WebKit applies `form-action` to the redirect after the POST, so the exact, already validated callback origin is allowed.
+- The CSP is `default-src 'none'; script-src 'none'; form-action 'self' <callback origin>`. WebKit applies `form-action` to the redirect after the POST, so the exact, already validated callback origin is allowed. Safari's behavior here is not yet tested in a real browser.
 - If the user is not signed in, Nathan stores the authorization URL in a 10-minute `__Host-nathan-mcp-return` cookie, sends them to `/sign-in`, and continues after sign-in. Only `/mcp-oauth/authorize?…` and `/connections` are accepted as return paths.
 
 ### Connections page

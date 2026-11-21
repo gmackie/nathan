@@ -62,7 +62,8 @@ const studio = (body, who) => auth.fetch(ORIGIN + "/studio/api/mcp", {
 });
 const form = (path, params, headers = {}) => auth.fetch(ORIGIN + path, {
   method: "POST", redirect: "manual", body: params.toString(),
-  headers: { "Content-Type": "application/x-www-form-urlencoded", ...headers }
+  // A header given as undefined is left out (a request without it).
+  headers: Object.fromEntries(Object.entries({ "Content-Type": "application/x-www-form-urlencoded", ...headers }).filter(([, v]) => v !== undefined))
 });
 
 let admin, alice, bob, carol;
@@ -80,15 +81,28 @@ function authorizeUrl(clientId, { scope = "notes:read notes:write", resource = R
     code_challenge: challenge, code_challenge_method: "S256", ...(scope === null ? {} : { scope }), ...(resource === null ? {} : { resource }) });
   return ORIGIN + "/mcp-oauth/authorize?" + query;
 }
+/**
+ * The headers a browser sends with a same-origin HTML form POST from `page`. Under Referrer-Policy
+ * no-referrer browsers send `Origin: null` even for same-origin form posts (fetch() is unaffected),
+ * so the page's own policy decides what the answer carries; tests never hand-set a good Origin.
+ */
+function browserFormHeaders(page) {
+  const policy = page.headers.get("Referrer-Policy");
+  return { Origin: policy === "no-referrer" ? "null" : ORIGIN, "Sec-Fetch-Site": "same-origin" };
+}
+const formHeaders = new Map();
 async function consentPage(who, url) {
   const page = await auth.fetch(url, { redirect: "manual", headers: { Cookie: who.cookie } });
   const html = page.status === 200 ? await page.text() : "";
-  return { page, html, ticket: /name="ticket" value="([^"]+)"/.exec(html)?.[1] ?? null };
+  const ticket = /name="ticket" value="([^"]+)"/.exec(html)?.[1] ?? null;
+  if (ticket) formHeaders.set(ticket, browserFormHeaders(page));
+  return { page, html, ticket };
 }
 const answer = (who, ticket, scopes, decision = "allow", headers = {}) => {
   const params = new URLSearchParams({ ticket, decision });
   for (const s of scopes) params.append("scope", s);
-  return form("/mcp-oauth/authorize", params, { Cookie: who.cookie, Origin: ORIGIN, "Sec-Fetch-Site": "same-origin", ...headers });
+  assert.ok(formHeaders.has(ticket), "answer a ticket from a consent page this test loaded");
+  return form("/mcp-oauth/authorize", params, { Cookie: who.cookie, ...formHeaders.get(ticket), ...headers });
 };
 const token = params => form("/mcp-oauth/token", new URLSearchParams(params)).then(async r => ({ status: r.status, body: await r.json() }));
 /** Registration, consent with `chosen`, code exchange: a whole manual flow. */
@@ -251,6 +265,8 @@ test("an MCP SDK client discovers, registers, gets narrowed consent and calls a 
   assert.equal(page.status, 200);
   assert.match(page.headers.get("Content-Security-Policy"), /script-src 'none'/);
   assert.match(page.headers.get("Content-Security-Policy"), /form-action 'self' http:\/\/127\.0\.0\.1:33418;/);
+  // no-referrer would make browsers send Origin: null with the form post, which Nathan refuses.
+  assert.equal(page.headers.get("Referrer-Policy"), "same-origin");
   assert.doesNotMatch(html, /<script/);
   for (const s of SCOPES) assert.match(html, new RegExp('value="' + s + '" checked'), s + " preselected from the request");
   const approved = await answer(alice, ticket, ["notes:read"]);
@@ -365,6 +381,8 @@ test("consent CSRF and ticket replay are rejected; an empty selection keeps the 
   const { ticket } = await consentPage(alice, authorizeUrl(client.client_id, { verifier }));
   assert.equal((await answer(alice, ticket, ["notes:read"], "allow", { Origin: "https://evil.example" })).status, 403);
   assert.equal((await answer(alice, ticket, ["notes:read"], "allow", { "Sec-Fetch-Site": "cross-site" })).status, 403);
+  assert.equal((await answer(alice, ticket, ["notes:read"], "allow", { Origin: "null" })).status, 403, "an opaque origin is never accepted");
+  assert.equal((await answer(alice, ticket, ["notes:read"], "allow", { Origin: undefined })).status, 403, "nor a missing one");
   assert.equal((await answer(bob, ticket, ["notes:read"])).status, 400, "the ticket is bound to Alice's session");
   const otherSession = await session("u-alice");
   assert.equal((await answer(otherSession, ticket, ["notes:read"])).status, 400, "and to this browser session");
@@ -432,13 +450,16 @@ test("grant edits and disconnect reach the MCP server within 60 seconds", async 
     assert.deepEqual(before.scopes, ["notes:read", "notes:write"]);
     assert.equal(before.canWrite, true);
   }
-  const page = await (await auth.fetch(ORIGIN + "/connections", { headers: { Cookie: alice.cookie } })).text();
+  const loaded = await auth.fetch(ORIGIN + "/connections", { headers: { Cookie: alice.cookie } });
+  assert.equal(loaded.headers.get("Referrer-Policy"), "same-origin", "so browsers send Nathan's Origin with Save and Disconnect");
+  const page = await loaded.text();
   const grantId = (await grantStatus(tokens.access_token)).grantId;
   assert.match(page, new RegExp('name="grant" value="' + grantId + '"'));
   const csrf = /name="csrf" value="([^"]+)"/.exec(page)[1];
-  const edit = (who, params, headers = {}) => form("/connections", new URLSearchParams(params), { Cookie: who.cookie, Origin: ORIGIN, "Sec-Fetch-Site": "same-origin", ...headers });
+  const edit = (who, params, headers = {}) => form("/connections", new URLSearchParams(params), { Cookie: who.cookie, ...browserFormHeaders(loaded), ...headers });
   assert.equal((await edit(alice, { csrf: "x".repeat(43), grant: grantId, action: "save", scope: "notes:read" })).status, 403, "CSRF token");
   assert.equal((await edit(alice, { csrf, grant: grantId, action: "save", scope: "notes:read" }, { Origin: "https://evil.example" })).status, 403);
+  assert.equal((await edit(alice, { csrf, grant: grantId, action: "save", scope: "notes:read" }, { Origin: "null" })).status, 403, "an opaque origin is never accepted");
   // Bob has a connection of his own, so his page carries his CSRF token.
   await sql("INSERT INTO nathan_rbac_grants(id,app_id,role_key,principal_type,principal_id,created_by) VALUES ('g-bob','notes','editor','user','u-bob','test')");
   await connect(bob, ["notes:read"]);
