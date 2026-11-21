@@ -149,6 +149,10 @@ Paste this into Gatekeeper's `GATEKEEPER_IDENTITY_PROVIDERS` array. Replace `log
 
 Gatekeeper's principal id is `principal:<url-encoded issuer>:sub:<url-encoded sub>`, without the kind (see [Policies must check the principal kind](#policies-must-check-the-principal-kind)). Nathan's directory subject is `<issuer>#<sub>` with the same issuer and `sub`.
 
+## Remote MCP tokens
+
+Tokens from Nathan's MCP authorization server ([remote-mcp.md](remote-mcp.md), NATH-14) follow this profile with the same issuer and keys: `aud` is the MCP server's resource URL, `principal_kind` is always `agent`, `sub` is the user, `scope` holds the scopes effective at issuance, and they live 300 s. To accept them in Gatekeeper, use the entry above with `audience` set to the MCP resource. Gatekeeper sees the signature only; the MCP server's `nathanMcp()` additionally checks the live grant, so a revoked connection stops there within 60 s and at Gatekeeper when the token expires.
+
 ## Roles: read the directory, not the token
 
 Token `roles` are hints for simple apps that cannot call Nathan. They can be up to 900 s stale and cover only the audience's app. Gatekeeper's PIP must read authoritative roles from the directory:

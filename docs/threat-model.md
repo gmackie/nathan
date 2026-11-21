@@ -34,6 +34,7 @@ Nathan is an identity provider. An attacker who compromises its signing keys, OA
 | T18 | Audit-log manipulation | External tamper-evident export and administrative separation | D1 audit events exist; immutable export pending |
 | T19 | D1 race / transaction failure | Atomic one-time operations, idempotent migrations, adversarial concurrency tests | Unit schema tests only; load tests pending |
 | T20 | Cloudflare zone or OAuth scope confusion | Exact account/hostname inspection, least privilege, explicit plan diff | Preview checks implemented; real account tests pending |
+| T21 | Remote MCP client over-reach (NATH-14) | Public-client DCR limited to MCP catalog scopes, per-scope consent with session-bound single-use tickets, effective scopes = grant ∩ current permissions, sensitive scopes never implied, refresh reuse revokes the grant, ≤ 30 s cached grant checks | Implemented and workerd-tested; deployed and real-client tests pending |
 
 ## Security release gates
 

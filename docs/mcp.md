@@ -1,5 +1,7 @@
 # Admin MCP server
 
+This page covers Nathan's own administration endpoint. To protect **your** Worker as a remote MCP server with per-scope consent, see [remote-mcp.md](remote-mcp.md). The admin endpoint deliberately stays on administrator-registered clients and session-bound step-up checks ([why](remote-mcp.md#design-decisions)).
+
 Nathan exposes a stateless, OAuth-protected Model Context Protocol endpoint at \`https://login.example.com/mcp\`.
 
 **Security:** Never supply Better Auth cookies to MCP. MCP requires a resource-bound JWT access token issued to \`https://login.example.com/mcp\`, with \`nathan:read\` or \`nathan:admin\` scopes. The resource metadata is discoverable at \`/.well-known/oauth-protected-resource\`. All requests are checked against the current Nathan identity store: email must be verified, user must be in the admin role and in \`NATHAN_ADMIN_EMAILS\`, and account must not be suspended.
