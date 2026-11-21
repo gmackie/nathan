@@ -16,6 +16,19 @@ Nathan accepts SCIM 2.0 provisioning from enterprise directories such as Okta an
 | Error log | D1 `nathan_scim_errors` | The last 200 reconciliation failures per connection |
 | Logout queue | D1 `nathan_backchannel_deliveries` | Back-channel logout deliveries, with retries |
 
+### Trust boundary
+
+Only the identity Worker may bind the `NathanScimDirectory` Durable Object namespace (`SCIM_DIRECTORY` in `wrangler.auth.jsonc`, created by the hosted installer). The object trusts its caller to have authenticated the directory's bearer token, enforced the connection's enabled state and size limits, and authorized administrator operations (resync, requeue, outbox, skip). A Durable Object class can be bound from another Worker in the same account (`durable_objects` with `script_name`). **Never do that for this class**, and review the account's Workers for such a binding.
+
+Nathan also enforces this in the object (NATH-18):
+
+- **No RPC.** The class deliberately does not extend `DurableObject`, so workerd offers no RPC methods on it. Every method of a class that does extend it is callable over RPC, and TypeScript `private` is not private at runtime.
+- **Caller proof on `fetch`.** Every request must carry `X-Nathan-SCIM-Caller`, an HMAC derived from `BETTER_AUTH_SECRET` (`src/auth/scim/caller.ts`). The object runs with the identity Worker's env, so it can check the proof; a Worker that binds the class cannot produce it. A request without it gets 403 before any rate limit or storage access.
+
+The proof is a static derived value, not a per-request signature: it only travels inside Cloudflare, between the identity Worker and its own object. Rotating `BETTER_AUTH_SECRET` rotates it.
+
+workerd-tested: a foreign Worker that binds the class gets 403 on every path and no RPC (`tests/runtime/binding-trust.test.mjs`).
+
 **SCIM records never grant access by themselves** (NATH-1). A directory user reaches an application only through roles that an administrator grants, directly or to a mapped group (see [rbac.md](rbac.md)).
 
 ## Endpoint and token
@@ -56,7 +69,7 @@ All changes require an enrolled administrator with a fresh passkey step-up (`may
 
 **Fail closed.** The SCIM request reports success only after that transaction commits. If it cannot commit, the directory gets **503** with `Retry-After`, the change stays queued in the Durable Object, the error is logged, and an alarm retries it even if the directory does not. While an earlier change is still unapplied, new changes are refused with 503, so nothing is applied out of order.
 
-**Within 60 seconds.** Nathan gateways look up access over the `NathanVerifier` binding at least every 60 s (`ACCESS_CACHE_TTL_SECONDS` ≤ 60), and a banned user is always denied. Back-channel logout also deletes gateway sessions right away. Cookie-based `NathanVerifier.getPrincipal` fails at once, because the session is gone. A Worker that only verifies a Nathan-issued **JWT** access token locally, without the binding, still accepts it until it expires (at most 5 minutes for Nathan's own resources). Use the binding for immediate revocation.
+**Within 60 seconds.** Nathan gateways look up access over the `NathanVerifier` binding at least every 60 s (`ACCESS_CACHE_TTL_SECONDS` ≤ 60), and a banned user is always denied. Back-channel logout also deletes gateway sessions right away. Cookie-based `NathanVerifier.getPrincipal` returns `null` at once, because the session is gone (it is also app-scoped: it answers only for users the pinned application allows, see [rbac.md](rbac.md)). A Worker that only verifies a Nathan-issued **JWT** access token locally, without the binding, still accepts it until it expires (at most 5 minutes for Nathan's own resources). Use the binding for immediate revocation.
 
 **Back-channel logout delivery.** Each delivery is a Logout Token (`typ: logout+jwt`, `sub` only, meaning every session of that user at the client), signed with Nathan's ID-token key, so the gateway's `/__nathan/backchannel` receiver verifies it with the JWKS it already uses. Each attempt signs a new token with a new `jti`. The connection's Durable Object sends deliveries right after the revocation commits. Failures are retried after 15 s, 1 min, 5 min, 15 min, 1 h, 6 h and 12 h, then marked `failed` and audited (`backchannel_logout_failed`). The identity Worker's `scheduled` handler also retries due deliveries when a cron trigger is configured. A slow or failing relying party never delays or fails the revocation.
 

@@ -542,24 +542,45 @@ export default {
  * its application in props ({ applicationId }); every method answers only for that application.
  * Directory reads are not offered here: use the authenticated GET /directory/v1/* API.
  */
+/**
+ * The user behind a Nathan session cookie. Deliberately a module function, not a NathanVerifier
+ * method: every method of a WorkerEntrypoint (TypeScript `private` included) is callable over RPC,
+ * and this answer must never reach an app Worker without the per-app access decision.
+ */
+async function cookieSubject(env: AuthEnv, cookie: unknown): Promise<string | null> {
+  if (typeof cookie !== "string" || cookie.length > 8192) return null;
+  const auth = createAuth(env, await loadSocialCredentials(env));
+  const session = await auth.api.getSession({ headers: new Headers({ Cookie: cookie }) });
+  return typeof session?.user?.id === "string" ? session.user.id : null;
+}
+
 export class NathanVerifier extends WorkerEntrypoint<AuthEnv, BindingProps> {
-  async getPrincipal(cookie: string): Promise<{ sub: string; email: string; role: string } | null> {
-    if (!scopedApplication(this.ctx.props, undefined).ok) return null;
-    if (typeof cookie !== "string" || cookie.length > 8192) return null;
-    const auth = createAuth(this.env, await loadSocialCredentials(this.env));
-    const session = await auth.api.getSession({ headers: new Headers({ Cookie: cookie }) });
-    if (!session?.user?.id) return null;
-    return { sub: session.user.id, email: session.user.email, role: (session.user as any).role ?? "user" };
+  /**
+   * NATH-18: the signed-in user behind a Nathan session cookie, for the binding's pinned application
+   * only. Returns null unless the evaluator allows that user for that application, so an app Worker
+   * holding a cookie learns nothing about people who may not use it. The global Better Auth role is
+   * never returned: use `roles`/`permissions`, which are the app's own.
+   */
+  async getPrincipal(cookie: string): Promise<{ sub: string; email: string | null; applicationId: string; roles: string[]; permissions: string[] } | null> {
+    const scope = scopedApplication(this.ctx.props, undefined);
+    if (!scope.ok) return null;
+    const sub = await cookieSubject(this.env, cookie);
+    if (!sub) return null;
+    const decision = await resolveAccess(this.env, scope.app, sub);
+    if (!decision.allowed) return null;
+    return { sub, email: decision.email, applicationId: scope.app, roles: decision.roles, permissions: decision.permissions };
   }
   /** Cookie-based check for Workers that hold a Nathan session cookie. Same evaluator as every other path. */
   async authorize(input: { applicationId?: string; cookie: string }): Promise<boolean> {
     return (await this.access(input)).allowed;
   }
+  /** The access decision for a cookie's user; `sub` only when allowed (NATH-18). */
   async access(input: { applicationId?: string; cookie: string }) {
     const scope = scopedApplication(this.ctx.props, input?.applicationId);
     if (!scope.ok) return { ...outOfScope(scope.reason), sub: null };
-    const principal = await this.getPrincipal(input?.cookie);
-    return { ...await resolveAccess(this.env, scope.app, principal?.sub ?? null), sub: principal?.sub ?? null };
+    const sub = await cookieSubject(this.env, input?.cookie);
+    const decision = await resolveAccess(this.env, scope.app, sub);
+    return { ...decision, sub: decision.allowed ? sub : null };
   }
   /**
    * NATH-13 gateway and SDK path: effective roles and permissions of an OIDC subject for the pinned

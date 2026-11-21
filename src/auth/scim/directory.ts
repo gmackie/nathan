@@ -1,10 +1,10 @@
-import { DurableObject } from "cloudflare:workers";
 import type {AuthEnv} from "../env";
 import {DIRECTORY_SCHEMA,DIRECTORY_LIFECYCLE_SCHEMA,DIRECTORY_TOMBSTONE_SCHEMA,DIRECTORY_TOMBSTONE_MIGRATION} from "./schema.mjs";
 import {SCIM_USER,SCIM_GROUP,SCIM_LIST,validateScimUser,validateScimGroup,parseFilter,pagination} from "./validation.mjs";
 import {applyUserPatch,applyGroupPatch,sameUser,sameGroup,ScimError} from "./patch.mjs";
 import {loadPolicy,applyUser,applyGroup,markSynced,recordError,Budget,RECONCILE_LIMITS,type UserSnapshot,type GroupSnapshot,type ConnectionPolicy} from "./lifecycle";
 import {deliverLogouts} from "../logout-queue";
+import {isScimCaller} from "./caller.ts";
 
 const SCIM_ERROR="urn:ietf:params:scim:api:messages:2.0:Error";
 const ID=/^[0-9a-f-]{36}$/i;
@@ -48,13 +48,20 @@ class ReconcileError extends Error {}
  * A PATCH or PUT that changes nothing keeps the revision and queues nothing (replay-safe).
  * Deleted resources move to tombstone tables, so uniqueness covers live resources only (rehires).
  */
-export class NathanScimDirectory extends DurableObject<AuthEnv> {
+// NATH-18: deliberately NOT `extends DurableObject`. workerd offers RPC only to classes that extend
+// it, and RPC would expose every method here (TypeScript `private` is not private at runtime) to any
+// Worker that binds this class. Without it, fetch() is the only entry point, and fetch() accepts
+// only the identity Worker (caller proof, src/auth/scim/caller.ts).
+export class NathanScimDirectory {
+  readonly ctx:DurableObjectState;
+  readonly env:AuthEnv;
   readonly sql:SqlStorage;
   private chain:Promise<unknown>=Promise.resolve();
   /** The first resource a mutation staged (its own change), for deciding whether it was applied. */
   private primary:{kind:"User"|"Group";id:string}|null=null;
   constructor(ctx:DurableObjectState,env:AuthEnv){
-    super(ctx,env);
+    this.ctx=ctx;
+    this.env=env;
     this.sql=ctx.storage.sql;
     this.sql.exec("PRAGMA foreign_keys=ON");
     this.sql.exec(DIRECTORY_SCHEMA);
@@ -469,6 +476,8 @@ export class NathanScimDirectory extends DurableObject<AuthEnv> {
   }
   async fetch(request:Request):Promise<Response>{
     try{
+      // NATH-18: only the identity Worker may use this object (src/auth/scim/caller.ts), whoever binds it.
+      if(!await isScimCaller(this.env,request))return fail(403,"SCIM directory accepts only the Nathan identity Worker","");
       if(!this.rateLimit())return fail(429,"SCIM connection rate exceeded","tooMany");
       const url=new URL(request.url);
       if(url.hostname!=="scim.internal")return fail(421,"Unknown SCIM internal authority");
