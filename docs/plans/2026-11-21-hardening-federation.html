@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Nathan: authentication for Workers</title>
+<title>Nathan: Worker auth, roles and federation</title>
 <style>
   * { box-sizing: border-box; }
   body { margin: 0; color: var(--foreground, #202124); font: 14px/1.5 var(--font-sans, system-ui, sans-serif); }
@@ -53,25 +53,25 @@
 </head>
 <body>
 <main>
-  <h1 class="reveal">Nathan: authentication for Workers, MCP and federation <span class="badge">In progress</span></h1>
-  <p class="meta reveal" style="--i:1">2026-11-21 · gmackie/nathan · base <code>73a8325</code> · issues NATH-8, 15, 14, 9, 11, 10 (NATH-12 backlog; NATH-13 canceled) · Claude</p>
+  <h1 class="reveal">Nathan: Worker auth, roles, MCP and federation <span class="badge">In progress</span></h1>
+  <p class="meta reveal" style="--i:1">2026-11-21 · gmackie/nathan · base <code>73a8325</code> · issues NATH-8, 13, 15, 14, 9, 11, 10 · GATE-9 (NATH-12 backlog) · Claude</p>
 
-  <div class="callout reveal" style="--i:2"><strong>North star:</strong> Nathan is <em>authentication</em>: the brain-dead-simple way to put sign-in in front of a Cloudflare Worker and issue tokens. <strong>Authorization belongs to Gatekeeper</strong>, which consumes Nathan as an external OIDC issuer and decides what a principal may do. Nathan never holds roles, permissions or policy.</div>
-  <p class="reveal" style="--i:2"><strong>Approach:</strong> six stacked draft PRs, one per issue, landing in dependency order. First fix the broken login paths and prove them in the Workers runtime (<code>workerd</code>). Next, issue the access tokens Gatekeeper expects, then add remote MCP consent and federation on top. The same runtime test harness verifies every phase.</p>
+  <div class="callout reveal" style="--i:2"><strong>North star:</strong> Nathan is the brain-dead-simple way to protect a Cloudflare Worker. It provides sign-in, <strong>roles and a minimal RBAC</strong>, and OAuth for MCP servers, so a Worker can ask <code>user.can("invoices:write")</code>. <strong>Gatekeeper</strong> is the full policy engine (conditions, approvals, resource rules). It reads roles from Nathan, which stays their source of truth.</div>
+  <p class="reveal" style="--i:2"><strong>Approach:</strong> seven stacked draft PRs, one per Nathan issue, landing in dependency order. First fix the broken login paths and prove them in the Workers runtime (<code>workerd</code>). Next come roles and permissions, then the access tokens Gatekeeper expects, then remote MCP consent and federation. The same runtime test harness verifies every phase.</p>
 
   <figure class="card reveal" style="--i:2;margin:.75rem 0">
-    <svg viewBox="0 0 640 120" role="img" aria-label="Sign-in methods feed Nathan, which issues access tokens; Gatekeeper evaluates policy on those tokens; the protected Worker or MCP server serves the request." style="width:100%;height:auto">
+    <svg viewBox="0 0 640 120" role="img" aria-label="Sign-in methods feed Nathan, which authenticates, owns roles and permissions, and issues tokens. Optionally Gatekeeper evaluates richer policy, reading roles from Nathan. The protected Worker or MCP server serves the request." style="width:100%;height:auto">
       <g font-size="12" fill="var(--foreground,#202124)" font-family="var(--font-sans,system-ui)">
         <rect x="4" y="34" width="132" height="52" rx="8" fill="var(--muted,#eee)"/><text x="70" y="56" text-anchor="middle">Social · SAML</text><text x="70" y="73" text-anchor="middle">SCIM · passkeys</text>
-        <rect x="170" y="34" width="132" height="52" rx="8" fill="var(--accent-surface,#eaf0ff)" stroke="var(--accent,#2458ac)"/><text x="236" y="56" text-anchor="middle" font-weight="600">Nathan · authn</text><text x="236" y="73" text-anchor="middle">consent, tokens</text>
-        <rect x="336" y="34" width="132" height="52" rx="8" fill="var(--muted,#eee)"/><text x="402" y="56" text-anchor="middle" font-weight="600">Gatekeeper · authz</text><text x="402" y="73" text-anchor="middle">Rego PDP, MCP gateway</text>
+        <rect x="170" y="34" width="132" height="52" rx="8" fill="var(--accent-surface,#eaf0ff)" stroke="var(--accent,#2458ac)"/><text x="236" y="56" text-anchor="middle" font-weight="600">Nathan</text><text x="236" y="73" text-anchor="middle">authn · roles · consent</text>
+        <rect x="336" y="34" width="132" height="52" rx="8" fill="var(--muted,#eee)"/><text x="402" y="56" text-anchor="middle" font-weight="600">Gatekeeper (optional)</text><text x="402" y="73" text-anchor="middle">policy, reads roles</text>
         <rect x="502" y="34" width="132" height="52" rx="8" fill="var(--muted,#eee)"/><text x="568" y="56" text-anchor="middle">Worker or</text><text x="568" y="73" text-anchor="middle">MCP server</text>
       </g>
       <g stroke="var(--muted-foreground,#666)" stroke-width="2" fill="none" marker-end="url(#ah)">
         <path d="M136 60 H166"/><path d="M302 60 H332"/><path d="M468 60 H498"/>
       </g>
       <defs><marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="var(--muted-foreground,#666)"/></marker></defs>
-      <text x="317" y="108" text-anchor="middle" font-size="11" fill="var(--muted-foreground,#666)" font-family="var(--font-sans,system-ui)">RFC 9068 access token · resource audience · principal_kind · ≤ 900 s</text>
+      <text x="317" y="108" text-anchor="middle" font-size="11" fill="var(--muted-foreground,#666)" font-family="var(--font-sans,system-ui)">Signed principal or RFC 9068 token · roles · permissions · Gatekeeper reads roles from Nathan</text>
     </svg>
   </figure>
 
@@ -80,7 +80,7 @@
     <section class="card reveal" style="--i:4"><h3>SAML</h3><p>Inbound first (Okta, Entra ID, Google Workspace sign users into Nathan). Nathan as a SAML IdP is backlogged as <strong>NATH-12</strong>.</p></section>
     <section class="card reveal" style="--i:5"><h3>SCIM</h3><p>Finish inbound: link directory users to logins, revoke on deprovision, and map groups explicitly. No outbound provisioning.</p></section>
     <section class="card reveal" style="--i:6"><h3>Provider setup</h3><p>One provider registry drives Identity Studio, the hosted installer and the CLI.</p></section>
-    <section class="card reveal" style="--i:6"><h3>Authorization</h3><p>Gatekeeper's job, not Nathan's. RBAC (NATH-13) is cancelled. Nathan's side of that boundary is a token Gatekeeper can verify (NATH-15).</p></section>
+    <section class="card reveal" style="--i:6"><h3>Roles and Gatekeeper</h3><p>Nathan keeps roles and a minimal RBAC (roles bundle permissions) and is their source of truth. Gatekeeper keeps the rich policy and reads roles from Nathan (GATE-9).</p></section>
   </div>
   <p class="muted">These change two NATH-1 launch decisions, which had deferred SAML and directory sync. The new issues record the change.</p>
 
@@ -98,8 +98,23 @@
           <tr><td>Miniflare test harness running the real Worker bundles</td><td><code>tests/runtime/*</code></td><td><code>npm run test:runtime</code> in CI</td><td><span class="chip todo">Todo</span></td></tr>
         </tbody></table></div></details></li>
 
-    <li class="reveal" style="--i:9"><div class="head"><h3>2 · Gatekeeper-ready access tokens</h3><span class="chip todo">Todo</span><span class="muted">NATH-15</span></div>
-      <p class="muted">Gatekeeper verifies external issuers' JWT access tokens. For a Better Auth issuer like Nathan it expects a dedicated resource audience, an access-token profile (RFC 9068 <code>at+jwt</code> or <code>token_use: access</code>), a <code>principal_kind</code> claim (user, machine or agent) and a lifetime of at most 900 seconds. Roles and membership stay in Gatekeeper.</p>
+    <li class="reveal" style="--i:9"><div class="head"><h3>2 · Roles and minimal RBAC</h3><span class="chip todo">Todo</span><span class="muted">NATH-13</span></div>
+      <p class="muted">Apps declare permission strings, roles bundle them, and roles are granted per app to users or groups. Deny is the default. Nathan stays minimal: no policy language, conditions or approvals; those live in Gatekeeper. Nathan is the source of truth for roles, and Gatekeeper's policy-information source reads them through a directory API.</p>
+      <pre style="padding:.6rem;overflow-x:auto"><code>// inside a Worker behind a Nathan gateway
+const user = await nathan(request, env);   // verifies the gateway-signed principal
+if (!user.can("invoices:write")) return user.forbidden();</code></pre>
+      <details><summary>Tasks</summary><div class="table-scroll"><table>
+        <thead><tr><th>Task</th><th>Files</th><th>Verification</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>Schema: permissions, roles, groups, members, per-app grants; migrate today's app role lists and global admin role</td><td><code>migrations/0011_rbac.sql</code></td><td>SQLite migration tests</td><td><span class="chip todo">Todo</span></td></tr>
+          <tr><td>One pure evaluator for gateway, RPC and tokens; both NATH-1 access modes</td><td><code>src/shared/policy.mjs</code></td><td>Deny by default, group grant, revoked grant, blocked user, disabled app</td><td><span class="chip todo">Todo</span></td></tr>
+          <tr><td>Gateway signed principal (cached ≤ 60 s); SDK <code>nathan(request)</code> with <code>hasRole</code>, <code>can</code> and <code>require</code></td><td><code>src/gateway/*</code>, <code>src/sdk/*</code></td><td>workerd: forged principal rejected; grant removal takes effect within 60 s</td><td><span class="chip todo">Todo</span></td></tr>
+          <tr><td>Directory read API and change cursor for Gatekeeper's policy-information source</td><td><code>src/auth/*</code></td><td>Returns the same roles the evaluator uses (contract test with GATE-9)</td><td><span class="chip todo">Todo</span></td></tr>
+          <tr><td>Studio roles, groups and grants; permissions as code; <code>nathan protect &lt;worker&gt;</code></td><td><code>src/auth/ui.ts</code>, <code>scripts/*</code></td><td>5-minute quickstart followed end to end</td><td><span class="chip todo">Todo</span></td></tr>
+        </tbody></table></div></details></li>
+
+    <li class="reveal" style="--i:10"><div class="head"><h3>3 · Gatekeeper-ready access tokens</h3><span class="chip todo">Todo</span><span class="muted">NATH-15</span></div>
+      <p class="muted">Gatekeeper verifies external issuers' JWT access tokens. For a Better Auth issuer like Nathan it expects a dedicated resource audience, an access-token profile (RFC 9068 <code>at+jwt</code> or <code>token_use: access</code>), a <code>principal_kind</code> claim (user, machine or agent) and a lifetime of at most 900 seconds. Tokens may carry a <code>roles</code> claim for simple apps; Gatekeeper treats it only as a hint and reads authoritative roles from Nathan.</p>
       <details><summary>Tasks</summary><div class="table-scroll"><table>
         <thead><tr><th>Task</th><th>Files</th><th>Verification</th><th>Status</th></tr></thead>
         <tbody>
@@ -109,26 +124,25 @@
           <tr><td>Documented Gatekeeper identity-provider entry for a Nathan install; cross-repo verification test</td><td><code>docs/gatekeeper.md</code>, <code>tests/runtime/*</code></td><td>Token verifies under Gatekeeper's profile; ID tokens and other audiences are rejected</td><td><span class="chip todo">Todo</span></td></tr>
         </tbody></table></div></details></li>
 
-    <li class="reveal" style="--i:10"><div class="head"><h3>3 · Remote OAuth MCP servers with per-scope consent</h3><span class="chip todo">Todo</span><span class="muted">NATH-14</span></div>
-      <p class="muted">Any Worker can become an OAuth-protected remote MCP server, with Nathan as its OAuth authorization server. This follows ForgeGraph's FORGE-396 and FORGE-401 design. Each MCP server registers a scope catalog, written by hand or imported from Gatekeeper's action catalog. The consent screen shows one checkbox per scope, preselected from the request, plus Full access; sensitive scopes must be ticked on their own. A connections page edits or disconnects grants. Scopes record only what the user delegated; each tool call is still authorized by Gatekeeper.</p>
+    <li class="reveal" style="--i:10"><div class="head"><h3>4 · Remote OAuth MCP servers with per-scope consent</h3><span class="chip todo">Todo</span><span class="muted">NATH-14</span></div>
+      <p class="muted">Any Worker can become an OAuth-protected remote MCP server, with Nathan as its OAuth authorization server. This follows ForgeGraph's FORGE-396 and FORGE-401 design. An MCP server's scopes are its Nathan app permissions, optionally imported from Gatekeeper's action catalog. The consent screen shows one checkbox per scope, preselected from the request, plus Full access; sensitive scopes must be ticked on their own. A connections page edits or disconnects grants. Effective scopes are the consented scopes intersected with the user's current permissions. Servers that need conditions or approvals sit behind Gatekeeper's MCP gateway.</p>
       <pre style="padding:.6rem;overflow-x:auto"><code>// a Worker MCP server protected by Nathan
 const mcp = nathanMcp(env, { resource: "https://tools.example.com/mcp" });
 export default { fetch: req =&gt; mcp.handle(req, async (user) =&gt; {
-  if (!user.hasScope("tickets:write")) return mcp.insufficientScope("tickets:write");
-  // fine-grained policy: ask Gatekeeper (or put the server behind its MCP gateway)
+  if (!user.can("tickets:write")) return mcp.insufficientScope("tickets:write");
   …
 })};</code></pre>
       <details><summary>Tasks</summary><div class="table-scroll"><table>
         <thead><tr><th>Task</th><th>Files</th><th>Verification</th><th>Status</th></tr></thead>
         <tbody>
           <tr><td>Spike: per-app resources with Better Auth (static <code>resources</code> today) versus a Nathan-owned resource layer</td><td><code>src/auth/instance.ts</code></td><td>Token <code>aud</code> equals the registered MCP resource</td><td><span class="chip todo">Todo</span></td></tr>
-          <tr><td>Per-resource scope catalog (hand-written or imported from Gatekeeper's action catalog): labels, implied scopes, aliases, Full access marker, sensitive scopes</td><td><code>src/shared/scopes.mjs</code></td><td>Sensitive scope never implied by an alias or Full access</td><td><span class="chip todo">Todo</span></td></tr>
+          <tr><td>Scope catalog from app permissions (or imported from Gatekeeper's action catalog): labels, implied scopes, aliases, Full access marker, sensitive scopes</td><td><code>src/shared/scopes.mjs</code></td><td>Sensitive scope never implied by an alias or Full access</td><td><span class="chip todo">Todo</span></td></tr>
           <tr><td>Public-client registration limited to MCP scopes; mandatory <code>resource</code>; S256 PKCE; rate limits</td><td><code>src/auth/instance.ts</code>, <code>worker.ts</code></td><td>Wrong or missing <code>resource</code> rejected</td><td><span class="chip todo">Todo</span></td></tr>
           <tr><td>Script-free per-scope consent page; connections page; refresh narrows to intersection</td><td><code>src/auth/ui.ts</code></td><td>Consent CSRF and ticket replay rejected; grant edits take effect within 60 s</td><td><span class="chip todo">Todo</span></td></tr>
           <tr><td><code>nathanMcp()</code> Worker SDK: resource metadata, 401 and <code>insufficient_scope</code> challenges; move Nathan's own <code>/mcp</code> onto it</td><td><code>src/sdk/*</code>, <code>src/auth/mcp.ts</code></td><td>MCP TypeScript SDK client: discovery → registration → narrowed consent → tool call in workerd</td><td><span class="chip todo">Todo</span></td></tr>
         </tbody></table></div></details></li>
 
-    <li class="reveal" style="--i:10"><div class="head"><h3>4 · Guided social login for six providers</h3><span class="chip todo">Todo</span><span class="muted">NATH-9</span></div>
+    <li class="reveal" style="--i:10"><div class="head"><h3>5 · Guided social login for six providers</h3><span class="chip todo">Todo</span><span class="muted">NATH-9</span></div>
       <p class="muted">None of these services offer an API to create OAuth clients, so "trivial setup" means Nathan does everything else: deep links into each developer console, the exact callback URL with a copy button, step-by-step instructions per provider, credential validation before saving, and a live test sign-in.</p>
       <div class="providers">
         <div class="prov"><b>Google</b><small>Web client ID and secret. Verified email trusted.</small></div>
@@ -148,16 +162,16 @@ export default { fetch: req =&gt; mcp.handle(req, async (user) =&gt; {
           <tr><td>Sign-in page shows every enabled provider</td><td><code>src/auth/worker.ts</code></td><td>workerd: Discord redirect carries the correct state and PKCE parameters</td><td><span class="chip todo">Todo</span></td></tr>
         </tbody></table></div></details></li>
 
-    <li class="reveal" style="--i:11"><div class="head"><h3>5 · Production inbound SCIM</h3><span class="chip todo">Todo</span><span class="muted">NATH-11</span></div>
-      <p class="muted">SCIM currently only stages records. This phase makes directory changes take effect: link each record to a login identity, revoke sessions and tokens on deprovision, and pass group membership to Gatekeeper, which owns access decisions.</p>
+    <li class="reveal" style="--i:11"><div class="head"><h3>6 · Production inbound SCIM</h3><span class="chip todo">Todo</span><span class="muted">NATH-11</span></div>
+      <p class="muted">SCIM currently only stages records. This phase makes directory changes take effect: link each record to a login identity, revoke sessions and tokens on deprovision, and apply only the group mappings an admin has configured.</p>
       <details><summary>Tasks</summary><div class="table-scroll"><table>
         <thead><tr><th>Task</th><th>Files</th><th>Verification</th><th>Status</th></tr></thead>
         <tbody>
           <tr><td>Link by connection + externalId; email match only under a verified domain</td><td><code>src/auth/scim/*</code>, migration <code>0012</code></td><td>Unverified-domain email does not link</td><td><span class="chip todo">Todo</span></td></tr>
           <tr><td>Deprovision: ban the user, revoke sessions and refresh tokens, fan out back-channel logout</td><td><code>src/auth/scim/directory.ts</code>, <code>admin-service.ts</code></td><td>Revocation within 60 s; reactivating does not restore old sessions</td><td><span class="chip todo">Todo</span></td></tr>
-          <tr><td>Expose directory groups and membership to Gatekeeper's org data (Nathan holds no grants); idempotent reconciliation</td><td><code>src/auth/scim/admin.ts</code>, <code>ui.ts</code></td><td>Okta and Entra PATCH fixtures; replay is a no-op</td><td><span class="chip todo">Todo</span></td></tr>
+          <tr><td>Map directory groups to Nathan groups, only by explicit admin choice (Gatekeeper sees them through the directory API); idempotent reconciliation</td><td><code>src/auth/scim/admin.ts</code>, <code>ui.ts</code></td><td>Okta and Entra PATCH fixtures; replay is a no-op</td><td><span class="chip todo">Todo</span></td></tr>
         </tbody></table></div></details></li>
-    <li class="reveal" style="--i:12"><div class="head"><h3>6 · Inbound enterprise SAML</h3><span class="chip todo">Todo</span><span class="muted">NATH-10</span></div>
+    <li class="reveal" style="--i:12"><div class="head"><h3>7 · Inbound enterprise SAML</h3><span class="chip todo">Todo</span><span class="muted">NATH-10</span></div>
       <p class="muted">The <code>@better-auth/sso</code> plugin already implements the SAML protocol. Nathan needs a safe admin layer around it: metadata validation, SP metadata to copy, domain-verified enablement, certificate rotation, and audit. The phase starts with a proof-of-concept that samlify and xmldom run inside workerd.</p>
       <details><summary>Tasks</summary><div class="table-scroll"><table>
         <thead><tr><th>Task</th><th>Files</th><th>Verification</th><th>Status</th></tr></thead>
@@ -172,8 +186,8 @@ export default { fetch: req =&gt; mcp.handle(req, async (user) =&gt; {
 
   <h2>Scope</h2>
   <div class="grid">
-    <section class="card"><h3>✓ In</h3><ul><li>The six phases above, each as a draft PR</li><li>Runtime tests in workerd</li><li>Docs: providers, SAML and SCIM guides</li></ul></section>
-    <section class="card no"><h3>✕ Out</h3><ul><li>Nathan as a SAML IdP (NATH-12)</li><li>Outbound SCIM</li><li>Roles, permissions or policy in Nathan (Gatekeeper)</li><li>Auto-creating OAuth apps through provider APIs</li><li>Marking any PR production-ready before staging verification and independent security review</li></ul></section>
+    <section class="card"><h3>✓ In</h3><ul><li>The seven phases above, each as a draft PR</li><li>Runtime tests in workerd</li><li>Docs: providers, SAML and SCIM guides</li></ul></section>
+    <section class="card no"><h3>✕ Out</h3><ul><li>Nathan as a SAML IdP (NATH-12)</li><li>Outbound SCIM</li><li>Policy language, conditions and approvals in Nathan (Gatekeeper)</li><li>Auto-creating OAuth apps through provider APIs</li><li>Marking any PR production-ready before staging verification and independent security review</li></ul></section>
   </div>
 
   <h2>Risks</h2>
