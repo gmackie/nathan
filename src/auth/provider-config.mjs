@@ -156,8 +156,8 @@ const UNAVAILABLE_AUDIT_WINDOW = 3600;
  * that cannot be used. Each provider is isolated: an undecryptable D1 row, a malformed Worker secret
  * or an Apple key that cannot sign turns only that provider off. It is never replaced by a
  * lower-precedence source (resolveSource stops at the first configured source). The unavailable
- * provider is recorded in nathan_provider_health (reason code only, no secret) for Studio and
- * /healthz and audited at most once per window; recovery or an administrator's disable clears it.
+ * provider is recorded in nathan_provider_health (reason code only, no secret) for Studio (the
+ * public /healthz only counts it) and audited at most once per window; recovery or an administrator's disable clears it.
  * Health bookkeeping never fails a request.
  */
 export async function loadSocialProviderState(env) {

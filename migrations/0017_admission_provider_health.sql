@@ -33,7 +33,7 @@ CREATE INDEX IF NOT EXISTS nathan_invitations_created ON nathan_invitations(crea
 
 -- NATH-17: a configured, enabled social provider whose credentials cannot be used (an undecryptable
 -- D1 row, a malformed Worker secret, an Apple key that cannot sign) is skipped instead of failing
--- every request. This row marks it unavailable for Studio and /healthz; it holds no secret, only a
+-- every request. This row marks it unavailable for Studio (/healthz only counts it); it holds no secret, only a
 -- reason code. audited_at limits the audit trail to one row per provider per hour.
 CREATE TABLE IF NOT EXISTS nathan_provider_health (
   id TEXT PRIMARY KEY NOT NULL,

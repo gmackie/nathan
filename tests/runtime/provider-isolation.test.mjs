@@ -1,7 +1,7 @@
 /**
  * NATH-17 in workerd: one social provider whose stored credentials cannot be decrypted must not take
  * down every sign-in. The broken provider is skipped and marked unavailable (audited once per window,
- * shown in Studio and in /healthz without secrets); the other providers, Identity Studio and the
+ * shown in Studio without secrets; the public /healthz reports only how many); the other providers, Identity Studio and the
  * repair and disable paths keep working; Nathan never falls back to an older credential source.
  */
 import test, { after, before } from "node:test";
@@ -95,7 +95,7 @@ test("the broken provider never falls back to the legacy Worker secrets", async 
   assert.ok(!(await response.text()).includes(LEGACY.GITHUB_CLIENT_ID), "the legacy client is never used");
 });
 
-test("Studio and /healthz show the provider as unavailable, without secrets; the audit has one row per window", async () => {
+test("Studio shows the provider as unavailable without secrets; /healthz only counts it; the audit has one row per window", async () => {
   for (let i = 0; i < 3; i++) await get("/sign-in");
   const providers = (await (await get("/studio/api/providers", admin.cookie)).json()).providers;
   const github = providers.find(p => p.id === "github");
@@ -110,9 +110,11 @@ test("Studio and /healthz show the provider as unavailable, without secrets; the
   assert.equal(health.status, 200);
   const body = await health.json();
   assert.equal(body.ok, true, "the identity Worker itself is healthy");
-  assert.deepEqual(body.detail.socialProviders.unavailable, [{ id: "github", reason: "decrypt_failed" }]);
+  // /healthz is public: a count for monitoring, no provider ids or reasons (those are in Studio).
+  assert.deepEqual(body.detail.socialProviders, { unavailableCount: 1 });
   const healthText = JSON.stringify(body);
-  for (const secret of [CREDS.github.clientSecret, CREDS.discord.clientSecret, KEY, CREDS.github.clientId]) assert.ok(!healthText.includes(secret), "no credential in /healthz");
+  for (const secret of [CREDS.github.clientSecret, CREDS.discord.clientSecret, KEY, CREDS.github.clientId, "github", "decrypt_failed"])
+    assert.ok(!healthText.includes(secret), "nothing about the provider in /healthz: " + secret);
   assert.deepEqual((await unavailableAudits("github")).map(a => a.outcome), ["skipped_decrypt_failed"], "audited once per window");
   // After the window, a still-broken provider is audited again.
   await db.prepare("UPDATE nathan_provider_health SET audited_at=unixepoch()-3601 WHERE id='github'").run();
@@ -124,7 +126,7 @@ test("Studio repairs the broken provider by saving new credentials", async () =>
   const saved = await studioPost(worker, ORIGIN, "/studio/api/providers", { id: "github", ...CREDS.github }, admin.cookie);
   assert.equal(saved.status, 200, await saved.clone().text());
   assert.ok((await (await get("/sign-in")).text()).includes("Continue with GitHub"), "GitHub is back");
-  assert.deepEqual((await (await get("/healthz")).json()).detail.socialProviders.unavailable, []);
+  assert.deepEqual((await (await get("/healthz")).json()).detail.socialProviders, { unavailableCount: 0 });
   assert.equal(await db.prepare("SELECT 1 FROM nathan_provider_health WHERE id='github'").first(), null, "the mark is cleared");
 });
 
@@ -138,7 +140,7 @@ test("Studio can disable a broken provider even when it is the only one left", a
   const audit = await db.prepare("SELECT outcome FROM nathan_security_audit WHERE action='oauth_provider_disable' AND target='twitter'").first();
   assert.equal(audit.outcome, "succeeded");
   // A disabled broken provider is no longer reported as unavailable (an administrator turned it off).
-  assert.deepEqual((await (await get("/healthz")).json()).detail.socialProviders.unavailable, []);
+  assert.deepEqual((await (await get("/healthz")).json()).detail.socialProviders, { unavailableCount: 0 });
   // Enabling it again is refused until its credentials can be used.
   const enable = await studioPost(worker, ORIGIN, "/studio/api/providers/status",
     { id: "twitter", enabled: true, confirm: "CONFIRM ENABLE twitter" }, admin.cookie);
