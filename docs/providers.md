@@ -61,7 +61,7 @@ Different-email linking and profile overwrite on link are off. An email that is 
 | Twitch | the ID token's `email_verified` claim is `true` (Nathan requests the `email` and `email_verified` claims) |
 | X | X returns `confirmed_email`, which needs email access on the app |
 
-**Admission.** The provider config never sets `disableSignUp`, `disableImplicitSignUp` or any other per-provider sign-up option. New-account admission is therefore identical for all six providers. On this branch any successful social sign-in creates an ordinary user. Nathan has no invitation-only admission rule yet, and administrator rights still need the verified-email allowlist and an explicit grant. When an invitation-only rule lands, it applies to every provider unchanged.
+**Admission.** The provider config never sets `disableSignUp`, `disableImplicitSignUp` or any other per-provider sign-up option. New-account admission is therefore identical for all six providers, and is decided by Nathan's installation-wide admission policy ([admission.md](admission.md), NATH-16). It is invitation-only by default: a social sign-in creates an account only for a provider-verified email with an open invitation, or in self-service mode. An unverified provider email becomes a placeholder address and never matches an invitation. Administrator rights still need the verified-email allowlist and an explicit grant.
 
 ## Google
 

@@ -47,6 +47,8 @@ async function inBatches(items, size, fn) {
 before(async () => {
   mf = await authWorker(HOST, { BETTER_AUTH_SECRET: SECRET, NATHAN_ADMIN_EMAILS: "admin@example.test", NATHAN_SCIM_RATE_LIMIT: "100000" });
   db = await mf.getD1Database("DB");
+  // NATH-16: just-in-time creation at scale, in a self-service installation.
+  await db.prepare("INSERT INTO nathan_admission_settings(id,mode,updated_by) VALUES ('primary','self-service','test')").run();
   // dispatchFetch keeps the Origin header (the worker proxy of getWorker() refuses it here).
   auth = { fetch: (url, init) => mf.dispatchFetch(url, init) };
   admin = await enrollAdmin(db, SECRET);

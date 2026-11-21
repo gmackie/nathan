@@ -72,6 +72,9 @@ before(async () => {
   }, { outboundService: outbound });
   instances.push(mf);
   db = await mf.getD1Database("DB");
+  // NATH-16: these tests cover provider sign-in and linking in a self-service installation;
+  // invitation-only admission is tested in admission.test.mjs.
+  await db.prepare("INSERT INTO nathan_admission_settings(id,mode,updated_by) VALUES ('primary','self-service','test')").run();
   for (const [id, values] of Object.entries(CREDS)) {
     const sealed = await sealProviderCredentials(id, values, KEY);
     await db.prepare("INSERT INTO nathan_oauth_providers(id,client_id,config,secret_fields,updated_by) VALUES (?,?,?,?,'test')")

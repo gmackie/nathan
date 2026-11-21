@@ -90,6 +90,8 @@ Disable with `CONFIRM DISABLE SAML <id>`. A disabled connection's ACS and SSO ro
 
 ## Account provisioning and linking
 
+These connection settings come on top of the installation's account admission policy ([admission.md](admission.md), NATH-16). A just-in-time connection creates an account only when the installation admits it: in self-service mode, or for an address with an open invitation (the default, invitation-only). Otherwise the sign-in returns to `/sign-in?error=ACCOUNT_NOT_ADMITTED`.
+
 - **Invitation only** (default): SAML sign-in works only for people who already have a Nathan account with an address in the verified domain. No account is created. "Invited" means the account exists: an existing account in the domain that has never used SAML (for example one an administrator created, or a social sign-up) is linked to the connection on its first SAML sign-in. An existing account outside the domain is refused and not linked.
 - **Just-in-time**: Nathan creates an account on first sign-in, only for an address inside the connection's verified domain (or its subdomains). Its email is marked verified, because the domain owner proved DNS control and its IdP signed the address.
 - An IdP can never create or link an account for an address outside its verified domain.
@@ -153,4 +155,5 @@ Raw Better Auth SSO management endpoints (`/api/auth/sso/register`, `update-prov
 | ACS answers 400 `saml_encrypted_assertion` | The IdP encrypts assertions. Turn assertion encryption off for Nathan. |
 | Redirect with `error=invalid_saml_response` or `unsolicited_response` | Wrong audience/ACS values in the IdP, an IdP-initiated login, or a sign-in older than 5 minutes. |
 | Redirect with `error=unable_to_create_user` | Invitation-only connection and the person has no Nathan account, or the address is outside the verified domain. |
+| Redirect with `error=ACCOUNT_NOT_ADMITTED` | Just-in-time connection, but the installation is invitation-only and the address has no open invitation. Invite it in Studio, or switch the installation to self-service ([admission.md](admission.md)). |
 | `sso_provider_changed_during_authentication` | A certificate was rotated during the sign-in; start again. |

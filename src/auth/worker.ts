@@ -28,6 +28,7 @@ import { isMcpOAuthPath, handleMcpOAuth, mcpReturnRedirect, mcpGrantStatus, mcpO
 import { updateScimSettings, changeScimMapping, scimConnectionView, SCIM_ADMIN_ERRORS } from "./scim/lifecycle-admin";
 import { deliverLogouts } from "./logout-queue";
 import { scimUserOperation, scimOutboxView, skipScimOutbox, SCIM_REVIEW_ERRORS } from "./scim/reviews";
+import { admissionOverview, applyAdmissionOperation, ADMISSION_ERRORS } from "./admission";
 
 function reject(status: number, reason: string) {
   return Response.json({ error: reason }, { status, headers: { "Cache-Control": "no-store" } });
@@ -494,6 +495,27 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     }catch(error){
       const message=error instanceof Error && /^(Invalid|Unknown|Explicit|Give)/.test(error.message)?error.message:"MCP change rejected";
       return reject(409,message);
+    }
+  }
+  // NATH-16: account admission mode and invitations (admin + step-up; writes same-origin, confirmed and audited).
+  if (url.pathname === "/studio/api/admission" && (request.method === "GET" || request.method === "POST")) {
+    if(request.method==="POST"){
+      if(request.headers.get("Origin")!==issuer.origin ||
+         request.headers.get("Sec-Fetch-Site")==="cross-site")return reject(403,"Cross-origin request denied");
+      if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")
+        return reject(415,"JSON required");
+    }
+    const session=await auth.api.getSession({headers:request.headers});
+    if(!await isAdminPrincipal(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id))
+      return reject(403,"Admin enrollment incomplete");
+    if(request.method==="GET")return Response.json(await admissionOverview(env),{headers:{"Cache-Control":"no-store"}});
+    const raw=await request.text();
+    if(raw.length>4096)return reject(413,"Request too large");
+    let body:any;try{body=JSON.parse(raw)}catch{return reject(400,"Invalid JSON")}
+    try{
+      return Response.json(await applyAdmissionOperation(env,body,session!.user.id),{headers:{"Cache-Control":"no-store"}});
+    }catch(error){
+      return reject(409,error instanceof Error&&ADMISSION_ERRORS.test(error.message)?error.message:"Admission change rejected");
     }
   }
   const saml=await handleSamlRoutes(request,env,auth,url);

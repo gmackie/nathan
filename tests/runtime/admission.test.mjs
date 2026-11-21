@@ -1,0 +1,235 @@
+/**
+ * NATH-16 in workerd: account admission (invitation-only by default, self-service optional) through
+ * the built identity Worker, for every way Better Auth creates an account: password sign-up, GitHub
+ * and Discord sign-in (mocked providers), and the first-administrator bootstrap. SAML and SCIM
+ * just-in-time admission are covered in saml.test.mjs and scim-lifecycle.test.mjs, which already
+ * have those connections set up.
+ */
+import test, { after, before } from "node:test";
+import assert from "node:assert/strict";
+import { authWorker, randomKey, insertSession, studioPost, cookiesOf } from "./helpers.mjs";
+import { sealProviderCredentials } from "../../src/auth/config-crypto.mjs";
+
+const HOST = "login.example.test", ORIGIN = "https://" + HOST;
+const KEY = randomKey(), SECRET = randomKey() + randomKey();
+const CREDS = {
+  github: { clientId: "Ov23liAdmissionTest01", clientSecret: "0123456789abcdef0123456789abcdef01234567" },
+  discord: { clientId: "123456789012345678", clientSecret: "AbCdEfGhIjKlMnOpQrStUvWxYz012345" }
+};
+
+/** Mocked GitHub, Discord and the email API, keyed by the authorization code the test sends back. */
+const codes = new Map();
+const mails = [];
+async function outbound(request) {
+  const url = new URL(request.url);
+  const body = request.method === "POST" ? await request.text() : "";
+  if (url.href === "https://api.resend.com/emails") { mails.push(JSON.parse(body)); return Response.json({ id: "mail-" + mails.length }); }
+  if (url.href === "https://github.com/login/oauth/access_token" || url.href === "https://discord.com/api/oauth2/token") {
+    const code = new URLSearchParams(body).get("code");
+    if (!codes.has(code)) return Response.json({ error: "invalid_grant" }, { status: 400 });
+    return Response.json({ access_token: "at-" + code, token_type: "bearer", scope: "read:user,user:email", expires_in: 3600 });
+  }
+  const grant = codes.get((request.headers.get("authorization") || "").replace(/^Bearer at-/, ""));
+  if (!grant) return new Response("unexpected outbound " + url.href, { status: 599 });
+  if (url.href === "https://api.github.com/user") return Response.json({ id: grant.id, login: "gh" + grant.id, name: "GitHub user" });
+  if (url.href === "https://api.github.com/user/emails") return Response.json([{ email: grant.email, primary: true, verified: grant.verified }]);
+  if (url.origin + decodeURIComponent(url.pathname) === "https://discord.com/api/users/@me")
+    return Response.json({ id: grant.id, username: "user" + grant.id, global_name: null, avatar: null, discriminator: "0", email: grant.email, verified: grant.verified });
+  return new Response("unexpected outbound " + url.href, { status: 599 });
+}
+
+let mf, db, admin;
+before(async () => {
+  mf = await authWorker(HOST, {
+    BETTER_AUTH_SECRET: SECRET, NATHAN_CONFIG_KEY: KEY, ENABLE_PASSWORD: "true",
+    RESEND_API_KEY: "re_test_key", EMAIL_FROM: "Nathan <login@example.test>",
+    NATHAN_ADMIN_EMAILS: "founder@example.test"
+  }, { outboundService: outbound });
+  db = await mf.getD1Database("DB");
+  for (const [id, values] of Object.entries(CREDS)) {
+    const sealed = await sealProviderCredentials(id, values, KEY);
+    await db.prepare("INSERT INTO nathan_oauth_providers(id,client_id,config,secret_fields,updated_by) VALUES (?,?,?,?,'test')")
+      .bind(id, sealed.clientId, sealed.config, sealed.secretFields).run();
+  }
+  // The hosted installer recorded the Cloudflare-verified founder; no Nathan account exists yet.
+  await db.prepare("INSERT INTO nathan_bootstrap_status(id,cloudflare_user_id,admin_email,state) VALUES ('primary','cf-1','founder@example.test','pending')").run();
+});
+after(() => mf?.dispose());
+
+const one = (sql, ...params) => db.prepare(sql).bind(...params).first();
+const all = async (sql, ...params) => (await db.prepare(sql).bind(...params).all()).results;
+const userByEmail = email => one('SELECT "id" AS id, "emailVerified" AS verified FROM "user" WHERE lower("email")=?', email);
+const worker = { fetch: (url, init) => mf.dispatchFetch(url, init) };
+const studio = (path, body) => studioPost(worker, ORIGIN, path, body, admin.cookie);
+let clients = 0;
+const ip = () => "198.51.100." + (++clients % 250);
+
+/** A complete social sign-in: start like the sign-in page, then the provider redirects back. */
+async function social(provider, code, grant) {
+  const started = await mf.dispatchFetch(ORIGIN + "/api/auth/sign-in/social", {
+    method: "POST", redirect: "manual",
+    headers: { "Content-Type": "application/json", Origin: ORIGIN, "cf-connecting-ip": ip() },
+    body: JSON.stringify({ provider, callbackURL: "/", errorCallbackURL: "/sign-in" })
+  });
+  assert.equal(started.status, 200, await started.clone().text());
+  const jar = cookiesOf(started);
+  const state = new URL((await started.json()).url).searchParams.get("state");
+  codes.set(code, grant);
+  const cookie = Object.entries(jar).map(([k, v]) => k + "=" + v.value).join("; ");
+  const back = await mf.dispatchFetch(ORIGIN + "/api/auth/callback/" + provider + "?code=" + code + "&state=" + encodeURIComponent(state),
+    { redirect: "manual", headers: { Cookie: cookie } });
+  return { status: back.status, location: back.headers.get("Location") || "", session: cookiesOf(back)["__Secure-nathan.session_token"]?.value };
+}
+const signUp = email => mf.dispatchFetch(ORIGIN + "/api/auth/sign-up/email", {
+  method: "POST", headers: { "Content-Type": "application/json", Origin: ORIGIN, "cf-connecting-ip": ip() },
+  body: JSON.stringify({ email, password: "correct horse battery staple 42", name: "New person" })
+});
+function assertRefused(result, label) {
+  assert.equal(result.status, 302, label);
+  assert.equal(result.session, undefined, label + ": no session");
+  const location = new URL(result.location, ORIGIN);
+  assert.equal(location.pathname, "/sign-in", label + ": back on the sign-in page, got " + result.location);
+  assert.equal(location.searchParams.get("error"), "ACCOUNT_NOT_ADMITTED", label);
+  assert.match(location.searchParams.get("error_description") || "", /invitation/i, label + ": the reason is explained");
+}
+
+test("the installation starts invitation-only, and the first administrator can still bootstrap", async () => {
+  assert.equal(await one("SELECT mode FROM nathan_admission_settings"), null, "no row: the default applies");
+  // A stranger is refused before any account exists.
+  assertRefused(await social("github", "gh-stranger", { id: 501, email: "stranger@example.test", verified: true }), "uninvited GitHub user");
+  assert.equal(await userByEmail("stranger@example.test"), null, "no user row for a refused sign-in");
+  // The founder's address without proof of control (a password sign-up is unverified) is not the founder.
+  assert.equal((await signUp("founder@example.test")).status, 422);
+  assert.equal(await userByEmail("founder@example.test"), null, "nobody can squat the founder's address");
+  // The installer-approved founder (verified email) is admitted without an invitation.
+  const founder = await social("github", "gh-founder", { id: 500, email: "founder@example.test", verified: true });
+  assert.equal(founder.status, 302, founder.location);
+  assert.equal(founder.location, "/");
+  assert.ok(founder.session, "the founder is signed in");
+  const row = await userByEmail("founder@example.test");
+  assert.equal(row.verified, 1);
+  // The installer's bootstrap stage then promotes the account; model that, plus enrollment and step-up.
+  const sql = (s, ...p) => db.prepare(s).bind(...p).run();
+  await sql('UPDATE "user" SET "role"=\'admin\' WHERE "id"=?', row.id);
+  await sql("UPDATE nathan_bootstrap_status SET admin_user_id=?, state='complete' WHERE id='primary'", row.id);
+  await sql('INSERT INTO "passkey"("id","publicKey","userId","credentialID","counter","deviceType","backedUp") VALUES (\'pk-f\',\'x\',?,\'cred-f\',0,\'singleDevice\',0)', row.id);
+  await sql('INSERT INTO "twoFactor"("id","secret","backupCodes","userId","verified") VALUES (\'tf-f\',\'x\',\'x\',?,1)', row.id);
+  admin = await insertSession(db, SECRET, row.id);
+  await sql("INSERT INTO nathan_admin_assurance(session_id,user_id,method) VALUES (?,?,'passkey')", admin.id, row.id);
+  const audit = await all("SELECT action,outcome FROM nathan_security_audit WHERE action LIKE 'account_admission%'");
+  assert.ok(audit.some(a => a.action === "account_admission" && a.outcome === "refused"), JSON.stringify(audit));
+  assert.ok(audit.some(a => a.action === "account_admission" && a.outcome === "admitted_bootstrap"), JSON.stringify(audit));
+});
+
+test("Studio: admission mode and invitations need a stepped-up administrator, exact confirmation, and are audited", async () => {
+  const member = await insertSession(db, SECRET, (await userByEmail("founder@example.test")).id);
+  // The same administrator without a fresh passkey step-up is refused.
+  assert.equal((await studioPost(worker, ORIGIN, "/studio/api/admission", { op: "invite", email: "x@example.test" }, member.cookie)).status, 403);
+  assert.equal((await mf.dispatchFetch(ORIGIN + "/studio/api/admission", { headers: { Cookie: member.cookie } })).status, 403);
+  const cross = await mf.dispatchFetch(ORIGIN + "/studio/api/admission", { method: "POST", body: JSON.stringify({ op: "invite", email: "x@example.test" }),
+    headers: { Cookie: admin.cookie, Origin: "https://evil.example", "Content-Type": "application/json" } });
+  assert.equal(cross.status, 403);
+  const view = await (await mf.dispatchFetch(ORIGIN + "/studio/api/admission", { headers: { Cookie: admin.cookie } })).json();
+  assert.equal(view.mode, "invitation-only");
+  assert.deepEqual(view.invitations, []);
+  const vague = await studio("/studio/api/admission", { op: "mode", mode: "self-service", confirm: "yes" });
+  assert.equal(vague.status, 409);
+  assert.match((await vague.json()).error, /confirmation/i);
+  assert.equal((await studio("/studio/api/admission", { op: "invite", email: "not-an-email" })).status, 409);
+  assert.equal((await studio("/studio/api/admission", { op: "invite", email: "founder@example.test" })).status, 409, "an existing account needs no invitation");
+  const audit = await all("SELECT action,outcome FROM nathan_security_audit WHERE action IN ('admission_mode_change','invitation_create')");
+  assert.ok(audit.some(a => a.action === "admission_mode_change" && a.outcome === "rejected"));
+  assert.ok(audit.some(a => a.action === "invitation_create" && a.outcome === "rejected"));
+});
+
+test("GitHub: an uninvited user is refused with no user row; an invited one succeeds once", async () => {
+  assertRefused(await social("github", "gh-ann-1", { id: 601, email: "ann@example.test", verified: true }), "uninvited");
+  assert.equal(await userByEmail("ann@example.test"), null);
+  const invited = await studio("/studio/api/admission", { op: "invite", email: "Ann@Example.test", days: 3 });
+  assert.equal(invited.status, 200, await invited.clone().text());
+  const invitation = await invited.json();
+  assert.equal(invitation.email, "ann@example.test", "bound to the normalized email");
+  assert.ok(invitation.expiresAt * 1000 > Date.now() + 2.9 * 86400_000 && invitation.expiresAt * 1000 < Date.now() + 3.1 * 86400_000);
+  const ok = await social("github", "gh-ann-2", { id: 601, email: "ann@example.test", verified: true });
+  assert.equal(ok.location, "/", ok.location);
+  assert.ok(ok.session);
+  const ann = await userByEmail("ann@example.test");
+  const used = await one("SELECT uses, used_by_user, used_method FROM nathan_invitations WHERE id=?", invitation.id);
+  assert.deepEqual({ ...used }, { uses: 1, used_by_user: ann.id, used_method: "social:github" });
+  // Signing in again is a sign-in, not a new account.
+  assert.equal((await social("github", "gh-ann-3", { id: 601, email: "ann@example.test", verified: true })).location, "/");
+  // Single use: once the account is gone, the same invitation does not admit it again.
+  await db.prepare('DELETE FROM "user" WHERE "id"=?').bind(ann.id).run();
+  assertRefused(await social("github", "gh-ann-4", { id: 601, email: "ann@example.test", verified: true }), "invitation already used");
+  assert.equal(await userByEmail("ann@example.test"), null);
+  const listed = (await (await mf.dispatchFetch(ORIGIN + "/studio/api/admission", { headers: { Cookie: admin.cookie } })).json()).invitations;
+  assert.equal(listed.find(i => i.id === invitation.id).state, "used");
+});
+
+test("Discord without a verified email: the placeholder address never redeems an invitation", async () => {
+  await studio("/studio/api/admission", { op: "invite", email: "dee@example.test" });
+  assertRefused(await social("discord", "dc-dee-1", { id: "200000000000000001", email: "dee@example.test", verified: false }), "unverified Discord email");
+  assert.equal(await one('SELECT 1 FROM "user" WHERE "email" LIKE \'200000000000000001@discord%\''), null, "no placeholder account");
+  assert.equal((await one("SELECT uses FROM nathan_invitations WHERE email='dee@example.test' AND revoked_at IS NULL")).uses, 0, "still unused");
+  // The same person with a verified Discord email is admitted by the invitation.
+  const ok = await social("discord", "dc-dee-2", { id: "200000000000000001", email: "dee@example.test", verified: true });
+  assert.equal(ok.location, "/");
+  assert.equal((await userByEmail("dee@example.test")).verified, 1);
+});
+
+test("password sign-up: refused with a clear message unless invited; an invitation is used once", async () => {
+  const refused = await signUp("pat@example.test");
+  assert.equal(refused.status, 422, await refused.clone().text());
+  const body = await refused.json();
+  assert.equal(body.code, "ACCOUNT_NOT_ADMITTED");
+  assert.match(body.message, /invitation/i);
+  assert.equal(await userByEmail("pat@example.test"), null);
+  assert.equal(mails.length, 0, "no verification email for a refused sign-up");
+  await studio("/studio/api/admission", { op: "invite", email: "pat@example.test" });
+  const created = await signUp("pat@example.test");
+  assert.equal(created.status, 200, await created.clone().text());
+  const pat = await userByEmail("pat@example.test");
+  assert.equal(pat.verified, 0, "the address is proven by the verification email, as before");
+  assert.equal(mails.length, 1);
+  assert.equal((await one("SELECT used_method FROM nathan_invitations WHERE email='pat@example.test'")).used_method, "password");
+  await db.prepare('DELETE FROM "user" WHERE "id"=?').bind(pat.id).run();
+  assert.equal((await signUp("pat@example.test")).status, 422, "single use");
+});
+
+test("revoked and expired invitations admit nobody", async () => {
+  const revokeMe = await (await studio("/studio/api/admission", { op: "invite", email: "rev@example.test" })).json();
+  assert.equal((await studio("/studio/api/admission", { op: "revoke", id: revokeMe.id, confirm: "nope" })).status, 409);
+  assert.equal((await studio("/studio/api/admission", { op: "revoke", id: revokeMe.id, confirm: "CONFIRM REVOKE INVITATION " + revokeMe.id })).status, 200);
+  assert.equal((await signUp("rev@example.test")).status, 422);
+  await studio("/studio/api/admission", { op: "invite", email: "old@example.test" });
+  await db.prepare("UPDATE nathan_invitations SET expires_at=unixepoch()-1 WHERE email='old@example.test'").run();
+  assert.equal((await signUp("old@example.test")).status, 422);
+  assert.equal(await userByEmail("rev@example.test"), null);
+  assert.equal(await userByEmail("old@example.test"), null);
+  const listed = (await (await mf.dispatchFetch(ORIGIN + "/studio/api/admission", { headers: { Cookie: admin.cookie } })).json()).invitations;
+  assert.equal(listed.find(i => i.email === "rev@example.test").state, "revoked");
+  assert.equal(listed.find(i => i.email === "old@example.test").state, "expired");
+  // A new invitation for the same address supersedes the old one.
+  await studio("/studio/api/admission", { op: "invite", email: "old@example.test" });
+  assert.equal((await signUp("old@example.test")).status, 200);
+});
+
+test("self-service admits verified sign-ins without an invitation; switching back closes it again", async () => {
+  const saved = await studio("/studio/api/admission", { op: "mode", mode: "self-service", confirm: "CONFIRM ADMISSION self-service" });
+  assert.equal(saved.status, 200, await saved.clone().text());
+  assert.equal((await saved.json()).mode, "self-service");
+  assert.equal((await social("github", "gh-sam", { id: 701, email: "sam@example.test", verified: true })).location, "/");
+  assert.equal((await social("discord", "dc-sue", { id: "300000000000000001", email: "sue@example.test", verified: true })).location, "/");
+  assert.equal((await signUp("sal@example.test")).status, 200);
+  for (const email of ["sam@example.test", "sue@example.test", "sal@example.test"]) assert.ok(await userByEmail(email), email);
+  await studio("/studio/api/admission", { op: "mode", mode: "invitation-only", confirm: "CONFIRM ADMISSION invitation-only" });
+  assertRefused(await social("github", "gh-tim", { id: 702, email: "tim@example.test", verified: true }), "back to invitation-only");
+  const audit = await all("SELECT outcome FROM nathan_security_audit WHERE action='admission_mode_change' AND outcome='succeeded'");
+  assert.equal(audit.length, 2);
+});
+
+test("the sign-in page explains a refused sign-in", async () => {
+  const html = await (await mf.dispatchFetch(ORIGIN + "/sign-in?error=ACCOUNT_NOT_ADMITTED")).text();
+  assert.match(html, /errorCallbackURL/, "social sign-in returns to the sign-in page on errors");
+  assert.match(html, /ACCOUNT_NOT_ADMITTED/);
+});

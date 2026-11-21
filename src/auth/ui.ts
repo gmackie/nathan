@@ -2,6 +2,7 @@ import { RBAC_STUDIO_HTML, RBAC_STUDIO_SCRIPT } from "./rbac-ui.ts";
 import { TOKENS_STUDIO_HTML, TOKENS_STUDIO_SCRIPT } from "./tokens-ui.ts";
 import { MCP_STUDIO_HTML, MCP_STUDIO_SCRIPT } from "./mcp-ui.ts";
 import { SCIM_LIFECYCLE_HTML, SCIM_LIFECYCLE_SCRIPT } from "./scim-ui.ts";
+import { ADMISSION_STUDIO_HTML, ADMISSION_STUDIO_SCRIPT } from "./admission-ui.ts";
 import { displayName } from "../shared/providers.mjs";
 import { providerStudioSection, providerStudioScript } from "./provider-ui.mjs";
 import { samlStudioSection, samlStudioScript } from "./saml-ui.mjs";
@@ -51,8 +52,14 @@ export function signInPage(providers: string[], passwordEnabled: boolean, enterp
       const body=await res.json().catch(()=>({}));if(!res.ok)throw Error(body.message||body.error||'Authentication failed');
       return unwrap(body);
     }
+    // NATH-16/19: a refused sign-in returns here with ?error=<code>; explain known codes with fixed text.
+    const signInErrors={ACCOUNT_NOT_ADMITTED:'This installation creates new accounts by invitation only, and this email address has no open invitation. Ask an administrator to invite it, then sign in again.',
+      ACCOUNT_DEPROVISIONED:'Your organization\'s directory has deactivated this account. Contact your administrator.',
+      BANNED_USER:'This account is blocked. Contact your administrator.'};
+    const signInError=new URLSearchParams(location.search).get('error');
+    if(signInError&&/^[A-Za-z_]{1,64}$/.test(signInError))status.textContent=Object.hasOwn(signInErrors,signInError)?signInErrors[signInError]:('Sign-in failed ('+signInError+').');
     document.querySelectorAll('[data-provider]').forEach(b=>b.onclick=async()=>{
-      try{const d=await request('/sign-in/social',{provider:b.dataset.provider,callbackURL:'/'});
+      try{const d=await request('/sign-in/social',{provider:b.dataset.provider,callbackURL:'/',errorCallbackURL:'/sign-in'});
         if(!d.url)throw Error('No OAuth redirect URL');location.assign(d.url);
       }catch(e){status.textContent=e.message}
     });
@@ -146,6 +153,7 @@ export function studioPage(userEmail: string): Response {
   <label>Revoke an additional administrator (user ID)<input id="admin-revoke-id" placeholder="Better Auth user ID"></label>
   <button class="secondary" id="admin-revoke">Revoke administrator and sessions</button>
   <p id="admin-grant-status" role="status"></p>
+  ${ADMISSION_STUDIO_HTML}
   <h2>Users</h2><p>Read-only directory of recent accounts. Passwords, credentials and session values are never returned.</p>
   <button class="secondary" id="users-list">Refresh users</button><pre id="users-results"></pre>
   <h2>Domain-wide SSO</h2>
@@ -481,5 +489,6 @@ ${providerStudioScript}
     ${TOKENS_STUDIO_SCRIPT}
     ${MCP_STUDIO_SCRIPT}
     ${SCIM_LIFECYCLE_SCRIPT}
+    ${ADMISSION_STUDIO_SCRIPT}
   `);
 }

@@ -80,7 +80,7 @@
 ## Inbound SCIM lifecycle (NATH-11; implemented source, staging pending)
 
 - [x] Identity linking by (connection, externalId); first link by email only on the connection's verified domain and a verified Nathan email; a link never moves across connections (migration 0016, workerd-tested).
-- [x] Optional just-in-time account creation per connection (default off, unverified email), with an admission hook for NATH-16.
+- [x] Optional just-in-time account creation per connection (default off, unverified email), subject to the installation's admission policy (NATH-16).
 - [x] Fail-closed deprovisioning: `active=false` or DELETE bans, deletes sessions, revokes all access and refresh tokens and queues back-channel logout in one D1 transaction; the SCIM request gets 503 until it commits; the Durable Object alarm retries (workerd-tested with real logout delivery to the gateway).
 - [x] Reactivation lifts only Nathan's SCIM ban and restores no sessions; administrator bans are never lifted by the directory.
 - [x] Back-channel logout delivery queue (signed `logout+jwt`, `sub` tokens, backoff retries, failures audited).
@@ -95,6 +95,11 @@
 - [x] Race-safe application: compare-and-set on `apply_seq` in every batch; duplicate outbox rows, late revisions and racing appliers tested directly.
 - [x] Re-review fixes: deprovisioning takes over expiring bans (a lapsed suspension never ends a deprovisioning or counts as an override); only lifting Nathan's own SCIM ban is an override, recorded by a D1 trigger on every path; every batch of a large group starts with the compare-and-set; the last-administrator check is inside the deprovisioning batch (atomic across connections); approve/dismiss audit `rejected` when the item was decided meanwhile; review creation is rate-limited per connection and Studio pages reviews pending first, oldest first, with counts.
 - [ ] Per-user directory profile sync (name only) if needed.
+
+## Follow-ups to the federation work (NATH-16 to NATH-19; implemented source, staging pending)
+
+- [x] Account admission (NATH-16): installation-wide invitation-only (default) or self-service mode, changed in Studio (admin, step-up, exact confirmation, audited); invitations bound to one email, single use, expiring, revocable and listed (migration 0017). One Better Auth `user.create.before` guard composes the SAML guard and admission for password, social and SAML sign-ups; SCIM just-in-time creation asks the same policy and claims the invitation in its account batch. The installer's first administrator is admitted only with a proven installer email. A refusal creates no user row and explains itself (`ACCOUNT_NOT_ADMITTED`). Workerd-tested per method (password, GitHub, Discord placeholder email, SAML JIT, SCIM JIT). [Guide](admission.md).
+- [ ] Verify invitation-only sign-up against staging with real providers, a live IdP and a live SCIM directory.
 
 ## Required before first actual production-ready release
 

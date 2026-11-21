@@ -142,6 +142,9 @@ const auditCount = async (action, outcome) =>
 before(async () => {
   mf = await authWorker(HOST, { ENTERPRISE_SSO: "true", BETTER_AUTH_SECRET: SECRET }, { outboundService: outbound });
   db = await mf.getD1Database("DB");
+  // NATH-16: these tests cover SAML provisioning itself, so the installation admits self-service
+  // sign-ups; invitation-only admission of SAML just-in-time users is tested at the end.
+  await db.prepare("INSERT INTO nathan_admission_settings(id,mode,updated_by) VALUES ('primary','self-service','test')").run();
   idp = makeCertificate({ cn: "acme idp" });
   admin = await seedAdmin();
 });
@@ -491,6 +494,33 @@ test("invitation-only refuses an existing user outside the domain", async () => 
   await assertRejected(await post(samlResponse(good({ inResponseTo: id, email: "bob@other.example" })), relayState), "existing user outside the domain");
   assert.equal(await db.prepare('SELECT id FROM "account" WHERE "userId"=?').bind("bob1").first(), null, "no account linked");
   assert.equal(await db.prepare('SELECT id FROM "session" WHERE "userId"=?').bind("bob1").first(), null, "no session");
+});
+
+test("NATH-16: an invitation-only installation refuses SAML just-in-time users without an invitation; an invitation works once", async () => {
+  await ok(await studio("/studio/api/saml/provisioning", { providerId: PID, provisioning: "just-in-time",
+    confirm: "CONFIRM PROVISIONING just-in-time " + PID }));
+  await ok(await studio("/studio/api/admission", { op: "mode", mode: "invitation-only", confirm: "CONFIRM ADMISSION invitation-only" }));
+  const email = "hire@" + DOMAIN;
+  const refused = await login({ email });
+  await assertRejected(refused, "uninvited SAML just-in-time user");
+  assert.match(refused.headers.get("location") || "", /ACCOUNT_NOT_ADMITTED/, "the refusal names the reason");
+  assert.equal(await db.prepare('SELECT id FROM "user" WHERE email=?').bind(email).first(), null, "no user row");
+  const invitation = await ok(await studio("/studio/api/admission", { op: "invite", email }));
+  const admitted = await login({ email });
+  assert.ok(sessionCookie(admitted), "invited SAML user signs in: " + admitted.headers.get("location"));
+  const user = await db.prepare('SELECT id, "emailVerified" AS v FROM "user" WHERE email=?').bind(email).first();
+  assert.equal(user.v, 1);
+  const used = await db.prepare("SELECT uses, used_method AS method, used_by_user AS userId FROM nathan_invitations WHERE id=?").bind(invitation.id).first();
+  assert.deepEqual({ ...used }, { uses: 1, method: "saml:" + PID, userId: user.id });
+  // Single use: the same invitation never creates the account twice.
+  await db.prepare('DELETE FROM "user" WHERE id=?').bind(user.id).run();
+  await assertRejected(await login({ email }), "used invitation");
+  assert.equal(await db.prepare('SELECT id FROM "user" WHERE email=?').bind(email).first(), null);
+  // Existing users still sign in under invitation-only admission.
+  assert.ok(sessionCookie(await login()), "existing linked user still signs in");
+  await ok(await studio("/studio/api/admission", { op: "mode", mode: "self-service", confirm: "CONFIRM ADMISSION self-service" }));
+  await ok(await studio("/studio/api/saml/provisioning", { providerId: PID, provisioning: "invitation-only",
+    confirm: "CONFIRM PROVISIONING invitation-only " + PID }));
 });
 
 test("certificate rotation: trust the next certificate, then retire the old one", async () => {

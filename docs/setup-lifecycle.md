@@ -8,6 +8,8 @@ Nathan has one customer-owned identity runtime and one control plane. The **Clou
 
 The installer connects to a Cloudflare account with authorization-code + PKCE, chooses a managed DNS zone and a unique IdP hostname (recommended \`login.example.com\`), and checks Worker/database/domain conflicts.
 
+New accounts are admitted by the installation's admission policy: invitation-only by default, with invitations created in Identity Studio, or self-service ([admission.md](admission.md)). The installer's first administrator is always admitted with the verified installer email.
+
 The installer identity is the **root bootstrap authority**. The initial admin email must match its verified Cloudflare OAuth account email. There is no public "first visitor becomes admin" endpoint, default password or invitation link.
 
 The wizard collects credentials for one of six social providers (Google, GitHub, Apple, Discord, Twitch or X), with exact \`https://login.example.com/api/auth/callback/<id>\` callback instructions from the shared registry. The first provider credentials are encrypted using AES-256-GCM in the customer's D1 database; \`NATHAN_CONFIG_KEY\` is generated and stored as a Worker secret. It is not written to the installer database or a source file.
