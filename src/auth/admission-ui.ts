@@ -17,7 +17,7 @@ export const ADMISSION_STUDIO_HTML = `<h2 id="admission">Account admission and i
   <label>Invitation ID to revoke<input id="adm-revoke-id" autocomplete="off"></label>
   <button class="secondary" id="adm-revoke">Revoke invitation</button>
   <h3>Reissue an invitation</h3>
-  <p>If someone created an unverified account for an address (for example a password sign-up they cannot verify), the real person cannot get that address. Reissuing removes that unverified account (only if it never signed in, holds no passkey, is not an administrator and is not managed by a directory) and invites the address again. Audited. A real invitee who signs in with a social provider that verifies the address replaces such an account automatically.</p>
+  <p>If someone created an unverified account for an address (for example a password sign-up they cannot verify), the real person cannot get that address. Reissuing removes that unverified account (only if it has no current session, no passkey and no social or SSO login, is not an administrator and is not managed by a directory) and invites the address again. Audited. A real invitee who signs in with a social provider that verifies the address replaces such an account automatically.</p>
   <label>Email address to reissue<input id="adm-reissue-email" type="email" autocomplete="off"></label>
   <button class="secondary" id="adm-reissue">Remove unverified account and reissue invitation</button>
   <p id="adm-status" role="status"></p><pre id="adm-result"></pre>`;
