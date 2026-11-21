@@ -8,6 +8,8 @@ export async function handleScim(request:Request,env:AuthEnv):Promise<Response>{
   const match=/^\/scim\/v2\/([^/]+)(\/.*)?$/.exec(url.pathname);
   if(!match||!ID.test(match[1]))return new Response("SCIM connection not found",{status:404});
   const connId=match[1],relative=match[2]||"/ServiceProviderConfig";
+  // Internal Durable Object operations (/__nathan/*) are never reachable from the public route.
+  if(relative.startsWith("/__"))return new Response("SCIM endpoint unavailable",{status:404,headers:{"Cache-Control":"no-store"}});
   const authorization=request.headers.get("Authorization");
   if(!authorization?.startsWith("Bearer ")){
     return new Response("SCIM connection token required",{status:401,headers:DENY});

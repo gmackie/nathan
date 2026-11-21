@@ -11,6 +11,10 @@ import { recordProviderSignIn } from "./provider-store";
 import { ACCOUNT_LINKING, buildSocialProviders } from "../shared/providers.mjs";
 import {mayAdminister} from "./bootstrap";
 import {isAdminPrincipal} from "./admin-service";
+import { nathanAccessTokenExtension, guardAuthorizationScopes, MAX_ACCESS_TOKEN_SECONDS, API_SCOPE } from "./tokens";
+
+// NATH-15: the provider's scopes, also Better Auth's default for an authorization request without `scope`.
+const OAUTH_SCOPES = ["openid", "profile", "email", "offline_access", "nathan:read", "nathan:admin", "nathan:directory.read", API_SCOPE];
 import {ssoPluginOptions,samlUserCreateGuard} from "./saml-policy.mjs";
 
 export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredentials) {
@@ -43,6 +47,8 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
     // just-in-time provisioning for its verified domain (NATH-10).
     databaseHooks: { user: { create: { before: (user, ctx) => samlUserCreateGuard(env.DB, user, ctx) } } },
     hooks: {
+      // NATH-15: a client not marked agent may not have a user delegate nathan:api.
+      before: createAuthMiddleware(async (ctx) => guardAuthorizationScopes(env, ctx, OAUTH_SCOPES)),
       after: createAuthMiddleware(async (ctx) => {
         // NATH-9: remember which social provider created a session, so a Studio test
         // sign-in can prove the provider round trip.
@@ -104,10 +110,21 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
       oauthProvider({
         loginPage: "/sign-in",
         consentPage: "/consent",
-        scopes: ["openid", "profile", "email", "offline_access", "nathan:read", "nathan:admin"],
+        scopes: OAUTH_SCOPES,
+        // NATH-15: hard cap for every access token (Gatekeeper's limit). Better Auth takes the minimum
+        // of this, scope expirations and a resource's accessTokenTtl, so no resource can exceed it.
+        accessTokenExpiresIn: MAX_ACCESS_TOKEN_SECONDS,
+        m2mAccessTokenExpiresIn: MAX_ACCESS_TOKEN_SECONDS,
+        // NATH-15: principal_kind, the roles hint and passkey evidence claims (docs/gatekeeper.md).
+        extensions: [nathanAccessTokenExtension(env)],
         resources: [{
           identifier: issuer.origin + "/mcp",
           allowedScopes: ["nathan:read", "nathan:admin"],
+          accessTokenTtl: 300
+        }, {
+          // NATH-13: Gatekeeper's directory reads (client-credentials machine clients only).
+          identifier: issuer.origin + "/directory",
+          allowedScopes: ["nathan:directory.read"],
           accessTokenTtl: 300
         }],
         scopeExpirations: {"nathan:read":"15m","nathan:admin":"5m"},
@@ -116,6 +133,10 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
         // Public dynamic registration is disabled; only verified and allowlisted
         // Nathan admins may use Better Auth's authenticated client CRUD API.
         clientPrivileges: async ({ user, session }) => {
+          return Boolean(user && await isAdminPrincipal(user,env) && await mayAdminister(env,user.id,session?.id));
+        },
+        // NATH-15: resource (audience) admin calls are server-only; also require the same administrator.
+        resourcePrivileges: async ({ user, session }) => {
           return Boolean(user && await isAdminPrincipal(user,env) && await mayAdminister(env,user.id,session?.id));
         },
         ...(env.NATHAN_PAIRWISE_SECRET ? { pairwiseSecret: env.NATHAN_PAIRWISE_SECRET } : {})

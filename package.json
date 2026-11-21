@@ -28,7 +28,9 @@
     "wizard": "node scripts/nathan.mjs wizard",
     "setup:installer": "node scripts/setup-installer.mjs",
     "verify:release": "node scripts/verify-release.mjs",
-    "test:runtime": "npm run build:auth && npm run build:gateway && npm run build:installer && node --test --test-concurrency=1 tests/runtime/*.test.mjs"
+    "build:test-upstream": "node tests/runtime/fixtures/build-upstream.mjs",
+    "build:test-mcp": "node tests/runtime/fixtures/build-mcp.mjs",
+    "test:runtime": "npm run build:auth && npm run build:gateway && npm run build:installer && npm run build:test-upstream && npm run build:test-mcp && node --test --test-concurrency=1 tests/runtime/*.test.mjs"
   },
   "dependencies": {
     "better-auth": "1.7.14",
@@ -40,6 +42,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261001.1",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "typescript": "^5.9.3",
     "wrangler": "^4.165.0",
     "auth": "1.7.14",

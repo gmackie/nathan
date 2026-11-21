@@ -1,3 +1,7 @@
+import { RBAC_STUDIO_HTML, RBAC_STUDIO_SCRIPT } from "./rbac-ui.ts";
+import { TOKENS_STUDIO_HTML, TOKENS_STUDIO_SCRIPT } from "./tokens-ui.ts";
+import { MCP_STUDIO_HTML, MCP_STUDIO_SCRIPT } from "./mcp-ui.ts";
+import { SCIM_LIFECYCLE_HTML, SCIM_LIFECYCLE_SCRIPT } from "./scim-ui.ts";
 import { displayName } from "../shared/providers.mjs";
 import { providerStudioSection, providerStudioScript } from "./provider-ui.mjs";
 import { samlStudioSection, samlStudioScript } from "./saml-ui.mjs";
@@ -163,17 +167,19 @@ export function studioPage(userEmail: string): Response {
   <p>Paste up to 20 reviewed hostnames from <code>nathan domains discover</code> or the Cloudflare installer. Every client is created disabled and requires explicit activation. Use the same client type and callback path for this batch.</p>
   <label>Approved hostnames (one per line)<textarea id="realm-bulk-hosts" rows="6" placeholder="example.com&#10;www.example.com&#10;app.example.com" spellcheck="false"></textarea></label>
   <button id="realm-bulk-register">Register reviewed hostnames</button><pre id="realm-bulk-result"></pre>
-  <h2>Protected applications</h2><p>Service-binding policies start disabled. Save a policy, then explicitly enable it.</p>
+  <h2>Protected applications</h2><p>Service-binding policies start disabled and deny everyone until a role is granted under Roles and access. Save a policy, then explicitly enable it.</p>
   <label>Application ID<input id="app-id" placeholder="operations"></label>
   <label>Hostname<input id="app-host" placeholder="operations.example.com"></label>
-  <label>Required roles (comma-separated)<input id="app-roles" placeholder="admin,owner"></label>
   <button id="app-save">Save policy</button><pre id="app-create-result"></pre>
   <button class="secondary" id="app-list">List policies</button><pre id="app-results"></pre>
   <label>Application ID<input id="app-toggle-id"></label>
   <button class="secondary" id="app-enable">Enable</button>
   <button class="secondary" id="app-disable">Disable</button><p id="app-status" role="status"></p>
+  ${RBAC_STUDIO_HTML}
+  ${TOKENS_STUDIO_HTML}
+  ${MCP_STUDIO_HTML}
   <h2>SCIM directory connections</h2>
-  <p>Nathan can receive SCIM 2.0 directory Users/Groups into a transactional, per-connection Durable Object. This initial <strong>directory-only</strong> mode does not automatically create Better Auth login accounts, revoke sessions or grant roles. Configure and review any lifecycle projection before relying on SCIM for access control.</p>
+  <p>Nathan can receive SCIM 2.0 directory Users/Groups into a transactional, per-connection Durable Object. New connections are <strong>directory-only</strong>: they create no login accounts, revoke nothing and grant no roles until you turn on linking below (NATH-11). Directory records never grant application access by themselves.</p>
   <label>Connection ID<input id="scim-id" placeholder="acme-workforce"></label>
   <label>Directory email domain<input id="scim-domain" placeholder="acme.example"></label>
   <label>Organization ID (optional)<input id="scim-org" placeholder="org_..."></label>
@@ -187,6 +193,7 @@ export function studioPage(userEmail: string): Response {
   <button class="secondary" id="scim-disable">Disable connection</button>
   <button class="secondary" id="scim-rotate">Rotate bearer token</button>
   <p id="scim-status" role="status"></p>
+  ${SCIM_LIFECYCLE_HTML}
   <h2>Enterprise SSO</h2><p>Register an upstream corporate OIDC provider. Nathan remains the downstream OIDC issuer.</p>
   <label>Provider ID<input id="sso-id" placeholder="acme-entra"></label>
   <label>Corporate email domain<input id="sso-domain" placeholder="acme.example"></label>
@@ -348,8 +355,7 @@ ${providerStudioScript}
     document.getElementById('app-save').onclick=async()=>{
       const out=document.getElementById('app-create-result');
       try{out.textContent=JSON.stringify(await postJson('/studio/api/apps',{
-        id:document.getElementById('app-id').value,hostname:document.getElementById('app-host').value,
-        roles:document.getElementById('app-roles').value.split(',').map(x=>x.trim()).filter(Boolean)
+        id:document.getElementById('app-id').value,hostname:document.getElementById('app-host').value
       }),null,2)}catch(e){out.textContent=e.message}
     };
     document.getElementById('app-list').onclick=async()=>{
@@ -471,5 +477,9 @@ ${providerStudioScript}
         document.getElementById('result').textContent=JSON.stringify(d,null,2);
       }catch(e){status.textContent=e.message}
     }
+    ${RBAC_STUDIO_SCRIPT}
+    ${TOKENS_STUDIO_SCRIPT}
+    ${MCP_STUDIO_SCRIPT}
+    ${SCIM_LIFECYCLE_SCRIPT}
   `);
 }

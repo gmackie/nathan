@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { realmForLoginHostname, isHostnameWithinRealm, realmCallback } from "../../src/shared/realm.mjs";
+import { validateManifest } from "../../src/shared/rbac-manifest.mjs";
 
 export const ALLOWED_PROFILES = new Set(["standard", "business", "high"]);
 const SLUG = /^[a-z][a-z0-9-]{0,62}$/;
@@ -51,6 +52,10 @@ export function validateConfig(value) {
       if (app.hostname) hosts.add(app.hostname);
       if (app.redirectUris && (!Array.isArray(app.redirectUris) || app.redirectUris.some(x => !validUri(x))))
         errors.push(app.id + ": redirectUris must be exact HTTPS URLs without fragments");
+      // NATH-13: permissions and roles as code; grants stay in Identity Studio.
+      if (app.rbac !== undefined) {
+        try { validateManifest(app.rbac); } catch (error) { errors.push(app.id + ": " + error.message); }
+      }
     }
   }
   return errors;

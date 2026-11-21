@@ -164,6 +164,7 @@ The intended stable command will eventually be `npx nathan init` with a browser 
 - [Deploy and DNS setup](docs/deploy.md)
 - [Hosted installer and Cloudflare OAuth](docs/installer.md)
 - [Admin MCP setup and tool contracts](docs/mcp.md)
+- [Protect a remote MCP server on Workers with per-scope consent](docs/remote-mcp.md)
 - [Threat model and operational assumptions](docs/threat-model.md)
 - [Backups, rotation, and incident response](docs/operations.md)
 - [Initial admin, OAuth, SCIM and MFA lifecycle](docs/setup-lifecycle.md)
