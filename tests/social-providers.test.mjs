@@ -13,7 +13,7 @@ import {
 } from "../src/auth/config-crypto.mjs";
 import { mintAppleClientSecret, clearAppleSecretCache } from "../src/auth/apple-secret.mjs";
 import {
-  providerStatus, loadSocialProviderCredentials, upsertSocialProvider, setSocialProviderEnabled,
+  providerStatus, loadSocialProviderCredentials, loadSocialProviderState, upsertSocialProvider, setSocialProviderEnabled,
   beginProviderTest, completeProviderTest, recordProviderSignIn, credentialVersion
 } from "../src/auth/provider-config.mjs";
 
@@ -427,7 +427,15 @@ test("each provider has one source of truth and a shadowed credential is never s
   status = await providerStatus(env, deps);
   assert.equal(by("github").source, "encrypted-d1");
   assert.ok(by("github").notices.some(n => /GITHUB_CLIENT_SECRET/.test(n) && /not used/.test(n)));
-  await assert.rejects(() => loadSocialProviderCredentials({ ...env, NATHAN_CONFIG_KEY: undefined }), /NATHAN_CONFIG_KEY/);
+  // NATH-17: a stored provider that cannot be decrypted turns off only that provider, never falls back
+  // to the legacy secrets it overrides, and is reported unavailable (it used to fail every request).
+  const keyless = { ...env, NATHAN_CONFIG_KEY: undefined };
+  const isolated = await loadSocialProviderState(keyless);
+  assert.ok(!isolated.credentials.github, "the undecryptable D1 provider is off");
+  assert.deepEqual(isolated.credentials.twitch, VALID.twitch, "other providers keep working");
+  assert.deepEqual(isolated.credentials.google, VALID.google, "including the CLI-managed one");
+  assert.deepEqual(isolated.unavailable, [{ id: "github", reason: "decrypt_failed" }, { id: "discord", reason: "invalid_worker_secret" }]);
+  assert.ok(!JSON.stringify(await loadSocialProviderCredentials(keyless)).includes("legacy-github-secret"), "no fallback to the legacy secrets");
 });
 
 test("test tickets are bound to the credential version they were issued for", async () => {

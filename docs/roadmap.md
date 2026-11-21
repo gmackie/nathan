@@ -99,6 +99,7 @@
 ## Follow-ups to the federation work (NATH-16 to NATH-19; implemented source, staging pending)
 
 - [x] Account admission (NATH-16): installation-wide invitation-only (default) or self-service mode, changed in Studio (admin, step-up, exact confirmation, audited); invitations bound to one email, single use, expiring, revocable and listed (migration 0017). One Better Auth `user.create.before` guard composes the SAML guard and admission for password, social and SAML sign-ups; SCIM just-in-time creation asks the same policy and claims the invitation in its account batch. The installer's first administrator is admitted only with a proven installer email. A refusal creates no user row and explains itself (`ACCOUNT_NOT_ADMITTED`). Workerd-tested per method (password, GitHub, Discord placeholder email, SAML JIT, SCIM JIT). [Guide](admission.md).
+- [x] Per-provider credential isolation (NATH-17): an undecryptable or unusable provider is skipped and marked unavailable (migration 0017, reason code only, audited at most once per provider per hour, shown in Studio and in `/healthz` `detail`), never replaced by an older or legacy credential source; other providers, Studio, repair and disable keep working. Workerd-tested with a corrupted D1 row and legacy secrets present.
 - [ ] Verify invitation-only sign-up against staging with real providers, a live IdP and a live SCIM directory.
 
 ## Required before first actual production-ready release

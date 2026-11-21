@@ -30,3 +30,15 @@ CREATE TABLE IF NOT EXISTS nathan_invitations (
 CREATE UNIQUE INDEX IF NOT EXISTS nathan_invitations_open ON nathan_invitations(email) WHERE uses=0 AND revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS nathan_invitations_created ON nathan_invitations(created_at);
 
+
+-- NATH-17: a configured, enabled social provider whose credentials cannot be used (an undecryptable
+-- D1 row, a malformed Worker secret, an Apple key that cannot sign) is skipped instead of failing
+-- every request. This row marks it unavailable for Studio and /healthz; it holds no secret, only a
+-- reason code. audited_at limits the audit trail to one row per provider per hour.
+CREATE TABLE IF NOT EXISTS nathan_provider_health (
+  id TEXT PRIMARY KEY NOT NULL,
+  reason TEXT NOT NULL CHECK(reason IN ('decrypt_failed','invalid_worker_secret','unusable_credentials')),
+  first_failed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  last_failed_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  audited_at INTEGER
+);

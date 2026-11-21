@@ -29,6 +29,7 @@ import { updateScimSettings, changeScimMapping, scimConnectionView, SCIM_ADMIN_E
 import { deliverLogouts } from "./logout-queue";
 import { scimUserOperation, scimOutboxView, skipScimOutbox, SCIM_REVIEW_ERRORS } from "./scim/reviews";
 import { admissionOverview, applyAdmissionOperation, ADMISSION_ERRORS } from "./admission";
+import { healthResponse } from "./health";
 
 function reject(status: number, reason: string) {
   return Response.json({ error: reason }, { status, headers: { "Cache-Control": "no-store" } });
@@ -41,7 +42,8 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
   const issuer = new URL(env.NATHAN_ISSUER);
   const url = new URL(request.url);
   if (url.origin !== issuer.origin || url.protocol !== "https:") return reject(421, "Misdirected request");
-  if (url.pathname === "/healthz") return Response.json({ ok: true, system: "nathan", active: env.NATHAN_INSTALL_ACTIVE !== "false" });
+  // NATH-17: also reports unusable social providers (id and reason only); see ./health.ts.
+  if (url.pathname === "/healthz") return healthResponse(env);
   // The hosted installer uploads inactive code before it creates a public route.
   if (env.NATHAN_INSTALL_ACTIVE === "false") return reject(503, "Installation not active");
   if (url.pathname === "/.well-known/oauth-protected-resource" ||

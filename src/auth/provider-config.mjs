@@ -143,22 +143,68 @@ async function resolve(id, values) {
 
 /** Read on every auth request, so disable and rotation take effect immediately. */
 export async function loadSocialProviderCredentials(env) {
-  const [credentials, states] = await Promise.all([
+  return (await loadSocialProviderState(env)).credentials;
+}
+
+/** Why a configured, enabled provider cannot be used (nathan_provider_health.reason). */
+const unusableReason = source => source === "worker-secret" ? "invalid_worker_secret" : "decrypt_failed";
+/** One audit row per provider per hour while it stays unavailable (NATH-17). */
+const UNAVAILABLE_AUDIT_WINDOW = 3600;
+
+/**
+ * NATH-17: credentials for every usable, enabled provider, and the configured, enabled providers
+ * that cannot be used. Each provider is isolated: an undecryptable D1 row, a malformed Worker secret
+ * or an Apple key that cannot sign turns only that provider off. It is never replaced by a
+ * lower-precedence source (resolveSource stops at the first configured source). The unavailable
+ * provider is recorded in nathan_provider_health (reason code only, no secret) for Studio and
+ * /healthz and audited at most once per window; recovery or an administrator's disable clears it.
+ * Health bookkeeping never fails a request.
+ */
+export async function loadSocialProviderState(env) {
+  const [credentials, states, health] = await Promise.all([
     byId(env, "SELECT " + CREDENTIAL_COLUMNS + " FROM nathan_oauth_providers"),
-    byId(env, "SELECT id,enabled FROM nathan_provider_state")
+    byId(env, "SELECT id,enabled FROM nathan_provider_state"),
+    byId(env, "SELECT id,reason,audited_at FROM nathan_provider_health").catch(() => null)
   ]);
-  const out = {};
+  const out = {}, unavailable = [];
   for (const id of PROVIDER_IDS) {
     if (states.get(id)?.enabled === 0) continue;
-    const { source, values, cause } = await resolveSource(env, id, credentials.get(id));
-    if (cause) throw cause; // an enabled stored provider that cannot be decrypted fails loudly, as before
-    if (!values) continue;
-    if (source === "encrypted-d1") out[id] = await resolve(id, values);
-    else {
-      try { out[id] = await resolve(id, values); } catch { /* an unusable Worker secret leaves the provider off */ }
+    const { source, values } = await resolveSource(env, id, credentials.get(id));
+    if (!values) {
+      if (source !== "not-configured") unavailable.push({ id, reason: unusableReason(source) });
+      continue;
     }
+    try { out[id] = await resolve(id, values); }
+    catch { unavailable.push({ id, reason: "unusable_credentials" }); }
   }
-  return out;
+  if (health) await recordProviderHealth(env, unavailable, health).catch(() => {});
+  return { credentials: out, unavailable };
+}
+
+/** Writes only on a change or when an audit is due, so steady state costs no D1 writes. */
+async function recordProviderHealth(env, unavailable, health) {
+  const now = Math.floor(Date.now() / 1000);
+  for (const { id, reason } of unavailable) {
+    const row = health.get(id);
+    if (!row || row.reason !== reason) {
+      await env.DB.prepare(
+        "INSERT INTO nathan_provider_health(id,reason) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET reason=excluded.reason, last_failed_at=unixepoch()"
+      ).bind(id, reason).run();
+    }
+    if (row && row.audited_at !== null && row.audited_at > now - UNAVAILABLE_AUDIT_WINDOW) continue;
+    // Compare-and-set, so concurrent requests write one audit row per window.
+    const due = await env.DB.prepare(
+      "UPDATE nathan_provider_health SET audited_at=unixepoch(), last_failed_at=unixepoch() WHERE id=? AND (audited_at IS NULL OR audited_at<=unixepoch()-?) RETURNING id"
+    ).bind(id, UNAVAILABLE_AUDIT_WINDOW).first();
+    if (due) await env.DB.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) VALUES (?,'system:providers','oauth_provider_unavailable',?,?)")
+      .bind(crypto.randomUUID(), id, "skipped_" + reason).run();
+  }
+  for (const id of health.keys()) {
+    if (unavailable.some(u => u.id === id)) continue;
+    const cleared = await env.DB.prepare("DELETE FROM nathan_provider_health WHERE id=? RETURNING id").bind(id).first();
+    if (cleared) await env.DB.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) VALUES (?,'system:providers','oauth_provider_unavailable',?,'cleared')")
+      .bind(crypto.randomUUID(), id).run();
+  }
 }
 
 /** Current Nathan administrators, as decided by the injected admin predicate. */
@@ -191,7 +237,8 @@ async function adminRecoveryMethods(env, admins) {
 
 /** Non-secret status for Identity Studio. */
 export async function providerStatus(env, deps = {}) {
-  const [providers, admins] = await Promise.all([inventory(env), currentAdmins(env, deps.isAdmin)]);
+  const [providers, admins, health] = await Promise.all([inventory(env), currentAdmins(env, deps.isAdmin),
+    byId(env, "SELECT id,reason,first_failed_at FROM nathan_provider_health").catch(() => new Map())]);
   const adminIds = new Set(admins.map(a => a.id));
   return providers.map(p => {
     const { id, row, state, source } = p;
@@ -220,9 +267,18 @@ export async function providerStatus(env, deps = {}) {
     if (state?.tested_at && !tested) notices.push(name + " credentials changed after the last successful test sign-in. Run a new test.");
     if (tested && !testedByAdmin) notices.push("The last test sign-in used an account that is not a current Nathan administrator. It shows " +
       name + " works, but does not count toward keeping administrator access.");
+    // NATH-17: configured and not disabled by an administrator, but its credentials cannot be used.
+    const switchedOn = state ? state.enabled === 1 : true;
+    const marked = health.get(id);
+    const unavailable = source !== "not-configured" && switchedOn && (!p.values || marked)
+      ? { reason: marked?.reason ?? unusableReason(source), since: marked?.first_failed_at ?? null } : null;
+    if (unavailable) notices.push(name + " sign-in is unavailable: its credentials cannot be used, so the button is hidden and other methods keep working. " +
+      "Save new credentials to repair it, or disable it.");
     return {
       ...providerGuide(id, env.NATHAN_ISSUER),
       enabled: p.enabled,
+      available: source !== "not-configured" && switchedOn && !unavailable,
+      unavailable,
       configured: source !== "not-configured",
       source,
       secretName: source === "worker-secret" ? secret : source === "legacy-worker-secret" ? legacy.join(", ") : null,
@@ -321,9 +377,17 @@ export async function setSocialProviderEnabled(env, input, actor, deps) {
   if (input.confirm !== "CONFIRM " + (input.enabled ? "ENABLE " : "DISABLE ") + id)
     return deny("denied_confirmation", "Exact provider confirmation required");
   const providers = await inventory(env);
-  if (!providers.find(p => p.id === id).values)
+  const target = providers.find(p => p.id === id);
+  if (input.enabled ? !target.values : target.source === "not-configured")
     return deny("denied_not_configured", "No usable credentials for " + PROVIDERS[id].name + ": configure the provider first");
-  if (input.enabled) {
+  if (!input.enabled && !target.values) {
+    // NATH-17: a configured provider whose credentials cannot be used is no login method anyone has,
+    // so turning it off can never remove the administrators' last way in.
+    await env.DB.prepare(
+      "INSERT INTO nathan_provider_state(id,enabled,updated_at,updated_by) VALUES (?,0,unixepoch(),?) " +
+      "ON CONFLICT(id) DO UPDATE SET enabled=0,updated_at=unixepoch(),updated_by=excluded.updated_by"
+    ).bind(id, actor).run();
+  } else if (input.enabled) {
     await env.DB.prepare(
       "INSERT INTO nathan_provider_state(id,enabled,updated_at,updated_by) VALUES (?,1,unixepoch(),?) " +
       "ON CONFLICT(id) DO UPDATE SET enabled=1,updated_at=unixepoch(),updated_by=excluded.updated_by"
