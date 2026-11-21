@@ -76,6 +76,8 @@ test("new SAML users are created only for enabled, verified, just-in-time connec
   assert.equal(await samlUserCreateGuard(d, { email: "x@acme.example" }, acs("missing")), false, "unknown connection");
   assert.equal(await samlUserCreateGuard(d, { email: "x@acme.example" }, { path: "/callback/:id", params: {} }), undefined, "other flows untouched");
   assert.equal(await samlUserCreateGuard(d, { email: "x@acme.example" }, null), undefined);
+  assert.equal(await samlUserCreateGuard(d, { email: "jane@acme.example" }, { path: "/sso/saml2/sp/acs2/:id", params: { id: "jit" } }), false,
+    "unknown SAML routes fail closed (plugin upgrade guard)");
 });
 
 test("SSO sign-in routing picks the most specific enabled connection by email domain", async () => {

@@ -90,7 +90,10 @@ export async function samlConnectionUsable(db, providerId) {
  * Returns undefined for non-SAML flows (no change).
  */
 export async function samlUserCreateGuard(db, user, ctx) {
-  if (ctx?.path !== SAML_ACS_ENDPOINT) return undefined;
+  const path = typeof ctx?.path === "string" ? ctx.path : "";
+  if (!path.includes("/saml2/")) return undefined;
+  // Fail closed for any SAML route other than the ACS this guard understands.
+  if (path !== SAML_ACS_ENDPOINT) return false;
   const providerId = typeof ctx?.params?.providerId === "string" ? ctx.params.providerId : "";
   const row = providerId ? await db.prepare(CONNECTION_SQL).bind(providerId).first() : null;
   if (!row || Number(row.enabled) !== 1 || Number(row.verified) !== 1) return false;
