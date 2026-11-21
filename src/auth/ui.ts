@@ -1,4 +1,4 @@
-import { samlStudioSection, samlStudioScript } from "./saml-ui";
+import { samlStudioSection, samlStudioScript } from "./saml-ui.mjs";
 const htmlEscape = (s: string) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 
 function page(title: string, body: string, script = ""): Response {
