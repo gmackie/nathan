@@ -15,7 +15,8 @@ export default {
       via: user.via, sub: user.sub, email: user.email, app: user.app,
       roles: user.roles, permissions: user.permissions,
       canRead: user.can("invoices:read"), canWrite: user.can("invoices:write"), isEditor: user.hasRole("editor"),
-      forwarded: Object.fromEntries([...request.headers].filter(([k]) => k.startsWith("x-nathan-") && k !== "x-nathan-principal"))
+      forwarded: Object.fromEntries([...request.headers].filter(([k]) => k.startsWith("x-nathan-") && k !== "x-nathan-principal")),
+      cfAccess: [...request.headers.keys()].filter(k => k.startsWith("cf-access-"))
     });
   }
 };

@@ -166,7 +166,24 @@ test("nathan() API mode verifies the bearer access token and resolves roles thro
   assert.equal(noBinding.forbidden().status, 403);
 });
 
-test("same answers from the gateway principal and the bearer-token path (table)", async () => {
+test("nathan() API mode refuses machine (client-credentials) tokens: sub equals client_id or azp", async () => {
+  const rpc = binding(() => ({ allowed: true, reason: "granted", roles: ["viewer"], permissions: ["invoices:read"] }));
+  for (const extra of [{ client_id: "svc-1" }, { azp: "svc-1" }, { client_id: "svc-1", azp: "svc-1" }]) {
+    const machine = await nathan(request({ Authorization: "Bearer " + await accessToken("svc-1", { extra }) }), env({ NATHAN: rpc }));
+    assert.equal(machine.authenticated, false, JSON.stringify(extra));
+    assert.equal(machine.forbidden().status, 401);
+  }
+  assert.deepEqual(rpc.calls, [], "a machine token never reaches the role lookup");
+  // A user token from a client (sub is the user, client_id/azp the client) is fine.
+  const user = await nathan(request({ Authorization: "Bearer " + await accessToken("u7", { extra: { client_id: "svc-1", azp: "svc-1" } }) }), env({ NATHAN: rpc }));
+  assert.equal(user.authenticated, true);
+  assert.ok(user.can("invoices:read"));
+});
+
+// The SDK maps one evaluator decision to the same answers on both paths. Locally signed tokens and a
+// stand-in binding; tests/runtime/rbac.test.mjs proves the same table with tokens issued by the
+// built identity Worker and the real NathanVerifier RPC.
+test("the SDK gives the same answers for one decision on the gateway and bearer paths (unit table)", async () => {
   const roles = [{ key: "viewer", permissions: ["invoices:read"] }, { key: "editor", permissions: ["invoices:read", "invoices:write"] }];
   const scenarios = {
     directGrant: { app: { id: "billing", enabled: true, accessMode: "approved" }, user: { id: "u1", banned: false }, groups: [], grants: [{ role: "editor", principalType: "user", principalId: "u1" }], roles },

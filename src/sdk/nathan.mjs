@@ -13,8 +13,9 @@
  *   the NATHAN service binding (entrypoint NathanVerifier, pinned to this app with binding props
  *   { applicationId }), or from `options.resolve`.
  *
- * A present but invalid principal header never falls back to a bearer token. Anything that cannot
- * be verified is an anonymous user that can do nothing.
+ * A present but invalid principal header never falls back to a bearer token. Machine
+ * (client-credentials) tokens and DPoP-bound (cnf) tokens are refused on the bearer path. Anything
+ * that cannot be verified is an anonymous user that can do nothing.
  */
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { verifyPrincipal, PRINCIPAL_HEADER } from "../shared/principal.mjs";
@@ -112,6 +113,10 @@ export async function nathan(request, env, options = {}) {
   } catch { return anonymous(); }
   // A DPoP-bound token is not a bearer token; accepting it without its proof would defeat binding.
   if (payload.cnf || typeof payload.sub !== "string" || payload.sub.length > 256) return anonymous();
+  // A client-credentials (machine) token names the client itself: sub = client_id. It never stands
+  // for a user, even if some user id happens to equal the client id.
+  if ((typeof payload.client_id === "string" && payload.client_id === payload.sub) ||
+      (typeof payload.azp === "string" && payload.azp === payload.sub)) return anonymous();
   const subject = payload.sub;
   /** @type {AccessDecision|null} */
   let decision = null;

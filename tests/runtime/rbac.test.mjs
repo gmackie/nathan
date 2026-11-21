@@ -2,25 +2,31 @@
  * NATH-13 in workerd: the built identity Worker, gateway and an SDK-using upstream run together.
  * The gateway resolves access over the NATHAN service binding (real NathanVerifier RPC and the real
  * evaluator against a migrated D1), signs X-Nathan-Principal, and the upstream verifies it.
+ * The gateway logs in against a mock OIDC provider; the upstream's bearer-token path verifies
+ * access tokens issued by the built identity Worker's own authorize/token endpoints and JWKS.
  */
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync } from "node:fs";
 import { SignJWT, UnsecuredJWT, exportJWK, generateKeyPair } from "jose";
-import { bundle, migrate, randomKey, cookiesOf, start, COMPAT } from "./helpers.mjs";
+import { bundle, migrate, randomKey, cookiesOf, start, COMPAT, enrollAdmin, insertSession, studioPost, nathanUserToken, nathanClientToken } from "./helpers.mjs";
 
 const AUTH_HOST = "login.example.test";
-const ISSUER = "https://" + AUTH_HOST + "/api/auth";
+const AUTH_ORIGIN = "https://" + AUTH_HOST;
+const ISSUER = AUTH_ORIGIN + "/api/auth";
 const ORIGIN = "https://billing.example.test";
 const CLIENT = "billing-gateway";
-const API_AUDIENCE = "https://api.billing.example.test";
+// A resource Nathan actually issues JWT access tokens for (configured in src/auth/instance.ts).
+const API_AUDIENCE = AUTH_ORIGIN + "/mcp";
+const DIRECTORY_AUDIENCE = AUTH_ORIGIN + "/directory";
+const REDIRECT = "https://api.billing.example.test/callback";
 const PRINCIPAL_KEY = randomKey();
 const BETTER_AUTH_SECRET = randomKey() + randomKey();
 const TTL_SECONDS = 1;
 const { privateKey, publicKey } = await generateKeyPair("ES256");
 const jwk = { ...(await exportJWK(publicKey)), kid: "k1", alg: "ES256", use: "sig" };
 
-/** Mock OIDC provider for the gateway's login and the SDK's JWKS. */
+/** Mock OIDC provider for the gateway's login. */
 const issued = new Map();
 async function idp(request) {
   const url = new URL(request.url);
@@ -38,7 +44,17 @@ async function idp(request) {
   return new Response("unexpected outbound " + url.href, { status: 599 });
 }
 
-let mf, authDb, gateway, upstream, auth;
+/** The SDK fetches Nathan's JWKS from the real identity Worker. */
+const toNathan = async request => auth.fetch(request);
+const upstreamWorker = (name, audience) => ({
+  name, modules: true, ...COMPAT, scriptPath: ".nathan/build-upstream/worker.js",
+  serviceBindings: { NATHAN: { name: "auth", entrypoint: "NathanVerifier", props: { applicationId: "billing" } } },
+  outboundService: toNathan,
+  bindings: { NATHAN_PRINCIPAL_KEY: PRINCIPAL_KEY, NATHAN_APPLICATION_ID: "billing", NATHAN_GATEWAY_ORIGIN: ORIGIN,
+    NATHAN_ISSUER: ISSUER, NATHAN_AUDIENCE: audience }
+});
+
+let mf, authDb, gateway, upstream, upstreamMachine, auth, apiClient, directoryClient;
 before(async () => {
   mf = await start({
     workers: [
@@ -54,15 +70,13 @@ before(async () => {
           ACCESS_CACHE_TTL_SECONDS: String(TTL_SECONDS)
         }
       },
-      {
-        name: "upstream", modules: true, ...COMPAT, scriptPath: ".nathan/build-upstream/worker.js",
-        serviceBindings: { NATHAN: { name: "auth", entrypoint: "NathanVerifier", props: { applicationId: "billing" } } },
-        outboundService: idp,
-        bindings: { NATHAN_PRINCIPAL_KEY: PRINCIPAL_KEY, NATHAN_APPLICATION_ID: "billing", NATHAN_GATEWAY_ORIGIN: ORIGIN,
-          NATHAN_ISSUER: ISSUER, NATHAN_AUDIENCE: API_AUDIENCE }
-      },
+      upstreamWorker("upstream", API_AUDIENCE),
+      // Same SDK, configured for the directory audience, so a valid machine token reaches the subject check.
+      upstreamWorker("upstream-machine", DIRECTORY_AUDIENCE),
       {
         name: "auth", modules: true, ...COMPAT, scriptPath: bundle("auth"),
+        // Miniflare only lets same-origin Studio POSTs (Origin header) through to routed hostnames.
+        routes: [AUTH_HOST + "/*"],
         d1Databases: { DB: "rbac-auth-db" },
         durableObjects: { SCIM_DIRECTORY: { className: "NathanScimDirectory", useSQLite: true } },
         bindings: {
@@ -79,7 +93,18 @@ before(async () => {
   for (const file of readdirSync("migrations").filter(f => f.endsWith(".sql")).sort()) await migrate(authDb, "migrations/" + file);
   gateway = await mf.getWorker("gateway");
   upstream = await mf.getWorker("upstream");
+  upstreamMachine = await mf.getWorker("upstream-machine");
   auth = await mf.getWorker("auth");
+  // Real clients registered through Identity Studio by an enrolled administrator.
+  const admin = await enrollAdmin(authDb, BETTER_AUTH_SECRET);
+  const created = await studioPost(auth, AUTH_ORIGIN, "/studio/api/clients", { name: "Billing API", kind: "mcp", publicClient: true, redirectUri: REDIRECT }, admin.cookie);
+  assert.equal(created.status, 200, await created.clone().text());
+  apiClient = (await created.json()).client_id;
+  // Test shortcut: skip the interactive consent screen; tokens still come from Nathan's token endpoint.
+  await authDb.prepare('UPDATE "oauthClient" SET "skipConsent"=1 WHERE "clientId"=?').bind(apiClient).run();
+  const machine = await studioPost(auth, AUTH_ORIGIN, "/studio/api/directory/clients", { name: "Machine", confirm: "CONFIRM DIRECTORY CLIENT Machine" }, admin.cookie);
+  assert.equal(machine.status, 200, await machine.clone().text());
+  directoryClient = await machine.json();
 });
 after(() => mf?.dispose());
 
@@ -115,8 +140,13 @@ async function login(sub) {
   return "__Host-nathan-session=" + cookiesOf(callback)["__Host-nathan-session"].value;
 }
 const viaGateway = (cookie, path = "/whoami", headers = {}) => gateway.fetch(ORIGIN + path, { headers: { Cookie: cookie, ...headers } });
-const accessToken = sub => new SignJWT({ scope: "openid" }).setProtectedHeader({ alg: "ES256", kid: "k1", typ: "at+jwt" })
-  .setIssuer(ISSUER).setAudience(API_AUDIENCE).setSubject(sub).setIssuedAt().setExpirationTime("5m").sign(privateKey);
+/** A user access token issued by Nathan itself for the API audience (optionally DPoP-bound). */
+const accessToken = async (sub, { dpop = false } = {}) => nathanUserToken(auth, {
+  issuer: ISSUER, cookie: (await insertSession(authDb, BETTER_AUTH_SECRET, sub)).cookie,
+  clientId: apiClient, redirectUri: REDIRECT, resource: API_AUDIENCE, dpop
+});
+const claimsOf = token => JSON.parse(Buffer.from(token.split(".")[1], "base64url"));
+const bearer = (worker, token, path = "/whoami") => worker.fetch("https://billing.internal" + path, { headers: { Authorization: "Bearer " + token } });
 
 test("deny by default: a new app with no grants gets 403 at the gateway", async () => {
   await billingApp();
@@ -132,7 +162,12 @@ test("a granted user reaches the upstream with a verified principal; inbound X-N
   await grant("g-editor", "editor", "user", "u-editor");
   const forged = new UnsecuredJWT({ sub: "root", app: "billing", roles: ["admin"], permissions: ["invoices:write"] })
     .setIssuer(ORIGIN).setAudience("billing").setIssuedAt().setExpirationTime("30s").encode();
-  const response = await viaGateway(await login("u-editor"), "/whoami", { "X-Nathan-Principal": forged, "X-Nathan-Subject": "root", "x-nathan-email": "root@example.test" });
+  // Headers the gateway sets (and overwrites) plus ones it never sets: none may reach the upstream as sent.
+  const response = await viaGateway(await login("u-editor"), "/whoami", {
+    "X-Nathan-Principal": forged, "X-Nathan-Subject": "root", "x-nathan-email": "root@example.test",
+    "X-Nathan-Roles": "admin", "X-Nathan-Admin": "true", "X-Nathan-Permissions": "invoices:write", "X-NATHAN-Groups": "finance",
+    "CF-Access-Authenticated-User-Email": "root@example.test", "Cf-Access-Jwt-Assertion": "forged"
+  });
   assert.equal(response.status, 200, await response.clone().text());
   const body = await response.json();
   assert.equal(body.via, "gateway");
@@ -143,6 +178,10 @@ test("a granted user reaches the upstream with a verified principal; inbound X-N
   assert.equal(body.canWrite, true);
   assert.equal(body.forwarded["x-nathan-subject"], "u-editor", "the gateway overwrote the inbound subject");
   assert.equal(body.forwarded["x-nathan-email"], "u-editor@example.test");
+  assert.deepEqual(Object.keys(body.forwarded).sort(), ["x-nathan-application", "x-nathan-email", "x-nathan-subject"],
+    "only the headers the gateway sets itself reach the upstream");
+  assert.equal(body.forwarded["x-nathan-application"], "billing");
+  assert.deepEqual(body.cfAccess, [], "inbound Cf-Access-* headers are stripped");
   assert.equal((await viaGateway(await login("u-editor"), "/invoices/write")).status, 200);
 });
 
@@ -221,19 +260,46 @@ test("same answers through the gateway principal and the SDK bearer-token path (
     const id = "u-table-" + i++;
     await user(id, { banned: 0 });
     await scenario.setup(id);
-    // Log in before blocking: a blocked user cannot complete a fresh Nathan login.
+    // Log in and get a Nathan token before blocking: a blocked user cannot complete a fresh login.
     const cookie = await login(id);
+    const token = await accessToken(id);
+    assert.equal(claimsOf(token).sub, id, "Nathan's token subject is the user id the gateway sees");
     if (scenario.banned) await sql('UPDATE "user" SET "banned"=1 WHERE "id"=?', id);
     await billingApp({ enabled: 1, accessMode: "approved", ...scenario.app });
     const answer = async response => ({ status: response.status, body: response.status === 200 ? await response.json() : null });
     const gatewaySide = await answer(await viaGateway(cookie));
-    const tokenSide = await answer(await upstream.fetch("https://billing.internal/whoami", { headers: { Authorization: "Bearer " + await accessToken(id) } }));
+    const tokenSide = await answer(await bearer(upstream, token));
     const comparable = side => side.body ? { status: side.status, sub: side.body.sub, email: side.body.email, roles: side.body.roles,
       permissions: side.body.permissions, canRead: side.body.canRead, canWrite: side.body.canWrite, isEditor: side.body.isEditor } : { status: side.status };
     assert.deepEqual(comparable(tokenSide), comparable(gatewaySide), scenario.name);
     const writeGateway = (await viaGateway(cookie, "/invoices/write")).status;
-    const writeToken = (await upstream.fetch("https://billing.internal/invoices/write", { headers: { Authorization: "Bearer " + await accessToken(id) } })).status;
+    const writeToken = (await bearer(upstream, token, "/invoices/write")).status;
     assert.equal(writeToken, writeGateway, scenario.name + " (require)");
   }
+  await billingApp({ enabled: 1, accessMode: "approved" });
+});
+
+test("the SDK bearer path refuses Nathan-issued machine (client-credentials) and DPoP-bound tokens", async () => {
+  await user("u-bearer");
+  await grant("g-bearer", "editor", "user", "u-bearer");
+  await billingApp({ enabled: 1, accessMode: "any_signed_in" });
+  // Control: a plain Nathan user token for a granted user is accepted.
+  const plain = await accessToken("u-bearer");
+  assert.equal((await bearer(upstream, plain)).status, 200);
+
+  const bound = await accessToken("u-bearer", { dpop: true });
+  assert.ok(claimsOf(bound).cnf?.jkt, "Nathan bound the token to the DPoP key");
+  const boundAnswer = await bearer(upstream, bound);
+  assert.equal(boundAnswer.status, 401, "a DPoP-bound token without its proof is not a bearer token");
+
+  const machine = await nathanClientToken(auth, { issuer: ISSUER, clientId: directoryClient.client_id, clientSecret: directoryClient.client_secret,
+    scope: "nathan:directory.read", resource: DIRECTORY_AUDIENCE });
+  const claims = claimsOf(machine);
+  assert.equal(claims.sub, claims.client_id, "client-credentials tokens name the client, not a user");
+  // Even if an app (or a user id) shares the client's id, a machine token is never a user.
+  await user(claims.sub);
+  await billingApp({ enabled: 1, accessMode: "any_signed_in" });
+  const machineAnswer = await bearer(upstreamMachine, machine);
+  assert.equal(machineAnswer.status, 401, await machineAnswer.clone().text());
   await billingApp({ enabled: 1, accessMode: "approved" });
 });

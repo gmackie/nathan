@@ -68,3 +68,82 @@ export async function authWorker(host, vars = {}) {
     await migrate(db, "migrations/" + file);
   return mf;
 }
+
+// ---- Real Better Auth sessions and Nathan-issued tokens -----------------------------------------
+
+/** Better Auth's signed session cookie for a session token (HMAC-SHA256 with BETTER_AUTH_SECRET). */
+export async function signedSessionCookie(secret, token) {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const signature = Buffer.from(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(token))).toString("base64");
+  return "__Secure-nathan.session_token=" + encodeURIComponent(token + "." + signature);
+}
+/** Inserts a one-hour Better Auth session for a user; returns its id and cookie. */
+export async function insertSession(db, secret, userId) {
+  const id = "sess-" + crypto.randomUUID(), token = "tok" + randomKey(), now = new Date().toISOString();
+  await db.prepare('INSERT INTO "session"("id","expiresAt","token","createdAt","updatedAt","userId") VALUES (?,?,?,?,?,?)')
+    .bind(id, new Date(Date.now() + 3600_000).toISOString(), token, now, now, userId).run();
+  return { id, cookie: await signedSessionCookie(secret, token) };
+}
+/** Creates the bootstrap administrator (passkey + TOTP enrolled, session stepped up); returns its session. */
+export async function enrollAdmin(db, secret, { id = "admin-1", email = "admin@example.test" } = {}) {
+  const now = new Date().toISOString();
+  const run = (statement, ...params) => db.prepare(statement).bind(...params).run();
+  await run('INSERT INTO "user"("id","name","email","emailVerified","createdAt","updatedAt","role") VALUES (?,?,?,1,?,?,\'admin\')', id, id, email, now, now);
+  await run("INSERT INTO nathan_bootstrap_status(id,cloudflare_user_id,admin_email,admin_user_id,state) VALUES ('primary','cf',?,?,'complete')", email, id);
+  await run('INSERT INTO "passkey"("id","publicKey","userId","credentialID","counter","deviceType","backedUp") VALUES (?,\'x\',?,?,0,\'singleDevice\',0)', "pk-" + id, id, "cred-" + id);
+  await run('INSERT INTO "twoFactor"("id","secret","backupCodes","userId","verified") VALUES (?,\'x\',\'x\',?,1)', "tf-" + id, id);
+  const session = await insertSession(db, secret, id);
+  await run("INSERT INTO nathan_admin_assurance(session_id,user_id,method) VALUES (?,?,'passkey')", session.id, id);
+  return session;
+}
+/** POSTs same-origin JSON to an Identity Studio API as the given session. */
+export function studioPost(fetcher, origin, path, body, cookie) {
+  return fetcher.fetch(origin + path, {
+    method: "POST", body: JSON.stringify(body),
+    headers: { Cookie: cookie, Origin: origin, "Content-Type": "application/json", "Sec-Fetch-Site": "same-origin" }
+  });
+}
+/** A DPoP proof JWT (RFC 9449) for one request, from a fresh ES256 key. */
+export async function dpopProof(method, url) {
+  const { generateKeyPair, exportJWK, SignJWT } = await import("jose");
+  const { privateKey, publicKey } = await generateKeyPair("ES256");
+  return new SignJWT({ htm: method, htu: url, jti: crypto.randomUUID() })
+    .setProtectedHeader({ alg: "ES256", typ: "dpop+jwt", jwk: await exportJWK(publicKey) }).setIssuedAt().sign(privateKey);
+}
+/**
+ * A user access token issued by Nathan's own authorization and token endpoints (authorization
+ * code + PKCE, public client). With `dpop`, the token request carries a DPoP proof, so Nathan
+ * binds the token to that key (`cnf.jkt`).
+ */
+export async function nathanUserToken(fetcher, { issuer, cookie, clientId, redirectUri, scope = "openid nathan:read", resource, dpop = false }) {
+  const { createHash } = await import("node:crypto");
+  const verifier = randomKey() + randomKey();
+  const query = new URLSearchParams({
+    response_type: "code", client_id: clientId, redirect_uri: redirectUri, scope, state: randomKey(),
+    code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256", resource
+  });
+  const authorize = await fetcher.fetch(issuer + "/oauth2/authorize?" + query, { redirect: "manual", headers: { Cookie: cookie } });
+  const location = authorize.headers.get("Location") ?? (authorize.status === 200 ? (await authorize.json()).url : null);
+  const code = location && new URL(location).searchParams.get("code");
+  if (!code) throw Error("Nathan did not issue an authorization code: " + authorize.status);
+  const headers = { "Content-Type": "application/x-www-form-urlencoded" };
+  if (dpop) headers.DPoP = await dpopProof("POST", issuer + "/oauth2/token");
+  const response = await fetcher.fetch(issuer + "/oauth2/token", {
+    method: "POST", headers,
+    body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirectUri, client_id: clientId, code_verifier: verifier, resource }).toString()
+  });
+  const body = await response.json();
+  if (response.status !== 200 || !body.access_token) throw Error("Nathan token request failed: " + response.status + " " + JSON.stringify(body));
+  return body.access_token;
+}
+/** A client-credentials access token issued by Nathan's token endpoint. */
+export async function nathanClientToken(fetcher, { issuer, clientId, clientSecret, scope, resource }) {
+  const response = await fetcher.fetch(issuer + "/oauth2/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Authorization: "Basic " + btoa(clientId + ":" + clientSecret) },
+    body: new URLSearchParams({ grant_type: "client_credentials", scope, resource }).toString()
+  });
+  const body = await response.json();
+  if (response.status !== 200 || !body.access_token) throw Error("Nathan client-credentials request failed: " + response.status + " " + JSON.stringify(body));
+  return body.access_token;
+}
