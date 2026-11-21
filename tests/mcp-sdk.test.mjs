@@ -84,3 +84,66 @@ test("an unreachable Nathan fails closed with 503, and malformed tokens never re
   }
   assert.equal(down.calls.length, 1);
 });
+
+test("without a binding: a JWKS outage answers 503 (retry), a bad token 401", async () => {
+  const { generateKeyPair, exportJWK, SignJWT } = await import("jose");
+  const { privateKey, publicKey } = await generateKeyPair("EdDSA", { crv: "Ed25519" });
+  const other = await generateKeyPair("EdDSA", { crv: "Ed25519" });
+  const jwk = { ...(await exportJWK(publicKey)), kid: "k1", alg: "EdDSA", use: "sig" };
+  let n = 0;
+  const sign = (claims, key = privateKey, kid = "k1") => {
+    const now = Math.floor(Date.now() / 1000);
+    return new SignJWT({ principal_kind: "agent", nathan_grant: "g", client_id: "c", scope: "notes:read", sub: "u-alice", aud: RESOURCE,
+      iat: now, exp: now + 300, jti: "j" + n++, ...claims }).setProtectedHeader({ alg: "EdDSA", typ: "at+jwt", kid }).sign(key);
+  };
+  const real = globalThis.fetch;
+  /** Each case gets its own issuer so the SDK's per-issuer key set cache never carries over. */
+  async function run(jwks, claims = {}, key, kid) {
+    const host = "login" + n++ + ".example.com";
+    const iss = "https://" + host + "/api/auth";
+    const calls = [];
+    globalThis.fetch = async (input, init) => {
+      const url = String(input instanceof Request ? input.url : input);
+      calls.push(url);
+      if (url === iss + "/jwks") return jwks(init);
+      if (url === "https://" + host + "/mcp-oauth/grant") return Response.json({ active: true, sub: "u-alice", clientId: "c", grantId: "g", scopes: ["notes:read"], exp: Math.floor(Date.now() / 1000) + 300 });
+      throw Error("unexpected fetch " + url);
+    };
+    try {
+      const mcp = nathanMcp({ NATHAN_ISSUER: iss }, { resource: RESOURCE, cacheSeconds: 0 });
+      const token = await sign({ iss, ...claims }, key, kid);
+      const response = await mcp.handle(bearer(token), user => Response.json({ sub: user.sub }));
+      return { status: response.status, calls, challenge: response.headers.get("WWW-Authenticate") };
+    } finally { globalThis.fetch = real; }
+  }
+  const keys = () => Response.json({ keys: [jwk] });
+
+  const ok = await run(keys);
+  assert.equal(ok.status, 200, "a good token passes the local check and the grant check over HTTPS");
+  assert.equal(ok.calls.length, 2);
+
+  for (const [what, jwks] of [
+    ["non-200 key set", () => new Response("upstream down", { status: 502 })],
+    ["invalid key set (ERR_JWKS_INVALID)", () => Response.json({ nope: true })],
+    ["key set timeout (ERR_JWKS_TIMEOUT)", () => { throw new DOMException("The operation timed out", "TimeoutError"); }],
+    ["network error", () => { throw new TypeError("fetch failed"); }],
+    ["not JSON", () => new Response("<html>", { status: 200, headers: { "Content-Type": "text/html" } })]
+  ]) {
+    const outage = await run(jwks);
+    assert.equal(outage.status, 503, what + " is Nathan being unavailable, not a bad token");
+    assert.equal(outage.calls.filter(u => u.endsWith("/mcp-oauth/grant")).length, 0, what);
+  }
+
+  for (const [what, claims, key, kid] of [
+    ["signed by another key", {}, other.privateKey, "k1"],
+    ["unknown key id (ERR_JWKS_NO_MATCHING_KEY)", {}, other.privateKey, "k2"],
+    ["another audience", { aud: "https://other.example.com/mcp" }],
+    ["expired", { exp: Math.floor(Date.now() / 1000) - 3600 }],
+    ["not an agent token", { principal_kind: "user" }]
+  ]) {
+    const bad = await run(keys, claims, key, kid);
+    assert.equal(bad.status, 401, what);
+    assert.match(bad.challenge, /error="invalid_token"/, what);
+    assert.equal(bad.calls.filter(u => u.endsWith("/mcp-oauth/grant")).length, 0, what + ": never reaches the grant check");
+  }
+});

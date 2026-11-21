@@ -18,7 +18,8 @@
  * answer is cached for at most 30 s per token. Access tokens themselves live 300 s. The check uses the
  * `NATHAN` service binding (entrypoint `NathanVerifier`) when present, otherwise
  * `POST <issuer origin>/mcp-oauth/grant` authenticated with the token itself. If Nathan cannot be
- * reached the request fails closed with 503.
+ * reached (including its key set: timeouts, invalid or non-200 JWKS, network errors) the request
+ * fails closed with 503; only problems with the token itself answer 401.
  */
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { fetchNoRedirect } from "../shared/security.mjs";
@@ -26,6 +27,16 @@ import { fetchNoRedirect } from "../shared/security.mjs";
 const MAX_CACHE_SECONDS = 30;
 const MAX_CACHE_ENTRIES = 1000;
 const ALGORITHMS = ["EdDSA", "ES256", "RS256"];
+/**
+ * jose error codes that mean the token itself is unusable (401). Anything else while verifying,
+ * such as ERR_JWKS_TIMEOUT, ERR_JWKS_INVALID, a non-200 key set (ERR_JOSE_GENERIC) or a network
+ * error, means Nathan's keys could not be read: the request fails closed with 503 so clients retry
+ * instead of discarding a good token.
+ */
+const TOKEN_PROBLEMS = new Set([
+  "ERR_JWT_INVALID", "ERR_JWT_EXPIRED", "ERR_JWT_CLAIM_VALIDATION_FAILED", "ERR_JWS_INVALID", "ERR_JWS_SIGNATURE_VERIFICATION_FAILED",
+  "ERR_JOSE_ALG_NOT_ALLOWED", "ERR_JOSE_NOT_SUPPORTED", "ERR_JWKS_NO_MATCHING_KEY", "ERR_JWKS_MULTIPLE_MATCHING_KEYS"
+]);
 /** @type {Map<string, ReturnType<typeof createRemoteJWKSet>>} */
 const keySets = new Map();
 
@@ -117,7 +128,7 @@ export function nathanMcp(env, options) {
       const { payload } = await jwtVerify(token, set, { issuer: tokenIssuer, audience: resource, typ: "at+jwt", algorithms: ALGORITHMS, clockTolerance: 5 });
       if (payload.principal_kind !== "agent" || typeof payload.nathan_grant !== "string" || payload.cnf !== undefined) return { active: false };
     } catch (error) {
-      if (error && typeof error === "object" && "code" in error && String(error.code).startsWith("ERR_JW")) return { active: false };
+      if (error && typeof error === "object" && "code" in error && TOKEN_PROBLEMS.has(String(error.code))) return { active: false };
       throw error;
     }
     const response = await fetchNoRedirect(issuer.origin + "/mcp-oauth/grant", {
