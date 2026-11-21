@@ -69,7 +69,8 @@
 - [x] Script-free consent page with per-scope checkboxes, single-use session-bound ticket, empty selection without consuming it, Safari `form-action` allowance; `/connections` to edit or disconnect; Studio registration and revocation (admin, step-up, audited).
 - [x] Effective scopes = grant ∩ current permissions at every issuance and check; refresh narrowing by intersection; rotation reuse and code replay revoke the grant; RFC 7009 revocation.
 - [x] NATH-15 tokens (`principal_kind: agent`, 300 s) and Worker SDK `nathanMcp()` with RFC 9728 metadata, 401/403 challenges, `user.can()` and a ≤ 30 s cached grant check (service binding or HTTPS). Workerd-tested with an MCP TypeScript SDK client and a sample MCP server. [Guide](remote-mcp.md).
-- [ ] Verify with a deployed Nathan and MCP server, real browsers (Safari) and specific MCP products.
+- [x] Security review fixes: consent and connections pages use `Referrer-Policy: same-origin` so browser form posts carry Nathan's `Origin` (`Origin: null` stays refused); registration bounded (unused clients pruned after 24 h and capped at 1,000, stored metadata < 4 KB, unknown fields dropped, global limit counts stored registrations only); codes and refresh tokens consumed atomically so a concurrent second use revokes the grant; a refresh with nothing usable (or during a ban) keeps its refresh token; Studio keeps MCP resources and Better Auth audiences apart; the SDK answers 503 for JWKS outages.
+- [ ] Verify with a deployed Nathan and MCP server, real browsers (Chromium form posts with the same-origin policy, Safari `form-action` after the consent redirect) and specific MCP products.
 - [ ] Client ID Metadata Documents (needs resolve-once DNS handling; Better Auth's `@better-auth/cimd` is a separate plugin).
 - [ ] Import scope metadata from a Gatekeeper action catalog (shape designed in [remote-mcp.md](remote-mcp.md#design-decisions)).
 
