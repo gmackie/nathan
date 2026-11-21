@@ -34,6 +34,18 @@
 - [x] Runtime-forward-only MFA policy tightening from Identity Studio, never weakening the deployment baseline.
 - [x] Wizard-vs-Studio settings/recovery guide: [setup-lifecycle.md](setup-lifecycle.md).
 
+## Roles and minimal RBAC (NATH-13; implemented source, staging pending)
+
+- [x] Per-app permissions, roles, groups, members and grants (migration 0011) with both NATH-1 access modes; deny by default; legacy role lists migrated without changing any current decision.
+- [x] One pure evaluator (`src/shared/policy.mjs`) used by the gateway RPC, the SDK's token path, `NathanVerifier.authorize/access` and the directory API.
+- [x] Gateway resolves roles over the `NathanVerifier` service binding, caches them for at most 60 s per session, answers 403 on deny, strips inbound `X-Nathan-*` and forwards a signed, ≤ 60 s `X-Nathan-Principal` (workerd-tested: forged/unsigned principals rejected, grant removal effective within the cache window).
+- [x] Worker SDK `nathan(request, env)` with `hasRole`, `can`, `require`; the gateway and bearer-token paths give the same answers (workerd table test).
+- [x] Directory read API and change feed for Gatekeeper's PIP, with client-credentials authentication (workerd-tested with a token from Nathan's own endpoint).
+- [x] Identity Studio Roles and access (admin-only, step-up, audited, change-fed), permissions as code (`nathan rbac plan|sync`), principal key setup in `nathan protect`. [Quickstart](quickstart-rbac.md), [reference](rbac.md).
+- [ ] Follow the quickstart end to end against a staging Cloudflare account (gateway + upstream + Studio grants).
+- [ ] Contract test with Gatekeeper's PIP adapter (GATE-9) against a Nathan fixture.
+- [ ] Access-token role claims as hints (NATH-15), MCP scopes capped by permissions (NATH-14), SCIM group mapping (NATH-11).
+
 ## Required before first actual production-ready release
 
 - [ ] Verify root → nested-subdomain → root SSO against real Cloudflare Workers and non-Workers, including strict per-client audience isolation.
@@ -54,7 +66,7 @@
 
 - Custom plugin approvals and isolation for out-of-process extensions.
 - SCIM ingress/egress and verified enterprise SAML/OIDC provisioning.
-- Authentik-style policy and flow designer.
+- Authentik-style flow designer. Rich authorization policy (conditions, approvals, resource rules) belongs to Gatekeeper, which reads Nathan's roles.
 - RADIUS/LDAP/SSH/non-HTTP outposts via native edge agents.
 
 ## Future optional whole-zone ingress

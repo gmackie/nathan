@@ -61,6 +61,9 @@
 - [ ] Test safe admin recovery without creating an unprotected fallback account.
 - [ ] Verify high-assurance or mandatory MFA options **remain disabled** until downstream \`acr\`/\`amr\` evidence is correct.
 - [ ] Run policy tests for role authorization, applications disabled by default and changed permissions.
+- [ ] Follow [quickstart-rbac.md](quickstart-rbac.md) end to end: new app denies everyone, a granted user reaches the upstream, `user.can()` matches the role, and a revoked grant returns 403 within `ACCESS_CACHE_TTL_SECONDS`.
+- [ ] Confirm the upstream rejects requests without a valid `X-Nathan-Principal`, and that `NATHAN_PRINCIPAL_KEY` differs per gateway.
+- [ ] Register a directory client and read `/directory/v1/principal` and `/directory/v1/changes` with a client-credentials token; disabling the client must cut access immediately.
 
 ## First administrator, OAuth, SCIM and MFA acceptance
 
