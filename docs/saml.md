@@ -133,7 +133,7 @@ Enforced by the Better Auth SSO plugin (samlify) and Nathan, and tested in worke
 - Each assertion ID is accepted once (replay protection).
 - Only one assertion per response; at most 256 KiB.
 
-Raw Better Auth SSO management endpoints (`/api/auth/sso/register`, `update-provider`, `delete-provider`, `providers`, `get-provider`, `verify-domain`, `request-domain-verification`) stay blocked. `/api/auth/sign-in/sso` only accepts an explicit `providerId` that names a usable connection. The sign-in page uses `/sign-in/sso/start`, which routes an email domain to its most specific enabled SAML connection (or else a verified enterprise OIDC provider).
+Raw Better Auth SSO management endpoints (`/api/auth/sso/register`, `update-provider`, `delete-provider`, `providers`, `get-provider`, `verify-domain`, `request-domain-verification`) stay blocked. `/api/auth/sign-in/sso` only accepts an explicit `providerId` that names a usable connection. The sign-in page uses `/sign-in/sso/start`, which routes an email domain to its most specific enabled SAML connection (or else a verified enterprise OIDC provider). Enterprise OIDC follows the same domain rule as SAML (NATH-16): an OIDC sign-in creates an account only for an address inside that connection's verified domain, never on the IdP's `email_verified` claim alone, and only when the installation admits it ([admission.md](admission.md)).
 
 ## Not supported (yet)
 
