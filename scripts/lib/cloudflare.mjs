@@ -122,6 +122,20 @@ export function missingIdpSecrets(names) {
   return REQUIRED_IDP_SECRETS.filter(name => !names.includes(name));
 }
 /**
+ * Installs each missing identity Worker secret (never replacing an existing one), then
+ * re-reads the Worker's secret names and throws unless all are present. Callers publish
+ * the public route only after this returns.
+ * @param {{ workerSecretNames(name: string): Promise<string[]> }} client
+ * @param {string} workerName
+ * @param {(name: string) => Promise<void>} putSecret
+ */
+export async function ensureIdpSecrets(client, workerName, putSecret) {
+  for (const name of missingIdpSecrets(await client.workerSecretNames(workerName))) await putSecret(name);
+  const stillMissing = missingIdpSecrets(await client.workerSecretNames(workerName));
+  if (stillMissing.length)
+    throw Error("Refusing to publish the identity hostname: missing Worker secrets " + stillMissing.join(", "));
+}
+/**
  * DNS records at the identity hostname conflict unless they are the record Cloudflare
  * manages for this installation's own Worker custom domain (a re-run or upgrade).
  */
@@ -130,12 +144,16 @@ export function hostnameConflicts(records, domains, hostname, workerName) {
   return ownsHostname ? [] : records;
 }
 export async function inspectDeployment(client, cfg) {
-  const [zones, workers, databases, domains] = await Promise.all([
-    client.zones(), client.workers(), client.databases(), client.workerDomains()
+  const [zones, workers, databases] = await Promise.all([
+    client.zones(), client.workers(), client.databases()
   ]);
   const zone = zoneForHostname(zones, cfg.hostname);
   const records = zone ? await client.dnsRecords(zone.id, cfg.hostname) : [];
-  const conflicts = hostnameConflicts(records, domains, cfg.hostname, cfg.name + "-auth");
+  // Custom-domain inventory is read only when there is something to explain, so a
+  // first install does not need Workers custom-domain read permission.
+  const conflicts = records.length
+    ? hostnameConflicts(records, await client.workerDomains(), cfg.hostname, cfg.name + "-auth")
+    : [];
   return {
     accountId: client.accountId,
     zone: zone ? { id: zone.id, name: zone.name, status: zone.status } : null,

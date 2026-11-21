@@ -20,7 +20,7 @@ test("installer verify stage rejects an inactive auth Worker", async () => {
   instances.push(mf);
   await assert.rejects(
     verifyIdentityHostname(HOST, (url, init) => mf.dispatchFetch(url, { ...init, redirect: "manual" })),
-    /not activated|discovery unavailable/);
+    /not activated/);
 });
 
 test("installer Cloudflare login sets state and session cookies", async () => {

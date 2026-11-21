@@ -2,7 +2,7 @@
 import { readFile, writeFile, access } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { loadConfig, validateConfig, buildPlan } from "./lib/config.mjs";
-import { CloudflareClient, inspectDeployment, missingIdpSecrets } from "./lib/cloudflare.mjs";
+import { CloudflareClient, inspectDeployment, ensureIdpSecrets } from "./lib/cloudflare.mjs";
 import { ask, yesNo, secretPrompt } from "./lib/prompts.mjs";
 import { discoverWrangler, runCli, createGeneratedConfig } from "./lib/wrangler.mjs";
 import { providerCommand } from "./lib/provider-wizard.mjs";
@@ -167,14 +167,12 @@ async function provision(forceApply=false) {
     await runCli("npx",["wrangler","deploy","--config",stagingPath,"--dry-run"]);
     await runCli("npx",["wrangler","deploy","--config",stagingPath]);
   }
-  for (const name of missingIdpSecrets(await client.workerSecretNames(liveConfig.name))) {
+  await ensureIdpSecrets(client, liveConfig.name, async name => {
     const value = name === "BETTER_AUTH_SECRET"
       ? (await secretPrompt("BETTER_AUTH_SECRET (blank to generate securely)")) || randomBytes(48).toString("base64url")
       : randomBytes(32).toString("base64url");
     await runCli("npx",["wrangler","secret","put",name,"--config",stagingPath],{input:value});
-  }
-  const stillMissing = missingIdpSecrets(await client.workerSecretNames(liveConfig.name));
-  if (stillMissing.length) throw Error("Refusing to publish the identity hostname: missing Worker secrets " + stillMissing.join(", "));
+  });
   await runCli("npx",["wrangler","deploy","--config",configPath]);
   console.log("Identity Worker published. Configure a trusted login provider and verify OIDC discovery.");
 }

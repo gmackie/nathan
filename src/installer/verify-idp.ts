@@ -14,9 +14,9 @@ export async function verifyIdentityHostname(hostname: string, fetcher: Fetch = 
   const get = (url: string) => fetcher(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(7000) });
   const [health, discovery] = await Promise.all([get(origin + "/healthz"), get(issuer + "/.well-known/openid-configuration")]);
   if (!health.ok) throw Error("Identity hostname not healthy yet (" + health.status + "); check route, secrets and DNS propagation");
-  if (!discovery.ok) throw Error("OIDC discovery unavailable (" + discovery.status + ") at " + issuer + "/.well-known/openid-configuration");
   const status = await health.json() as { active?: boolean };
   if (status.active !== true) throw Error("Identity Worker is reachable but not activated");
+  if (!discovery.ok) throw Error("OIDC discovery unavailable (" + discovery.status + ") at " + issuer + "/.well-known/openid-configuration");
   const metadata = await discovery.json() as { issuer?: string; jwks_uri?: string };
   if (metadata.issuer !== issuer) throw Error("OIDC issuer mismatch: expected " + issuer);
   if (typeof metadata.jwks_uri !== "string") throw Error("OIDC discovery has no jwks_uri");

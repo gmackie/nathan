@@ -46,3 +46,10 @@ export function isAllowedOrigin(origin,expected){
   try {return new URL(origin).origin===expected && new URL(origin).href.replace(/\/$/,"")===expected;}
   catch{return false;}
 }
+
+/**
+ * Counts every schema object (table, view, index, trigger) except SQLite's own and
+ * Cloudflare's internal `_cf_` objects. substr() is used because LIKE treats `_` as a wildcard.
+ */
+export const EMPTY_DATABASE_SQL =
+  "SELECT count(*) AS n FROM sqlite_master WHERE substr(name,1,7)<>'sqlite_' AND substr(name,1,4)<>'_cf_'";

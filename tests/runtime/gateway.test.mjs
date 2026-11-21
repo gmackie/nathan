@@ -11,8 +11,11 @@ const jwk = { ...(await exportJWK(publicKey)), kid: "k1", alg: "ES256", use: "si
 
 /** Per-test IdP behaviour: the authorization code maps to the nonce the gateway sent. */
 const issued = new Map();
+const outage = { discovery: false, jwks: false };
 async function idp(request) {
   const url = new URL(request.url);
+  if (outage.discovery && url.pathname.endsWith("/openid-configuration")) return new Response("down", { status: 502 });
+  if (outage.jwks && url.pathname.endsWith("/jwks")) return new Response("down", { status: 502 });
   if (url.href === ISSUER + "/.well-known/openid-configuration")
     return Response.json({
       issuer: ISSUER,
@@ -80,10 +83,10 @@ test("gateway login round trip sets flow and session cookies and proxies upstrea
   assert.equal(await page.text(), "upstream ok");
 });
 
-async function logoutToken(claims) {
+async function logoutToken(claims, iat = Math.floor(Date.now() / 1000)) {
   return new SignJWT({ events: { "http://schemas.openid.net/event/backchannel-logout": {} }, ...claims })
     .setProtectedHeader({ alg: "ES256", kid: "k1", typ: "logout+jwt" })
-    .setIssuer(ISSUER).setAudience(CLIENT).setIssuedAt().setJti(crypto.randomUUID())
+    .setIssuer(ISSUER).setAudience(CLIENT).setIssuedAt(iat).setJti(crypto.randomUUID())
     .setExpirationTime("2m").sign(privateKey);
 }
 const postLogout = token => mf.dispatchFetch(ORIGIN + "/__nathan/backchannel", {
@@ -123,4 +126,53 @@ test("replayed logout token does not revoke a newer session", async () => {
   await login("user-4", "sid-4b");
   assert.equal((await postLogout(token)).status, 204);
   assert.equal(await sessionCount("sid-4b"), 1);
+});
+
+test("revocation rolls back when the replay record cannot be written, so the retry still revokes", async () => {
+  await login("user-5", "sid-5");
+  const token = await logoutToken({ sid: "sid-5" });
+  // Fail the batch's second statement: the delete must not commit on its own.
+  await db.prepare("ALTER TABLE nathan_gateway_logout_jti RENAME TO hidden_jti").run();
+  const failed = await postLogout(token);
+  await db.prepare("ALTER TABLE hidden_jti RENAME TO nathan_gateway_logout_jti").run();
+  assert.equal(failed.status, 503);
+  assert.equal(await sessionCount("sid-5"), 1, "the batch must be all-or-nothing");
+  assert.equal((await postLogout(token)).status, 204);
+  assert.equal(await sessionCount("sid-5"), 0);
+});
+
+test("concurrent deliveries of one logout token both succeed and revoke once", async () => {
+  await login("user-6", "sid-6");
+  const token = await logoutToken({ sid: "sid-6" });
+  const responses = await Promise.all([postLogout(token), postLogout(token)]);
+  assert.deepEqual(responses.map(r => r.status), [204, 204]);
+  assert.equal(await sessionCount("sid-6"), 0);
+  const rows = await db.prepare("SELECT count(*) AS n FROM nathan_gateway_logout_jti").first();
+  assert.ok(rows.n >= 1);
+});
+
+test("a future-dated token's replay record outlives its acceptance window", async () => {
+  await login("user-7", "sid-7");
+  const iat = Math.floor(Date.now() / 1000) + 170;
+  const token = await logoutToken({ sid: "sid-7" }, iat);
+  assert.equal((await postLogout(token)).status, 204);
+  const jti = JSON.parse(Buffer.from(token.split(".")[1], "base64url")).jti;
+  const row = await db.prepare("SELECT exp FROM nathan_gateway_logout_jti WHERE jti=?").bind(jti).first();
+  assert.ok(row.exp >= iat + 180 + 30, "replay record must last until iat + skew + tolerance, got exp-iat=" + (row.exp - iat));
+});
+
+test("discovery or JWKS outages are retryable; bad tokens are not", async () => {
+  await login("user-8", "sid-8");
+  const token = await logoutToken({ sid: "sid-8" });
+  outage.discovery = true;
+  assert.equal((await postLogout(token)).status, 503);
+  outage.discovery = false;
+  outage.jwks = true;
+  assert.equal((await postLogout(token)).status, 503);
+  outage.jwks = false;
+  assert.equal(await sessionCount("sid-8"), 1);
+  const forged = token.slice(0, -4) + (token.endsWith("AAAA") ? "BBBB" : "AAAA");
+  assert.equal((await postLogout(forged)).status, 400);
+  assert.equal((await postLogout(token)).status, 204);
+  assert.equal(await sessionCount("sid-8"), 0);
 });

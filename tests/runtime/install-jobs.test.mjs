@@ -13,8 +13,10 @@ const manifest = {
 };
 
 /** A small stateful Cloudflare API fake. */
-const cf = { databases: [], creates: 0, loseCreateResponse: false, manifestGate: null, manifestFetches: 0 };
-beforeEach(() => Object.assign(cf, { databases: [], creates: 0, loseCreateResponse: false, manifestGate: null, manifestFetches: 0 }));
+const fresh = () => ({ databases: [], creates: 0, loseCreateResponse: false, rejectCreate: false, schemaObjects: 0,
+  onList: null, manifestGate: null, manifestFetches: 0 });
+const cf = fresh();
+beforeEach(() => Object.assign(cf, fresh()));
 const ok = result => Response.json({ success: true, result });
 async function cloudflare(request) {
   const url = new URL(request.url);
@@ -28,16 +30,20 @@ async function cloudflare(request) {
   if (path === "/accounts/" + ACCOUNT + "/workers/scripts") return ok([]);
   if (path === "/accounts/" + ACCOUNT + "/workers/domains") return ok([]);
   if (path.startsWith("/zones/" + ZONE + "/dns_records")) return ok([]);
-  if (path === "/accounts/" + ACCOUNT + "/d1/database" && request.method === "GET") return ok(cf.databases);
+  if (path === "/accounts/" + ACCOUNT + "/d1/database" && request.method === "GET") {
+    if (cf.onList) await cf.onList();
+    return ok(cf.databases);
+  }
   if (path === "/accounts/" + ACCOUNT + "/d1/database" && request.method === "POST") {
     cf.creates++;
-    const db = { uuid: crypto.randomUUID(), name: (await request.json()).name };
+    if (cf.rejectCreate) return Response.json({ success: false, errors: [{ message: "quota exceeded" }] }, { status: 400 });
+    const db = { uuid: crypto.randomUUID(), name: (await request.json()).name, created_at: new Date().toISOString() };
     cf.databases.push(db);
     // The database exists, but the installer never sees the response.
     if (cf.loseCreateResponse) return Response.json({ success: false, errors: [{ message: "timeout" }] }, { status: 504 });
     return ok(db);
   }
-  if (/\/d1\/database\/[a-f0-9-]{36}\/query$/.test(path)) return ok([{ success: true, results: [{ n: 0 }] }]);
+  if (/\/d1\/database\/[a-f0-9-]{36}\/query$/.test(path)) return ok([{ success: true, results: [{ n: cf.schemaObjects }] }]);
   return new Response("unexpected " + request.method + " " + path, { status: 599 });
 }
 async function assets(request) {
@@ -121,4 +127,60 @@ test("a request that read the job before another finished the stage does not re-
   assert.equal(job.stage, "schema");
   assert.equal(job.error, null, "a stale request must not record an error on the job");
   assert.equal(cf.creates, 1);
+});
+
+const jobRow = async id => (await mf.getD1Database("INSTALLER_DB"))
+  .prepare("SELECT database_create_started_at AS startedAt, stage, error FROM nathan_install_jobs WHERE id=?").bind(id).first();
+
+test("an interrupted create is not adopted once the database contains schema objects", async () => {
+  await setup();
+  const id = await startInstall();
+  cf.loseCreateResponse = true;
+  await post("/api/install/advance", { id });
+  cf.loseCreateResponse = false;
+  cf.schemaObjects = 1;
+  const retry = await post("/api/install/advance", { id });
+  assert.equal(retry.status, 409);
+  assert.match((await retry.json()).error, /not empty/);
+  assert.equal((await status(id)).stage, "database");
+});
+
+test("a same-named database the job never tried to create is never adopted", async () => {
+  await setup();
+  const id = await startInstall();
+  // Appears after planning (planning refuses existing names) but before this job's create.
+  cf.databases.push({ uuid: crypto.randomUUID(), name: "nathan-test-db", created_at: new Date().toISOString() });
+  const response = await post("/api/install/advance", { id });
+  assert.equal(response.status, 409);
+  assert.match((await response.json()).error, /not recorded as owned/);
+  assert.equal(cf.creates, 0);
+});
+
+test("a definite create rejection clears the marker, so a later database is not adopted", async () => {
+  await setup();
+  const id = await startInstall();
+  cf.rejectCreate = true;
+  assert.equal((await post("/api/install/advance", { id })).status, 409);
+  assert.equal((await jobRow(id)).startedAt, null);
+  cf.rejectCreate = false;
+  cf.databases.push({ uuid: crypto.randomUUID(), name: "nathan-test-db", created_at: new Date().toISOString() });
+  const retry = await post("/api/install/advance", { id });
+  assert.equal(retry.status, 409);
+  assert.match((await retry.json()).error, /not recorded as owned/);
+});
+
+test("a request whose lease was taken over performs no further Cloudflare writes", async () => {
+  await setup();
+  const id = await startInstall();
+  cf.onList = async () => {
+    // Simulate the lease expiring mid-stage and another request claiming the job.
+    await (await mf.getD1Database("INSTALLER_DB"))
+      .prepare("UPDATE nathan_install_jobs SET lease_token='other-request' WHERE id=?").bind(id).run();
+  };
+  const response = await post("/api/install/advance", { id });
+  assert.equal(response.status, 409);
+  assert.match((await response.json()).error, /lease expired/);
+  assert.equal(cf.creates, 0, "the stale request must not create a database");
+  const row = await jobRow(id);
+  assert.equal(row.error, null, "a stale request must not overwrite the new holder's error state");
 });
