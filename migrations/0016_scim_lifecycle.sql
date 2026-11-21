@@ -7,8 +7,11 @@ ALTER TABLE nathan_scim_connections ADD COLUMN linking_enabled INTEGER NOT NULL 
 ALTER TABLE nathan_scim_connections ADD COLUMN jit_enabled INTEGER NOT NULL DEFAULT 0 CHECK(jit_enabled IN (0,1));
 ALTER TABLE nathan_scim_connections ADD COLUMN last_sync_at INTEGER;
 ALTER TABLE nathan_scim_connections ADD COLUMN last_error_at INTEGER;
--- One applied-state row per staged SCIM User. A link is keyed by (connection, externalId) and a
--- Nathan user is linked to at most one SCIM identity in one connection; a link never moves.
+-- One applied-state row per staged SCIM User. A link is keyed by (connection, externalId) among live
+-- (non-deleted) rows, so a rehire with the same externalId can take over a deleted identity's link in
+-- the same connection; a Nathan user is linked to at most one SCIM identity, and a link never moves to
+-- another connection. linked_email and linked_at survive the Nathan user's deletion (user_id becomes
+-- NULL): such an orphaned link is never re-made automatically, here or in another connection.
 CREATE TABLE IF NOT EXISTS nathan_scim_users (
   connection_id TEXT NOT NULL REFERENCES nathan_scim_connections(id) ON DELETE CASCADE,
   scim_id TEXT NOT NULL,
@@ -18,16 +21,47 @@ CREATE TABLE IF NOT EXISTS nathan_scim_users (
   deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1)),
   user_id TEXT REFERENCES "user"("id") ON DELETE SET NULL,
   link_state TEXT NOT NULL DEFAULT 'unlinked' CHECK(link_state IN ('unlinked','linked','deprovisioned')),
-  link_method TEXT CHECK(link_method IS NULL OR link_method IN ('email','jit')),
+  link_method TEXT CHECK(link_method IS NULL OR link_method IN ('email','jit','approved')),
   link_note TEXT,
+  linked_email TEXT,
+  -- Set when an administrator unlinked this identity: it is not linked again automatically.
+  link_hold TEXT,
   scim_banned INTEGER NOT NULL DEFAULT 0 CHECK(scim_banned IN (0,1)),
   applied_revision INTEGER NOT NULL DEFAULT 0,
+  -- Compare-and-set guard: each application bumps apply_seq from the value it read; a writer that lost
+  -- a race sets -1, which fails the CHECK and rolls its whole D1 batch back.
+  apply_seq INTEGER NOT NULL DEFAULT 0 CHECK(apply_seq >= 0),
   linked_at INTEGER,
+  -- Administrator override (keep active / unban) of a directory deprovisioning with this cause; only a
+  -- new deprovision change from the directory (reactivate then deactivate, or a DELETE) applies again.
+  override_cause TEXT CHECK(override_cause IS NULL OR override_cause IN ('deactivated','deleted')),
+  override_by TEXT,
+  override_at INTEGER,
   updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
-  PRIMARY KEY(connection_id,scim_id),
-  UNIQUE(connection_id,external_id)
+  PRIMARY KEY(connection_id,scim_id)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS nathan_scim_users_external ON nathan_scim_users(connection_id,external_id) WHERE deleted=0;
 CREATE UNIQUE INDEX IF NOT EXISTS nathan_scim_users_user ON nathan_scim_users(user_id) WHERE user_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS nathan_scim_users_orphan ON nathan_scim_users(linked_email) WHERE user_id IS NULL AND linked_email IS NOT NULL;
+-- Directory changes that touch a Nathan administrator (global admin role, an admin grant, the bootstrap
+-- owner or NATHAN_ADMIN_EMAILS) and re-links of deleted accounts are never applied automatically: they
+-- wait here for an administrator, who approves (step-up, exact confirmation, audited) or dismisses them.
+CREATE TABLE IF NOT EXISTS nathan_scim_reviews (
+  id TEXT PRIMARY KEY NOT NULL,
+  connection_id TEXT NOT NULL REFERENCES nathan_scim_connections(id) ON DELETE CASCADE,
+  scim_id TEXT NOT NULL,
+  user_id TEXT NOT NULL REFERENCES "user"("id") ON DELETE CASCADE,
+  action TEXT NOT NULL CHECK(action IN ('link','deprovision')),
+  cause TEXT,
+  reason TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','approved','applied','dismissed','superseded')),
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  decided_by TEXT,
+  decided_at INTEGER
+);
+CREATE UNIQUE INDEX IF NOT EXISTS nathan_scim_reviews_open ON nathan_scim_reviews(connection_id,scim_id,action) WHERE state IN ('pending','approved');
+CREATE INDEX IF NOT EXISTS nathan_scim_reviews_connection ON nathan_scim_reviews(connection_id,state,created_at);
 CREATE TABLE IF NOT EXISTS nathan_scim_groups (
   connection_id TEXT NOT NULL REFERENCES nathan_scim_connections(id) ON DELETE CASCADE,
   scim_id TEXT NOT NULL,
@@ -36,6 +70,7 @@ CREATE TABLE IF NOT EXISTS nathan_scim_groups (
   members INTEGER NOT NULL DEFAULT 0,
   deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0,1)),
   applied_revision INTEGER NOT NULL DEFAULT 0,
+  apply_seq INTEGER NOT NULL DEFAULT 0 CHECK(apply_seq >= 0),
   updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
   PRIMARY KEY(connection_id,scim_id)
 );
