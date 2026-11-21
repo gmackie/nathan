@@ -108,21 +108,63 @@ test("SP values are derived per connection from the issuer origin", () => {
   });
 });
 
-test("metadata fetch is HTTPS-only, public-host-only, redirect-free and size-limited", async () => {
+/**
+ * Replaces globalThis.fetch for one test so fetchIdpMetadata runs its
+ * production path (fetchNoRedirect from src/shared/security.mjs).
+ */
+async function withFetch(impl, fn) {
+  const original = globalThis.fetch, calls = [];
+  globalThis.fetch = async (input, init = {}) => { calls.push({ url: String(input), init }); return impl(input, init); };
+  try { await fn(calls); } finally { globalThis.fetch = original; }
+}
+
+test("metadata fetch is HTTPS-only, public-host-only and size-limited (production fetch path)", async () => {
   const xml = oktaMetadata(good.certB64);
-  const seen = [];
-  const ok = async (url, init) => { seen.push([String(url), init.redirect]); return new Response(xml, { headers: { "content-type": "application/samlmetadata+xml" } }); };
-  assert.equal(await fetchIdpMetadata("https://acme.okta.example/app/exk1/sso/saml/metadata", { fetchImpl: ok }), xml);
-  assert.equal(seen[0][1], "manual");
-  await assert.rejects(fetchIdpMetadata("http://acme.okta.example/m", { fetchImpl: ok }), /HTTPS/);
-  for (const host of ["localhost", "127.0.0.1", "10.0.0.5", "192.168.1.1", "169.254.169.254", "[::1]", "metadata.internal"])
-    await assert.rejects(fetchIdpMetadata("https://" + host + "/m", { fetchImpl: ok }), /public/i, host);
-  const redirect = async () => new Response(null, { status: 302, headers: { location: "https://evil.example/" } });
-  await assert.rejects(fetchIdpMetadata("https://acme.okta.example/m", { fetchImpl: redirect }), /redirect/i);
-  const big = async () => new Response("x".repeat(MAX_METADATA_BYTES + 10));
-  await assert.rejects(fetchIdpMetadata("https://acme.okta.example/m", { fetchImpl: big }), /too large/i);
-  const status = async () => new Response("no", { status: 404 });
-  await assert.rejects(fetchIdpMetadata("https://acme.okta.example/m", { fetchImpl: status }), /404/);
-  const slow = (_url, init) => new Promise((_, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason)));
-  await assert.rejects(fetchIdpMetadata("https://acme.okta.example/m", { fetchImpl: slow, timeoutMs: 50 }), /time/i);
+  await withFetch(async () => new Response(xml, { headers: { "content-type": "application/samlmetadata+xml" } }), async calls => {
+    assert.equal(await fetchIdpMetadata("https://acme.okta.example/app/exk1/sso/saml/metadata"), xml);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].init.redirect, "manual", "never redirect:'error', which Workers reject");
+    assert.ok(calls[0].init.signal instanceof AbortSignal, "the timeout signal reaches fetch");
+    await assert.rejects(fetchIdpMetadata("http://acme.okta.example/m"), /HTTPS/);
+    await assert.rejects(fetchIdpMetadata("https://user:pw@acme.okta.example/m"), /credentials/);
+    for (const host of ["localhost", "127.0.0.1", "10.0.0.5", "192.168.1.1", "169.254.169.254", "[::1]", "metadata.internal"])
+      await assert.rejects(fetchIdpMetadata("https://" + host + "/m"), /public/i, host);
+    assert.equal(calls.length, 1, "rejected URLs are never fetched");
+  });
+  await withFetch(async () => new Response("x".repeat(MAX_METADATA_BYTES + 10)), async () =>
+    assert.rejects(fetchIdpMetadata("https://acme.okta.example/m"), /too large/i));
+  await withFetch(async () => new Response("x", { headers: { "content-length": String(MAX_METADATA_BYTES + 1) } }), async () =>
+    assert.rejects(fetchIdpMetadata("https://acme.okta.example/m"), /too large/i, "declared length checked before reading"));
+  await withFetch(async () => new Response("no", { status: 404 }), async () =>
+    assert.rejects(fetchIdpMetadata("https://acme.okta.example/m"), /404/));
+  await withFetch(async () => { throw new TypeError("network down"); }, async () =>
+    assert.rejects(fetchIdpMetadata("https://acme.okta.example/m"), /^Error: Metadata fetch failed$/));
+});
+
+test("metadata fetch refuses redirects through fetchNoRedirect", async () => {
+  for (const status of [301, 302, 303, 307, 308]) {
+    await withFetch(async () => new Response(null, { status, headers: { location: "https://169.254.169.254/latest" } }), async calls => {
+      await assert.rejects(fetchIdpMetadata("https://acme.okta.example/m"), /redirect; paste the final HTTPS URL/, String(status));
+      assert.equal(calls.length, 1, "the redirect target is never requested");
+    });
+  }
+  // Browsers and some runtimes surface a manual redirect as an opaque-redirect response with status 0.
+  const opaque = () => { const r = new Response(null); Object.defineProperty(r, "type", { value: "opaqueredirect" }); return r; };
+  await withFetch(async () => opaque(), async () =>
+    assert.rejects(fetchIdpMetadata("https://acme.okta.example/m"), /redirect/));
+});
+
+test("metadata fetch times out through the production fetch path", async () => {
+  const hang = (_url, init) => new Promise((_, reject) => init.signal.addEventListener("abort", () => reject(init.signal.reason)));
+  await withFetch(hang, async () => {
+    const started = Date.now();
+    await assert.rejects(fetchIdpMetadata("https://acme.okta.example/m", { timeoutMs: 50 }), /timed out after 50 ms/);
+    assert.ok(Date.now() - started < 2000);
+  });
+  // A body that stalls after the headers is bounded by the same timeout.
+  const stall = (_url, init) => new Response(new ReadableStream({
+    start(controller) { controller.enqueue(new TextEncoder().encode("<md:")); init.signal.addEventListener("abort", () => controller.error(init.signal.reason)); }
+  }));
+  await withFetch(stall, async () =>
+    assert.rejects(fetchIdpMetadata("https://acme.okta.example/m", { timeoutMs: 50 }), /time/i));
 });

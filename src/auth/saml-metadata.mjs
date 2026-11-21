@@ -255,9 +255,9 @@ const tooLarge = maxBytes => Error("IdP metadata is too large (limit " + maxByte
 
 /**
  * Fetches IdP metadata over HTTPS without following redirects, with a body
- * size cap and a timeout. `fetchImpl` replaces the network in tests.
+ * size cap and a timeout. Tests mock globalThis.fetch, so they run this exact path.
  */
-export async function fetchIdpMetadata(input, { fetchImpl, timeoutMs = 5000, maxBytes = MAX_METADATA_BYTES } = {}) {
+export async function fetchIdpMetadata(input, { timeoutMs = 5000, maxBytes = MAX_METADATA_BYTES } = {}) {
   let url;
   try { url = new URL(input); } catch { throw Error("Metadata URL is not a valid URL"); }
   if (url.protocol !== "https:" || url.username || url.password) throw Error("Metadata URL must be HTTPS without credentials");
@@ -269,11 +269,7 @@ export async function fetchIdpMetadata(input, { fetchImpl, timeoutMs = 5000, max
     const init = { headers: { Accept: "application/samlmetadata+xml, application/xml, text/xml" }, signal: controller.signal };
     let response;
     try {
-      if (fetchImpl) {
-        response = await fetchImpl(url.href, { ...init, redirect: "manual" });
-        if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400))
-          throw Error("Unexpected redirect from " + url.origin);
-      } else response = await fetchNoRedirect(url.href, init);
+      response = await fetchNoRedirect(url.href, init);
     } catch (e) {
       if (controller.signal.aborted) throw timedOut();
       throw /redirect/i.test(String(e?.message)) ? Error("Metadata URL answered with a redirect; paste the final HTTPS URL") : Error("Metadata fetch failed");
