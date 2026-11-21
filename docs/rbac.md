@@ -138,7 +138,12 @@ The result is an `at+jwt` with `aud` set to `https://login.example.com/directory
 
 `GET /directory/v1/changes?cursor=<n>&limit=<1..500>` returns `{changes, cursor, hasMore, observedAt}`, ordered by `seq`. Each change has `seq`, `kind`, `app`, `principal` (`{type, id, subject?}`), `detail` and `at`.
 
-Kinds: `grant.created`, `grant.revoked`, `member.added`, `member.removed`, `group.upserted`, `group.deleted`, `role.upserted`, `role.deleted`, `permission.upserted`, `permission.deleted`, `app.access_mode`, `app.enabled`, `app.disabled`, `app.registered`.
+Kinds: `grant.created`, `grant.revoked`, `member.added`, `member.removed`, `group.upserted`, `group.deleted`, `role.upserted`, `role.deleted`, `permission.upserted`, `permission.deleted`, `app.access_mode`, `app.enabled`, `app.disabled`, `app.registered`, `user.banned`, `user.unbanned`, `user.deleted`.
+
+Blocking and deleting users does not always go through Identity Studio (Better Auth's admin API, MCP, SCIM and SQL can do it too), so D1 triggers in migration 0011 feed those changes, with actor `system:user-state`:
+
+- `user.banned` / `user.unbanned` when `user.banned` changes between set and not set (`NULL` and `0` both mean not set).
+- When a user is deleted: one `member.removed` per membership that cascades away (`detail: {group, cause: "user.deleted"}`), one `grant.revoked` per direct grant, which is deleted with the user (`detail: {role, cause: "user.deleted"}`), then `user.deleted`.
 
 To start, read the principal (or snapshot) and follow from its `cursor`. Entries older than 30 days are pruned by the daily cron. A cursor below the pruned watermark gets **410** `{resync: true}`: re-read and continue from the returned cursor.
 

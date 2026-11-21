@@ -184,3 +184,39 @@ test("directory view uses the evaluator's answers and the change feed pages and 
   assert.equal(changePage({ issuer: ISSUER, observedAt: "x", cursor: 2, limit: 2, results: run(db, changeQueries(2, 2)) }).changes.length, 1);
   db.close();
 });
+
+test("the change feed records ban/unban and the memberships and grants of deleted users", () => {
+  const db = database(migrations);
+  addUser(db, "fay", "user");
+  addUser(db, "gus", "user");
+  addApp(db, "crm", "[]");
+  db.exec("INSERT INTO nathan_rbac_roles(app_id,key) VALUES ('crm','viewer')");
+  db.exec("INSERT INTO nathan_groups(id,name,created_by) VALUES ('sales','Sales','t'),('ops','Ops','t')");
+  db.exec("INSERT INTO nathan_group_members(group_id,user_id,added_by) VALUES ('sales','fay','t'),('ops','fay','t'),('sales','gus','t')");
+  db.exec("INSERT INTO nathan_rbac_grants(id,app_id,role_key,principal_type,principal_id,created_by) VALUES ('gf','crm','viewer','user','fay','t'),('gg','crm','viewer','user','gus','t')");
+  const feed = () => changePage({ issuer: ISSUER, observedAt: "now", cursor: 0, limit: 500, results: run(db, changeQueries(0, 500)) }).changes
+    .map(c => [c.kind, c.app, c.principal?.id, c.detail]);
+  assert.deepEqual(feed(), []);
+
+  db.exec('UPDATE "user" SET "banned"=1 WHERE "id"=\'fay\'');
+  db.exec('UPDATE "user" SET "banned"=1 WHERE "id"=\'fay\'');        // no change, no entry
+  db.exec('UPDATE "user" SET "name"=\'Fay\' WHERE "id"=\'fay\'');   // not access-relevant
+  db.exec('UPDATE "user" SET "banned"=0 WHERE "id"=\'fay\'');
+  db.exec('UPDATE "user" SET "banned"=NULL WHERE "id"=\'fay\'');     // NULL and 0 are both "not banned"
+  assert.deepEqual(feed(), [["user.banned", null, "fay", {}], ["user.unbanned", null, "fay", {}]]);
+  const banned = db.prepare("SELECT actor FROM nathan_rbac_changes WHERE kind='user.banned'").get();
+  assert.equal(banned.actor, "system:user-state");
+
+  db.exec('DELETE FROM "user" WHERE "id"=\'fay\'');
+  assert.deepEqual(feed().slice(2), [
+    ["member.removed", null, "fay", { group: "ops", cause: "user.deleted" }],
+    ["member.removed", null, "fay", { group: "sales", cause: "user.deleted" }],
+    ["grant.revoked", "crm", "fay", { role: "viewer", cause: "user.deleted" }],
+    ["user.deleted", null, "fay", {}]
+  ]);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM nathan_group_members WHERE user_id='fay'").get().n, 0);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM nathan_rbac_grants WHERE principal_id='fay'").get().n, 0, "no orphaned user grants");
+  assert.equal(db.prepare("SELECT count(*) AS n FROM nathan_rbac_grants WHERE principal_id='gus'").get().n, 1, "other users untouched");
+  assert.equal(db.prepare("SELECT count(*) AS n FROM nathan_group_members WHERE user_id='gus'").get().n, 1);
+  db.close();
+});

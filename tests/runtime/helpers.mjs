@@ -10,12 +10,21 @@ export function bundle(name) {
   return path;
 }
 
-/** Applies a migration file statement by statement; D1's exec() rejects multi-line statements. */
+/** Applies a migration file statement by statement; D1's exec() rejects multi-line statements.
+ * A CREATE TRIGGER ... BEGIN ...; END statement is kept whole. */
 export async function migrate(db, file) {
   const sql = readFileSync(file, "utf8")
     .split("\n").filter(line => !line.trim().startsWith("--")).join("\n");
-  for (const statement of sql.split(/;\s*(?:\n|$)/).map(s => s.trim()).filter(Boolean))
-    await db.prepare(statement).run();
+  const statements = [];
+  let trigger = null;
+  for (const part of sql.split(/;\s*(?:\n|$)/).map(s => s.trim()).filter(Boolean)) {
+    if (trigger !== null) trigger += ";\n" + part;
+    else if (/^CREATE\s+TRIGGER\b/i.test(part)) trigger = part;
+    else { statements.push(part); continue; }
+    if (/\bEND$/i.test(trigger)) { statements.push(trigger); trigger = null; }
+  }
+  if (trigger !== null) throw Error("Unterminated CREATE TRIGGER in " + file);
+  for (const statement of statements) await db.prepare(statement).run();
 }
 
 export function base64url(bytes) {

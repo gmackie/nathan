@@ -186,6 +186,23 @@ test("the directory returns the evaluator's roles keyed by issuer-qualified subj
   assert.equal((await directory("/directory/v1/changes?cursor=-1", body.access_token)).status, 400);
 });
 
+test("bans, unbans and deleted users' memberships reach the directory change feed (D1 triggers)", async () => {
+  const { body } = await directoryToken();
+  const head = (await (await directory("/directory/v1/changes?limit=500", body.access_token)).json()).cursor;
+  await user("u-temp", "temp@example.test");
+  await sql("INSERT INTO nathan_group_members(group_id,user_id,added_by) VALUES ('finance','u-temp','test')");
+  await sql('UPDATE "user" SET "banned"=1 WHERE "id"=\'u-temp\'');
+  await sql('UPDATE "user" SET "banned"=0 WHERE "id"=\'u-temp\'');
+  await sql('DELETE FROM "user" WHERE "id"=\'u-temp\'');
+  const page = await (await directory("/directory/v1/changes?cursor=" + head + "&limit=500", body.access_token)).json();
+  assert.deepEqual(page.changes.map(c => [c.kind, c.principal?.subject, c.detail]), [
+    ["user.banned", ISSUER + "#u-temp", {}],
+    ["user.unbanned", ISSUER + "#u-temp", {}],
+    ["member.removed", ISSUER + "#u-temp", { group: "finance", cause: "user.deleted" }],
+    ["user.deleted", ISSUER + "#u-temp", {}]
+  ]);
+});
+
 test("the directory rejects missing, user-delegated, wrong-audience and disabled-client tokens", async () => {
   assert.equal((await directory("/directory/v1/principal?subject=x")).status, 401);
   assert.equal((await directory("/directory/v1/changes", "x".repeat(40))).status, 401);

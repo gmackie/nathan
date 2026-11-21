@@ -79,6 +79,28 @@ CREATE TABLE IF NOT EXISTS nathan_rbac_feed_state (
   pruned_through INTEGER NOT NULL DEFAULT 0
 );
 INSERT OR IGNORE INTO nathan_rbac_feed_state(id,pruned_through) VALUES ('primary',0);
+-- Access-relevant changes that do not go through Identity Studio are fed by triggers, so every
+-- path (Better Auth admin API, MCP, SCIM, SQL) is covered: blocking/unblocking a user, and deleting
+-- a user, whose memberships cascade away and whose direct grants are removed with them.
+-- Better Auth stores banned as 1/0/NULL; NULL and 0 both mean not banned.
+CREATE TRIGGER IF NOT EXISTS nathan_rbac_feed_user_ban AFTER UPDATE OF "banned" ON "user"
+  WHEN ifnull(OLD."banned" IN (1,'1'),0) <> ifnull(NEW."banned" IN (1,'1'),0)
+BEGIN
+  INSERT INTO nathan_rbac_changes(kind,principal_type,principal_id,detail,actor)
+    VALUES (CASE WHEN ifnull(NEW."banned" IN (1,'1'),0) THEN 'user.banned' ELSE 'user.unbanned' END,'user',NEW."id",'{}','system:user-state');
+END;
+CREATE TRIGGER IF NOT EXISTS nathan_rbac_feed_user_delete BEFORE DELETE ON "user"
+BEGIN
+  INSERT INTO nathan_rbac_changes(kind,principal_type,principal_id,detail,actor)
+    SELECT 'member.removed','user',OLD."id",json_object('group',group_id,'cause','user.deleted'),'system:user-state'
+    FROM nathan_group_members WHERE user_id=OLD."id" ORDER BY group_id;
+  INSERT INTO nathan_rbac_changes(kind,app_id,principal_type,principal_id,detail,actor)
+    SELECT 'grant.revoked',app_id,'user',OLD."id",json_object('role',role_key,'cause','user.deleted'),'system:user-state'
+    FROM nathan_rbac_grants WHERE principal_type='user' AND principal_id=OLD."id" ORDER BY app_id,role_key;
+  DELETE FROM nathan_rbac_grants WHERE principal_type='user' AND principal_id=OLD."id";
+  INSERT INTO nathan_rbac_changes(kind,principal_type,principal_id,detail,actor)
+    VALUES ('user.deleted','user',OLD."id",'{}','system:user-state');
+END;
 -- Legacy migration. Before NATH-13 an enabled app with an empty role list admitted every signed-in
 -- user, and a non-empty list admitted users whose single global Better Auth role (NULL = 'user')
 -- was listed. Keep those decisions: empty lists become 'any_signed_in'; each listed role becomes an
