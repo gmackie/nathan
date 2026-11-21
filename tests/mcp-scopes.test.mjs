@@ -4,7 +4,8 @@ import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { isReservedScope, validateResourceConfig, buildCatalog, parseRequestedScopes, concreteScopes,
   formatGrant, parseGrant, offeredScopes, selectScopes, effectiveScopes, scopeString, narrowScopes,
-  validateRedirectUri, parseRegistration, MCP_ACCESS_TOKEN_SECONDS } from "../src/shared/mcp-scopes.mjs";
+  validateRedirectUri, parseRegistration, MCP_ACCESS_TOKEN_SECONDS,
+  MCP_UNUSED_CLIENT_SECONDS, MCP_UNUSED_CLIENT_LIMIT, MCP_CLIENT_SECONDS } from "../src/shared/mcp-scopes.mjs";
 
 const PERMISSIONS = [
   { key: "notes:read", description: "Read notes" },
@@ -130,10 +131,26 @@ test("public-client registration: exact https or loopback redirects, no secrets,
     [{ redirect_uris: ["https://a.example/cb"], grant_types: ["client_credentials"] }, "invalid_client_metadata"],
     [{ redirect_uris: ["https://a.example/cb"], scope: "openid notes:read" }, "invalid_client_metadata"],
     [{ redirect_uris: ["https://a.example/cb"], scope: "nathan:admin" }, "invalid_client_metadata"],
-    [{ redirect_uris: ["https://a.example/cb"], jwks_uri: "https://a.example/jwks" }, "invalid_client_metadata"],
-    [{ redirect_uris: ["https://a.example/cb"], client_name: "a\u0007" }, "invalid_client_metadata"]
+    [{ redirect_uris: ["https://a.example/cb"], client_name: "a\u0007" }, "invalid_client_metadata"],
+    [{ redirect_uris: ["https://a.example/cb"], client_name: "a".repeat(65) }, "invalid_client_metadata"],
+    [{ redirect_uris: ["https://a.example/1", "https://a.example/2", "https://a.example/3", "https://a.example/4", "https://a.example/5", "https://a.example/6"] }, "invalid_redirect_uri"],
+    [{ redirect_uris: ["https://a.example/" + "x".repeat(495)] }, "invalid_redirect_uri"],
+    [{ redirect_uris: ["https://a.example/cb"], scope: "notes:read ".repeat(100) }, "invalid_client_metadata"]
   ]) assert.throws(() => parseRegistration(bad, set("notes:read")), e => e.code === code, JSON.stringify(bad));
   assert.ok(MCP_ACCESS_TOKEN_SECONDS <= 900);
+});
+
+test("registration stores only bounded, known metadata; unused clients are short-lived and capped", () => {
+  // Unknown and informational fields are dropped, not stored (RFC 7591 §2 lets a server ignore them).
+  const stored = parseRegistration({ client_name: "a".repeat(64), redirect_uris: ["https://a.example/" + "x".repeat(494)],
+    jwks_uri: "https://a.example/jwks", logo_uri: "https://a.example/logo.png", software_statement: "x".repeat(4000), extra: { deep: [1, 2, 3] } }, set("notes:read"));
+  assert.deepEqual(stored, { client_name: "a".repeat(64), redirect_uris: ["https://a.example/" + "x".repeat(494)] });
+  const worst = parseRegistration({ client_name: "a".repeat(64), redirect_uris: [1, 2, 3, 4, 5].map(i => "https://a.example/" + i + "x".repeat(493)),
+    scope: Array(93).fill("notes:read").join(" ") }, set("notes:read"));
+  assert.ok(JSON.stringify(worst).length < 4096, "a stored registration stays under 4 KB");
+  assert.ok(MCP_UNUSED_CLIENT_SECONDS <= 24 * 3600, "a client that never obtained a grant is pruned within a day");
+  assert.ok(MCP_UNUSED_CLIENT_LIMIT > 0 && MCP_UNUSED_CLIENT_LIMIT <= 2000);
+  assert.ok(MCP_CLIENT_SECONDS >= MCP_UNUSED_CLIENT_SECONDS);
 });
 
 test("migration 0015 stores MCP resources, clients, grants and one-time artifacts with cascades", () => {
@@ -150,6 +167,8 @@ test("migration 0015 stores MCP resources, clients, grants and one-time artifact
   run("INSERT INTO nathan_mcp_scopes(resource,scope,sensitive,admin_only) VALUES ('https://notes.example.test/mcp','notes:read',0,0)");
   assert.throws(() => run("INSERT INTO nathan_mcp_scopes(resource,scope,sensitive,admin_only) VALUES ('https://notes.example.test/mcp','notes:x',0,1)"), "admin-only must be sensitive");
   run("INSERT INTO nathan_mcp_clients(client_id,client_name,redirect_uris,expires_at) VALUES ('c1','A','[]',unixepoch()+60)");
+  assert.equal(db.prepare("SELECT first_grant_at FROM nathan_mcp_clients WHERE client_id='c1'").get().first_grant_at, null, "unused until its first grant");
+  assert.ok(db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='nathan_mcp_clients_unused'").get(), "unused clients are counted and pruned by index");
   run("INSERT INTO nathan_mcp_grants(id,user_id,client_id,resource,scope,expires_at) VALUES ('g1','u1','c1','https://notes.example.test/mcp','notes:read',unixepoch()+60)");
   run("INSERT INTO nathan_mcp_artifacts(hash,kind,grant_id,expires_at) VALUES ('h1','refresh','g1',unixepoch()+60)");
   assert.throws(() => run("INSERT INTO nathan_mcp_artifacts(hash,kind,expires_at) VALUES ('h2','password',unixepoch())"));

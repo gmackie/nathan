@@ -33,7 +33,8 @@ import { makeCookie, parseCookie, safeReturnPath, constantTimeEqual, redirectWit
 import {
   buildCatalog, parseRequestedScopes, concreteScopes, parseGrant, offeredScopes, selectScopes, effectiveScopes,
   scopeString, narrowScopes, parseRegistration, validateResourceConfig, ScopeError,
-  MCP_ACCESS_TOKEN_SECONDS, MCP_GRANT_SECONDS, MCP_CODE_SECONDS, MCP_TICKET_SECONDS, MCP_CLIENT_SECONDS
+  MCP_ACCESS_TOKEN_SECONDS, MCP_GRANT_SECONDS, MCP_CODE_SECONDS, MCP_TICKET_SECONDS, MCP_CLIENT_SECONDS,
+  MCP_UNUSED_CLIENT_SECONDS, MCP_UNUSED_CLIENT_LIMIT
 } from "../shared/mcp-scopes.mjs";
 import { consentPage, connectionsPage, mcpErrorPage } from "./mcp-ui";
 
@@ -75,11 +76,11 @@ async function sha256(value: string) {
 const pkceChallenge = sha256;
 
 /** Fixed-window limit in nathan_mcp_limits (migration 0004); keys hold hashes, never raw IPs. */
-async function allow(env: AuthEnv, name: string, subject: string, limit: number) {
-  const bucket = Math.floor(Date.now() / 60000);
+async function allow(env: AuthEnv, name: string, subject: string, limit: number, windowSeconds = 60) {
+  const bucket = Math.floor(Date.now() / (windowSeconds * 1000));
   const key = "mcp-oauth:" + name + ":" + (await sha256(subject)).slice(0, 22) + ":" + bucket;
   const row = await env.DB.prepare("INSERT INTO nathan_mcp_limits(id,request_count,expires_at) VALUES (?,1,?) " +
-    "ON CONFLICT(id) DO UPDATE SET request_count=request_count+1 RETURNING request_count").bind(key, (bucket + 2) * 60).first<{ request_count: number }>();
+    "ON CONFLICT(id) DO UPDATE SET request_count=request_count+1 RETURNING request_count").bind(key, (bucket + 2) * windowSeconds).first<{ request_count: number }>();
   return Boolean(row && row.request_count <= limit);
 }
 const clientIp = (request: Request) => request.headers.get("cf-connecting-ip") ?? "unknown";
@@ -288,6 +289,9 @@ async function tokenEndpoint(request: Request, env: AuthEnv, auth: any) {
         .bind(grant.id, grant.user_id, grant.client_id, grant.resource, grant.scope, grant.created_at, grant.created_at, grant.expires_at, codeHash, marker),
       env.DB.prepare("UPDATE nathan_mcp_artifacts SET grant_id=? WHERE hash=? AND kind='used_code' AND data=? AND " + created)
         .bind(grant.id, codeHash, marker, grant.id),
+      // From its first grant on, the client is no longer an unused registration (capped and pruned after a day).
+      env.DB.prepare("UPDATE nathan_mcp_clients SET first_grant_at=unixepoch() WHERE client_id=? AND first_grant_at IS NULL AND " + created)
+        .bind(client.client_id, grant.id),
       env.DB.prepare("INSERT INTO nathan_mcp_artifacts(hash,kind,grant_id,data,expires_at) SELECT ?,'refresh',?,?,? WHERE " + created)
         .bind(issued.refreshHash, grant.id, issued.refreshData, issued.refreshExpires, grant.id),
       env.DB.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) SELECT ?,?,?,?,? WHERE " + created)
@@ -504,9 +508,14 @@ async function knownScopes(env: AuthEnv) {
   }
   return out;
 }
+/** Deletes registrations that never obtained a grant within a day (at most `limit` per call). */
+function pruneUnusedClients(env: AuthEnv, limit: number) {
+  return env.DB.prepare("DELETE FROM nathan_mcp_clients WHERE client_id IN (SELECT client_id FROM nathan_mcp_clients " +
+    "WHERE first_grant_at IS NULL AND created_at<? LIMIT ?)").bind(nowSeconds() - MCP_UNUSED_CLIENT_SECONDS, limit);
+}
 async function register(request: Request, env: AuthEnv) {
-  // 20 a minute per address, and a global ceiling so rotating addresses cannot flood the registry.
-  if (!await allow(env, "register", clientIp(request), 20) || !await allow(env, "register-all", "all", 300)) return tooMany();
+  // Every attempt counts against its address (20 a minute), valid or not.
+  if (!await allow(env, "register", clientIp(request), 20)) return tooMany();
   if (request.headers.get("Content-Type")?.split(";")[0].trim() !== "application/json")
     throw new OAuthFail("invalid_client_metadata", "Send JSON client metadata");
   const raw = await request.text();
@@ -514,6 +523,21 @@ async function register(request: Request, env: AuthEnv) {
   let body: unknown;
   try { body = JSON.parse(raw); } catch { throw new OAuthFail("invalid_client_metadata", "Invalid JSON"); }
   const parsed = parseRegistration(body, await knownScopes(env));
+  // Rotating addresses cannot fill D1: registrations without a grant are pruned after a day (here
+  // opportunistically, and by the scheduled handler) and capped in number while they exist.
+  const [, unused] = await env.DB.batch([
+    pruneUnusedClients(env, 100),
+    env.DB.prepare("SELECT count(*) AS n FROM nathan_mcp_clients WHERE first_grant_at IS NULL")
+  ]);
+  const waiting = Number((unused.results?.[0] as { n?: number } | undefined)?.n ?? 0);
+  if (waiting >= MCP_UNUSED_CLIENT_LIMIT) {
+    if (await allow(env, "register-full-audit", "all", 1, 3600))
+      await audit(env, "mcp:registration", "mcp_client_register", "registry_full unused=" + waiting + " limit=" + MCP_UNUSED_CLIENT_LIMIT, "refused");
+    return oauthJson({ error: "temporarily_unavailable", error_description: "Too many registered MCP clients are waiting for a first connection; try again later" },
+      503, { "Retry-After": "3600" });
+  }
+  // The global ceiling counts only registrations that are about to be stored.
+  if (!await allow(env, "register-all", "all", 300)) return tooMany();
   const clientId = "nmcp_" + randomToken();
   const issuedAt = nowSeconds();
   await env.DB.batch([
@@ -677,7 +701,8 @@ export async function pruneMcp(env: AuthEnv) {
   await env.DB.batch([
     env.DB.prepare("DELETE FROM nathan_mcp_artifacts WHERE expires_at < unixepoch()"),
     env.DB.prepare("DELETE FROM nathan_mcp_grants WHERE expires_at < unixepoch()"),
-    env.DB.prepare("DELETE FROM nathan_mcp_clients WHERE expires_at < unixepoch()")
+    env.DB.prepare("DELETE FROM nathan_mcp_clients WHERE expires_at < unixepoch()"),
+    pruneUnusedClients(env, 100000)
   ]);
 }
 

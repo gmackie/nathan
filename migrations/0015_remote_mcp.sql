@@ -37,9 +37,13 @@ CREATE TABLE IF NOT EXISTS nathan_mcp_clients (
   redirect_uris TEXT NOT NULL,
   scope TEXT,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-  expires_at INTEGER NOT NULL
+  expires_at INTEGER NOT NULL,
+  -- Set at the client's first code exchange. Clients that never got a grant are capped in number
+  -- and pruned a day after registration, so anonymous registration cannot fill the database.
+  first_grant_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS nathan_mcp_clients_expiry ON nathan_mcp_clients(expires_at);
+CREATE INDEX IF NOT EXISTS nathan_mcp_clients_unused ON nathan_mcp_clients(created_at) WHERE first_grant_at IS NULL;
 -- A user's consent for one client and resource. `scope` is the canonical stored selection (it may
 -- hold the Full access marker); the user may edit it. Deleting the row revokes every token of it.
 CREATE TABLE IF NOT EXISTS nathan_mcp_grants (

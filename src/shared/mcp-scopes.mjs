@@ -25,6 +25,15 @@ export const MCP_CODE_SECONDS = 300;
 export const MCP_TICKET_SECONDS = 600;
 /** Dynamic registrations expire; clients register again. */
 export const MCP_CLIENT_SECONDS = 180 * 24 * 3600;
+/** A registration that never obtained a grant is pruned after a day (scheduled, and at each registration). */
+export const MCP_UNUSED_CLIENT_SECONDS = 24 * 3600;
+/** At most this many registrations without a grant exist at once; registration answers 503 beyond it. */
+export const MCP_UNUSED_CLIENT_LIMIT = 1000;
+/** Stored metadata bounds: one registration row stays under 4 KB. */
+const MAX_CLIENT_NAME = 64;
+const MAX_REDIRECT_URIS = 5;
+const MAX_REDIRECT_URI = 512;
+const MAX_REGISTRATION_SCOPE = 1024;
 /** The SDK caches a grant check for at most this long, so edits and revocation reach Workers within 60 s. */
 export const MCP_MAX_CHECK_CACHE_SECONDS = 30;
 
@@ -255,21 +264,21 @@ export function validateRedirectUri(value) {
   return null;
 }
 
-const REGISTRATION_FIELDS = new Set(["client_name", "redirect_uris", "token_endpoint_auth_method", "grant_types", "response_types",
-  "scope", "client_uri", "logo_uri", "software_id", "software_version", "contacts", "tos_uri", "policy_uri"]);
 /**
  * RFC 7591 public-client registration for MCP clients. Only `none` authentication, the code and
  * refresh grants, and scopes from registered MCP catalogs. Throws ScopeError with an RFC 7591 code.
+ * Only the name, redirect URIs and scope are kept, each tightly bounded; every other field
+ * (informational URIs, contacts, software statements, unknown extensions) is dropped, never stored.
  * @param {any} body @param {Set<string>} knownScopes every MCP catalog scope, alias and Full access marker
  * @returns {{ client_name: string, redirect_uris: string[], scope?: string }}
  */
 export function parseRegistration(body, knownScopes) {
   const meta = message => new ScopeError(message, "invalid_client_metadata");
   if (!body || typeof body !== "object" || Array.isArray(body)) throw meta("Invalid client metadata");
-  for (const key of Object.keys(body)) if (!REGISTRATION_FIELDS.has(key)) throw meta("Unsupported client metadata field " + key.slice(0, 60));
   const uris = body.redirect_uris;
-  if (!Array.isArray(uris) || !uris.length || uris.length > 10 || !unique(uris) || !uris.every(u => validateRedirectUri(u) !== null))
-    throw new ScopeError("Use exact HTTPS redirect URIs (HTTP only on loopback hosts)", "invalid_redirect_uri");
+  if (!Array.isArray(uris) || !uris.length || uris.length > MAX_REDIRECT_URIS || !unique(uris) ||
+      !uris.every(u => typeof u === "string" && u.length <= MAX_REDIRECT_URI && validateRedirectUri(u) !== null))
+    throw new ScopeError("Use 1–" + MAX_REDIRECT_URIS + " exact HTTPS redirect URIs of at most " + MAX_REDIRECT_URI + " characters (HTTP only on loopback hosts)", "invalid_redirect_uri");
   if (body.token_endpoint_auth_method !== undefined && body.token_endpoint_auth_method !== "none")
     throw meta("Only public clients (token_endpoint_auth_method none) can register");
   if (body.grant_types !== undefined && (!Array.isArray(body.grant_types) || !body.grant_types.length ||
@@ -278,10 +287,10 @@ export function parseRegistration(body, knownScopes) {
   if (body.response_types !== undefined && (!Array.isArray(body.response_types) || body.response_types.join(" ") !== "code"))
     throw meta("Only the code response type is supported");
   let name;
-  try { name = text(body.client_name, 100, "client name") || "MCP client"; } catch { throw meta("Invalid client_name"); }
+  try { name = text(body.client_name, MAX_CLIENT_NAME, "client name") || "MCP client"; } catch { throw meta("Invalid client_name (at most " + MAX_CLIENT_NAME + " characters)"); }
   const out = { client_name: name, redirect_uris: [...uris] };
   if (body.scope !== undefined) {
-    if (typeof body.scope !== "string" || body.scope.length > MAX_SCOPE_PARAM) throw meta("Invalid scope");
+    if (typeof body.scope !== "string" || body.scope.length > MAX_REGISTRATION_SCOPE) throw meta("Invalid scope");
     const parts = body.scope.split(" ").filter(Boolean);
     if (!parts.every(s => s === "offline_access" || (!isReservedScope(s) && knownScopes.has(s))))
       throw meta("Registration scope must name MCP resource scopes only");

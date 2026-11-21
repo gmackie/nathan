@@ -614,3 +614,81 @@ test("signing in during authorization returns to the consent page", async () => 
   const safe = await auth.fetch(ORIGIN + "/", { redirect: "manual", headers: { Cookie: alice.cookie + "; " + forged } });
   assert.equal(safe.headers.get("Location"), ORIGIN + "/sign-in", "never an open redirect");
 });
+
+test("registration: only successful registrations count globally, unused clients are capped and pruned after a day", async () => {
+  const register = (body, address) => auth.fetch(ORIGIN + "/mcp-oauth/register", {
+    method: "POST", headers: { "Content-Type": "application/json", "CF-Connecting-IP": address }, body: JSON.stringify(body)
+  }).then(async r => ({ status: r.status, headers: r.headers, body: await r.json() }));
+  const globalCount = async () => (await db.prepare("SELECT coalesce(max(request_count),0) AS n FROM nathan_mcp_limits WHERE id LIKE 'mcp-oauth:register-all:%' AND expires_at>unixepoch()").first()).n;
+  // Stay inside one fixed one-minute window.
+  if (Date.now() % 60000 > 50000) await sleep(60000 - (Date.now() % 60000) + 50);
+
+  // Unknown fields are dropped; the stored row holds only bounded, known metadata.
+  const extra = await register({ client_name: "Bounded", redirect_uris: [REDIRECT], jwks_uri: "https://agent.example/jwks", software_statement: "x".repeat(3000) }, "192.0.2.1");
+  assert.equal(extra.status, 201, JSON.stringify(extra.body));
+  assert.equal(extra.body.jwks_uri, undefined);
+  const row = await db.prepare("SELECT * FROM nathan_mcp_clients WHERE client_id=?").bind(extra.body.client_id).first();
+  assert.deepEqual(Object.keys(row).sort(), ["client_id", "client_name", "created_at", "expires_at", "first_grant_at", "redirect_uris", "scope"]);
+  assert.equal(row.first_grant_at, null);
+  assert.ok(JSON.stringify(row).length < 1024);
+
+  // Invalid attempts use up only their own address's budget, never the global one.
+  const before = await globalCount();
+  assert.ok(before >= 1);
+  const statuses = [];
+  for (let i = 0; i < 25; i++) statuses.push((await register({ redirect_uris: ["http://not-loopback.example/cb"] }, "192.0.2.10")).status);
+  assert.deepEqual([...new Set(statuses)], [400, 429], "invalid until the address's 20 a minute run out");
+  assert.equal(await globalCount(), before, "invalid registrations do not count toward the global limit");
+  // The per-address limit still applies to every attempt, valid or not.
+  assert.equal((await register({ redirect_uris: [REDIRECT] }, "192.0.2.10")).status, 429);
+
+  // The global limit on successful registrations (300 a minute).
+  await sql("UPDATE nathan_mcp_limits SET request_count=300 WHERE id LIKE 'mcp-oauth:register-all:%' AND expires_at>unixepoch()");
+  const overall = await register({ redirect_uris: [REDIRECT] }, "192.0.2.20");
+  assert.equal(overall.status, 429, JSON.stringify(overall.body));
+  await sql("UPDATE nathan_mcp_limits SET request_count=0 WHERE id LIKE 'mcp-oauth:register-all:%'");
+
+  // A client that has obtained a grant is no longer unused.
+  const { client: used } = await connect(dave, ["notes:read"]);
+  assert.ok((await db.prepare("SELECT first_grant_at FROM nathan_mcp_clients WHERE client_id=?").bind(used.client_id).first()).first_grant_at);
+
+  // Clients that never obtained a grant are pruned a day after registration, at the next registration.
+  const day = 24 * 3600;
+  await sql("INSERT INTO nathan_mcp_clients(client_id,client_name,redirect_uris,created_at,expires_at) VALUES ('nmcp_stale_unused_aaaaaaaaaaaaaaaaaaaa','Stale','[]',unixepoch()-?,unixepoch()+?)", day + 60, 100 * day);
+  await sql("INSERT INTO nathan_mcp_clients(client_id,client_name,redirect_uris,created_at,expires_at,first_grant_at) VALUES ('nmcp_stale_used_aaaaaaaaaaaaaaaaaaaaaa','Used','[]',unixepoch()-?,unixepoch()+?,unixepoch()-?)", day + 60, 100 * day, day);
+  await sql("INSERT INTO nathan_mcp_clients(client_id,client_name,redirect_uris,created_at,expires_at) VALUES ('nmcp_fresh_unused_aaaaaaaaaaaaaaaaaaaa','Fresh','[]',unixepoch()-?,unixepoch()+?)", day - 600, 100 * day);
+  assert.equal((await register({ redirect_uris: [REDIRECT] }, "192.0.2.30")).status, 201);
+  const left = (await db.prepare("SELECT client_id FROM nathan_mcp_clients WHERE client_id LIKE 'nmcp_stale%' OR client_id LIKE 'nmcp_fresh%' ORDER BY client_id").all()).results.map(r => r.client_id);
+  assert.deepEqual(left, ["nmcp_fresh_unused_aaaaaaaaaaaaaaaaaaaa", "nmcp_stale_used_aaaaaaaaaaaaaaaaaaaaaa"]);
+  assert.equal(await count("SELECT count(*) AS n FROM nathan_mcp_clients WHERE client_id=?", used.client_id), 1);
+
+  // The scheduled handler prunes them too.
+  await sql("UPDATE nathan_mcp_clients SET created_at=unixepoch()-? WHERE client_id='nmcp_fresh_unused_aaaaaaaaaaaaaaaaaaaa'", day + 60);
+  await authDirect.scheduled({ cron: "0 * * * *" });
+  assert.equal(await count("SELECT count(*) AS n FROM nathan_mcp_clients WHERE client_id='nmcp_fresh_unused_aaaaaaaaaaaaaaaaaaaa'"), 0);
+  assert.equal(await count("SELECT count(*) AS n FROM nathan_mcp_clients WHERE client_id='nmcp_stale_used_aaaaaaaaaaaaaaaaaaaaaa'"), 1);
+
+  // At most MCP_UNUSED_CLIENT_LIMIT (1000) unused clients exist at once: then registration answers 503, audited once per window.
+  const unused = await count("SELECT count(*) AS n FROM nathan_mcp_clients WHERE first_grant_at IS NULL");
+  for (let i = unused; i < 1000; i += 100) {
+    const values = [];
+    for (let j = i; j < Math.min(i + 100, 1000); j++) values.push("('nmcp_fill_" + String(j).padStart(24, "0") + "','Fill','[]',unixepoch(),unixepoch()+86400)");
+    await db.prepare("INSERT INTO nathan_mcp_clients(client_id,client_name,redirect_uris,created_at,expires_at) VALUES " + values.join(",")).run();
+  }
+  try {
+    for (const address of ["192.0.2.40", "192.0.2.41"]) {
+      const full = await register({ redirect_uris: [REDIRECT] }, address);
+      assert.equal(full.status, 503, JSON.stringify(full.body));
+      assert.equal(full.body.error, "temporarily_unavailable");
+      assert.ok(Number(full.headers.get("Retry-After")) > 0);
+    }
+    assert.equal(await count("SELECT count(*) AS n FROM nathan_security_audit WHERE action='mcp_client_register' AND outcome='refused'"), 1, "audited once per window");
+    assert.equal(await count("SELECT count(*) AS n FROM nathan_mcp_clients WHERE first_grant_at IS NULL"), 1000);
+    // Registered clients keep working: the cap only stops new registrations.
+    const verifier = base64url(crypto.getRandomValues(new Uint8Array(32)));
+    assert.ok((await consentPage(dave, authorizeUrl(used.client_id, { verifier }))).ticket, "an existing client still gets a consent page");
+  } finally {
+    await sql("DELETE FROM nathan_mcp_clients WHERE client_id LIKE 'nmcp_fill_%'");
+  }
+  assert.equal((await register({ redirect_uris: [REDIRECT] }, "192.0.2.42")).status, 201, "registration resumes below the cap");
+});
