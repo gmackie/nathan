@@ -231,7 +231,8 @@ export function parseAuthnRequest(xml, { now = Date.now() } = {}) {
   const acsUrl = root.hasAttribute("AssertionConsumerServiceURL") ? root.getAttribute("AssertionConsumerServiceURL") : null;
   const indexText = root.hasAttribute("AssertionConsumerServiceIndex") ? root.getAttribute("AssertionConsumerServiceIndex") : null;
   if (acsUrl !== null && indexText !== null) refuse("saml_invalid_request", "AuthnRequest names both an ACS URL and an ACS index");
-  if (indexText !== null && !/^\d{1,2}$/.test(indexText)) refuse("saml_invalid_request", "AssertionConsumerServiceIndex is invalid");
+  if (indexText !== null && !(/^\d{1,5}$/.test(indexText) && Number(indexText) <= MAX_ACS_INDEX))
+    refuse("saml_invalid_request", "AssertionConsumerServiceIndex is invalid");
   const binding = root.getAttribute("ProtocolBinding");
   if (binding && binding !== BINDING.post) refuse("saml_unsupported_binding", "Nathan delivers responses with the HTTP-POST binding only");
   const policies = childrenNamed(root, NS.protocol, "NameIDPolicy");
@@ -412,6 +413,9 @@ export function buildIdpMetadata({ entityId, ssoUrl, certificates }) {
 export const SP_ID = /^[a-z][a-z0-9-]{1,62}$/;
 export const ATTRIBUTE_SOURCES = Object.freeze(["email", "name", "roles", "groups", "permissions", "persistent_id"]);
 export const MAX_ACS_URLS = 8;
+/** AssertionConsumerService index is an xs:unsignedShort in SAML metadata. */
+export const MAX_ACS_INDEX = 65535;
+const isAcsIndex = v => Number.isInteger(v) && v >= 0 && v <= MAX_ACS_INDEX;
 const MAX_ATTRIBUTES = 16;
 const MAX_SP_CERTIFICATES = 3;
 
@@ -460,6 +464,12 @@ export async function validateServiceProvider(input, { idpEntityId, isAppId }) {
     throw Error("Give 1 to " + MAX_ACS_URLS + " ACS URLs");
   const acsUrls = input.acsUrls.map(checkAcsUrl);
   if (new Set(acsUrls).size !== acsUrls.length) throw Error("ACS URLs must be unique");
+  // Each URL's AssertionConsumerServiceIndex: the SP metadata's index values, or 0, 1, ... in the
+  // order given when entered by hand. Requests naming an index are resolved by these values.
+  const acsIndexes = input.acsIndexes ?? acsUrls.map((_, i) => i);
+  if (!Array.isArray(acsIndexes) || acsIndexes.length !== acsUrls.length || !acsIndexes.every(isAcsIndex))
+    throw Error("Give one ACS index (0 to " + MAX_ACS_INDEX + ") per ACS URL, or none");
+  if (new Set(acsIndexes).size !== acsIndexes.length) throw Error("ACS indexes must be unique");
   const nameIdFormat = input.nameIdFormat ?? "persistent";
   if (nameIdFormat !== "persistent" && nameIdFormat !== "email") throw Error("Invalid NameID format: persistent or email");
   const attributes = input.attributes ?? [];
@@ -490,7 +500,7 @@ export async function validateServiceProvider(input, { idpEntityId, isAppId }) {
     try { checkRelayState(defaultRelayState); } catch { throw Error("Default RelayState is too long or contains control characters"); }
     if (!allowIdpInitiated) throw Error("A default RelayState is only used for IdP-initiated sign-in");
   }
-  return { id: input.id, name: input.name.trim(), entityId, appId: input.appId, acsUrls, nameIdFormat, attributes: mapped,
+  return { id: input.id, name: input.name.trim(), entityId, appId: input.appId, acsUrls, acsIndexes, nameIdFormat, attributes: mapped,
     wantRequestsSigned, certificates, signResponse: flag(input.signResponse, "signResponse"),
     requirePasskey: flag(input.requirePasskey, "requirePasskey"), allowIdpInitiated, defaultRelayState };
 }
@@ -522,14 +532,26 @@ export async function parseSpMetadata(xml, { now = Date.now() } = {}) {
   if (services.length > post.length) warnings.push("Ignored ACS endpoints that do not use the HTTP-POST binding.");
   post.sort((a, b) => Number(b.getAttribute("isDefault") === "true") - Number(a.getAttribute("isDefault") === "true") ||
     Number(a.getAttribute("index") || 0) - Number(b.getAttribute("index") || 0));
-  const acsUrls = [];
+  const acsUrls = [], declared = [];
   for (const s of post) {
     const location = s.getAttribute("Location") || "";
-    try { checkAcsUrl(location); if (!acsUrls.includes(location)) acsUrls.push(location); }
-    catch (e) { warnings.push("Skipped ACS URL: " + /** @type {Error} */ (e).message); }
+    try { checkAcsUrl(location); } catch (e) { warnings.push("Skipped ACS URL: " + /** @type {Error} */ (e).message); continue; }
+    if (acsUrls.includes(location)) continue;
+    acsUrls.push(location);
+    const text = s.getAttribute("index");
+    declared.push(text !== null && /^\d{1,5}$/.test(text) && isAcsIndex(Number(text)) ? Number(text) : null);
   }
   if (!acsUrls.length) throw Error("SP metadata has no usable HTTPS HTTP-POST AssertionConsumerService");
   if (acsUrls.length > MAX_ACS_URLS) throw Error("SP metadata lists more than " + MAX_ACS_URLS + " ACS URLs");
+  // Keep each endpoint's metadata index; a missing, invalid or repeated one gets the lowest free number.
+  const acsIndexes = [];
+  declared.forEach((index, i) => {
+    if (index !== null && !acsIndexes.includes(index)) { acsIndexes.push(index); return; }
+    let free = 0;
+    while (acsIndexes.includes(free) || declared.slice(i + 1).includes(free)) free++;
+    warnings.push("ACS URL " + acsUrls[i] + " has no usable unique index in the metadata; Nathan numbers it " + free + ".");
+    acsIndexes.push(free);
+  });
   const certificates = [];
   for (const key of childrenNamed(sp, NS.metadata, "KeyDescriptor")) {
     const use = key.getAttribute("use");
@@ -544,7 +566,7 @@ export async function parseSpMetadata(xml, { now = Date.now() } = {}) {
   const requestsSigned = sp.getAttribute("AuthnRequestsSigned") === "true" || sp.getAttribute("AuthnRequestsSigned") === "1";
   if (requestsSigned && !certificates.length) warnings.push("The SP signs AuthnRequests but its metadata has no usable signing certificate.");
   return {
-    entityId: checkEntityId(entityId, null), acsUrls,
+    entityId: checkEntityId(entityId, null), acsUrls, acsIndexes,
     nameIdFormat: formats.length && formats.every(f => f === NAMEID.email) ? "email" : "persistent",
     wantRequestsSigned: requestsSigned && certificates.length > 0, certificates: certificates.slice(0, MAX_SP_CERTIFICATES), warnings
   };

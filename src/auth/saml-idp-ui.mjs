@@ -80,7 +80,7 @@ export const samlIdpStudioSection = `
   <label>Display name<input id="sidp-name" placeholder="Grafana"></label>
   <label>Bound Nathan application<input id="sidp-app" placeholder="grafana" autocomplete="off"></label>
   <label>SP entity ID (Audience)<input id="sidp-entity" autocomplete="off"></label>
-  <label>ACS URLs (exact https, one per line, first is the default)<textarea id="sidp-acs" rows="3" spellcheck="false"></textarea></label>
+  <label>ACS URLs (exact https, one per line, first is the default; optionally "index URL" to keep the SP metadata's AssertionConsumerServiceIndex, otherwise numbered 0, 1, ...)<textarea id="sidp-acs" rows="3" spellcheck="false"></textarea></label>
   <label>NameID<select id="sidp-nameid"><option value="persistent">Persistent pairwise opaque ID (recommended)</option><option value="email">Verified email address</option></select></label>
   <label>Attributes (one per line: AttributeName=source; sources email, name, roles, groups, permissions, persistent_id)<textarea id="sidp-attrs" rows="4" spellcheck="false" placeholder="email=email&#10;displayName=name&#10;role=roles"></textarea></label>
   <label><input type="checkbox" id="sidp-signed"> Require signed AuthnRequests</label>
@@ -107,8 +107,10 @@ export const samlIdpStudioScript = `
       }
       function sp(){
         const certs=el('sidp-certs').value.split(/-----END CERTIFICATE-----/).map(s=>s.trim()).filter(Boolean).map(s=>s+'\\n-----END CERTIFICATE-----');
+        const acs=lines('sidp-acs').map(l=>{const m=/^(\\d{1,5})\\s+(\\S+)$/.exec(l);return m?{index:Number(m[1]),url:m[2]}:{index:null,url:l}});
+        const indexed=acs.some(a=>a.index!==null);
         return {id:el('sidp-id').value.trim(),name:el('sidp-name').value.trim(),appId:el('sidp-app').value.trim(),entityId:el('sidp-entity').value.trim(),
-          acsUrls:lines('sidp-acs'),nameIdFormat:el('sidp-nameid').value,
+          acsUrls:acs.map(a=>a.url),acsIndexes:indexed?acs.map(a=>a.index):undefined,nameIdFormat:el('sidp-nameid').value,
           attributes:lines('sidp-attrs').map(l=>{const i=l.lastIndexOf('=');return {name:l.slice(0,i).trim(),source:l.slice(i+1).trim()}}),
           wantRequestsSigned:el('sidp-signed').checked,certificates:certs,signResponse:el('sidp-sign-response').checked,
           requirePasskey:el('sidp-passkey').checked,allowIdpInitiated:el('sidp-idp-init').checked,defaultRelayState:el('sidp-relay').value||null};
@@ -117,7 +119,7 @@ export const samlIdpStudioScript = `
       el('sidp-preview').onclick=async()=>{
         try{
           const v=await postJson('/studio/api/saml-idp',{op:'sp.preview',metadataUrl:el('sidp-md-url').value.trim()||undefined,metadataXml:el('sidp-md-xml').value.trim()||undefined});
-          el('sidp-entity').value=v.entityId;el('sidp-acs').value=v.acsUrls.join('\\n');el('sidp-nameid').value=v.nameIdFormat;
+          el('sidp-entity').value=v.entityId;el('sidp-acs').value=v.acsUrls.map((u,i)=>v.acsIndexes[i]+' '+u).join('\\n');el('sidp-nameid').value=v.nameIdFormat;
           el('sidp-signed').checked=v.wantRequestsSigned;
           el('sidp-certs').value=v.certificates.map(c=>'-----BEGIN CERTIFICATE-----\\n'+c+'\\n-----END CERTIFICATE-----').join('\\n');
           show(v);

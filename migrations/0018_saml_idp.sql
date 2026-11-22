@@ -26,13 +26,16 @@ CREATE TABLE IF NOT EXISTS nathan_saml_idp_keys (
 CREATE UNIQUE INDEX IF NOT EXISTS nathan_saml_idp_keys_status ON nathan_saml_idp_keys(status) WHERE status IN ('next','active','previous');
 
 -- Registered service providers. Disabled by default; exact HTTPS ACS URLs (JSON array, the first is
--- the default); persistent pairwise NameIDs unless an administrator chooses email.
+-- the default) with their AssertionConsumerServiceIndex values (JSON array, same order: the SP
+-- metadata's index attributes, or 0, 1, ... when entered by hand); persistent pairwise NameIDs
+-- unless an administrator chooses email.
 CREATE TABLE IF NOT EXISTS nathan_saml_service_providers (
   id TEXT PRIMARY KEY NOT NULL,
   name TEXT NOT NULL,
   entity_id TEXT NOT NULL UNIQUE,
   app_id TEXT NOT NULL REFERENCES nathan_applications(id),
   acs_urls TEXT NOT NULL,
+  acs_indexes TEXT NOT NULL,
   name_id_format TEXT NOT NULL DEFAULT 'persistent' CHECK(name_id_format IN ('persistent','email')),
   attributes TEXT NOT NULL DEFAULT '[]',
   want_requests_signed INTEGER NOT NULL DEFAULT 0 CHECK(want_requests_signed IN (0,1)),

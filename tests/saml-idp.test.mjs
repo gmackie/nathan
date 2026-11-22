@@ -221,6 +221,12 @@ test("SP registration validation: exact HTTPS ACS URLs, bound app, attribute sou
   await reject({ wantRequestsSigned: true }, /certificate/);
   await reject({ certificates: [makeCertificate({ hash: "sha1" }).certPem] }, /SHA-1/);
   await reject({ defaultRelayState: "/home" }, /IdP-initiated/);
+  assert.deepEqual(sp.acsIndexes, [0], "hand-entered ACS URLs are numbered in order");
+  assert.deepEqual((await validateServiceProvider({ ...base, acsUrls: [ACS, ACS + "2"], acsIndexes: [1, 7] }, { idpEntityId: IDP, isAppId })).acsIndexes, [1, 7]);
+  await reject({ acsUrls: [ACS, ACS + "2"], acsIndexes: [1] }, /index/);
+  await reject({ acsUrls: [ACS, ACS + "2"], acsIndexes: [1, 1] }, /index/);
+  await reject({ acsIndexes: [65536] }, /index/);
+  await reject({ acsIndexes: ["1"] }, /index/);
   const signed = await validateServiceProvider({ ...base, wantRequestsSigned: true, certificates: [makeCertificate().certPem] }, { idpEntityId: IDP, isAppId });
   assert.equal(signed.certificates.length, 1);
 });
@@ -231,6 +237,7 @@ test("SP metadata import: HTTP-POST ACS URLs in default/index order, signing cer
   const parsed = await parseSpMetadata(md);
   assert.equal(parsed.entityId, SP_ENTITY);
   assert.deepEqual(parsed.acsUrls, [ACS, "https://grafana.example.com/second"]);
+  assert.deepEqual(parsed.acsIndexes, [1, 2], "each URL keeps its metadata index");
   assert.equal(parsed.wantRequestsSigned, true);
   assert.deepEqual(parsed.certificates, [cert.certB64]);
   assert.equal(parsed.nameIdFormat, "email");
@@ -253,12 +260,13 @@ test("0018 is the only 0018 migration, is packaged with the release and enforces
   assert.throws(() => key("k4", "retired"), /CHECK/, "a retired key keeps no private key");
   assert.throws(() => key("k5", "previous", null), /CHECK|NOT NULL/, "a published key needs its private key");
   db.exec("INSERT INTO nathan_applications(id,hostname) VALUES ('grafana','grafana.example.com')");
-  const sp = (id, signed, certs) => db.prepare("INSERT INTO nathan_saml_service_providers(id,name,entity_id,app_id,acs_urls,want_requests_signed,certificates,created_by,updated_by) VALUES (?,?,?,?,?,?,?,'a','a')")
+  const sp = (id, signed, certs) => db.prepare("INSERT INTO nathan_saml_service_providers(id,name,entity_id,app_id,acs_urls,acs_indexes,want_requests_signed,certificates,created_by,updated_by) VALUES (?,?,?,?,?,'[]',?,?,'a','a')")
     .run(id, id, "urn:" + id, "grafana", "[]", signed, certs);
   sp("a", 0, "[]");
   assert.equal(db.prepare("SELECT enabled, name_id_format AS f, allow_idp_initiated AS i FROM nathan_saml_service_providers WHERE id='a'").get().enabled, 0, "disabled by default");
   assert.throws(() => sp("b", 1, "[]"), /CHECK/, "signed requests need a certificate");
-  assert.throws(() => db.prepare("INSERT INTO nathan_saml_service_providers(id,name,entity_id,app_id,acs_urls,created_by,updated_by) VALUES ('c','c','urn:c','missing','[]','a','a')").run(), /FOREIGN KEY|constraint/i);
+  assert.throws(() => db.prepare("INSERT INTO nathan_saml_service_providers(id,name,entity_id,app_id,acs_urls,acs_indexes,created_by,updated_by) VALUES ('c','c','urn:c','missing','[]','[]','a','a')").run(), /FOREIGN KEY|constraint/i);
+  assert.throws(() => db.prepare("INSERT INTO nathan_saml_service_providers(id,name,entity_id,app_id,acs_urls,created_by,updated_by) VALUES ('d','d','urn:d','grafana','[]','a','a')").run(), /NOT NULL/, "ACS indexes are always stored");
 });
 
 test("bounded body reads count bytes, not characters, and stop at the limit without Content-Length", async () => {

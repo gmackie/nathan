@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import * as samlify from "samlify";
 import { XMLValidator } from "fast-xml-parser";
 import { deflateRawSync } from "node:zlib";
-import { authWorker, cookiesOf, randomKey, enrollAdmin, insertSession, studioPost, rawHttp } from "./helpers.mjs";
+import { authWorker, cookiesOf, randomKey, enrollAdmin, insertSession, studioPost, rawHttp, openEndedBody } from "./helpers.mjs";
 import { makeCertificate } from "../fixtures/x509.mjs";
 
 // samlify's XSD schema validation is replaced by a well-formedness check (it needs a JVM or a
@@ -472,15 +472,39 @@ test("key rotation: next key published first, activation after the overlap, SPs 
     assert.ok((await auditRows(action, "%")).some(r => r.outcome === "succeeded"), action);
 });
 
-test("request bodies are read with a byte limit: a chunked body without Content-Length stops at the limit (413)", async () => {
-  const HUGE = 40e6;
-  const sso = await rawHttp(mf, HOST, { method: "POST", path: "/saml/idp/sso", chunked: HUGE,
-    headers: { "Content-Type": "application/x-www-form-urlencoded", "cf-connecting-ip": "10.77.0.1" } });
-  assert.equal(sso.status, 413, sso.text.slice(0, 300));
-  assert.match(sso.text, /\(saml_unreadable\)/);
-  assert.ok(sso.written < 8e6, "Nathan stopped reading near the 200 KB limit, but " + sso.written + " bytes were accepted");
-  const studioPage = await rawHttp(mf, HOST, { method: "POST", path: "/studio/api/saml-idp", chunked: HUGE,
+test("request bodies are read with a byte limit: a chunked body without Content-Length is refused at the limit (413), not buffered", { timeout: 30_000 }, async () => {
+  // 256 KiB, more than either limit, then the body stays open: request.text() would wait forever.
+  const sso = openEndedBody(262_144);
+  const ssoPage = await dispatch(SSO, { method: "POST", body: sso.body, duplex: "half", headers: { "Content-Type": "application/x-www-form-urlencoded" } });
+  assert.equal(ssoPage.status, 413);
+  assert.match(await ssoPage.text(), /\(saml_unreadable\)/);
+  const studioBody = openEndedBody(262_144);
+  const studioPage = await dispatch(ORIGIN + "/studio/api/saml-idp", { method: "POST", body: studioBody.body, duplex: "half",
     headers: { "Content-Type": "application/json", Origin: ORIGIN, "Sec-Fetch-Site": "same-origin", Cookie: admin } });
-  assert.equal(studioPage.status, 413, studioPage.text.slice(0, 300));
-  assert.ok(studioPage.written < 8e6, "Studio stopped reading near the 160 KB limit, but " + studioPage.written + " bytes were accepted");
+  assert.equal(studioPage.status, 413);
+  assert.deepEqual(await studioPage.json(), { error: "Request too large" });
+  // A declared Content-Length over the limit is refused before reading.
+  const declared = await dispatch(SSO, { method: "POST", body: "SAMLRequest=" + "a".repeat(200_001), headers: { "Content-Type": "application/x-www-form-urlencoded" } });
+  await refused(declared, "declared length", "saml_unreadable");
+  assert.equal(declared.status, 413);
+});
+
+test("AssertionConsumerServiceIndex resolves by the SP metadata's index attribute, not by list position", async () => {
+  const entity = "https://indexed.example.test/saml/metadata";
+  const first = "https://indexed.example.test/saml/acs-one", second = "https://indexed.example.test/saml/acs-two";
+  const preview = await ok(await studio({ op: "sp.preview", metadataXml: spMetadata(entity, [[first, 1], [second, 2]]) }));
+  assert.deepEqual([preview.acsUrls, preview.acsIndexes], [[first, second], [1, 2]]);
+  const s = await freshSp({ entityId: entity, acsUrls: preview.acsUrls, acsIndexes: preview.acsIndexes });
+  assert.deepEqual(s.created.acsIndexes, [1, 2]);
+  const via = async index => continueWith(await redirectLogin(manual(entity, ' AssertionConsumerServiceIndex="' + index + '"')), user);
+  assert.equal((await form(await via(1))).action, first, "index 1 is the endpoint the metadata numbered 1");
+  assert.equal((await form(await via(2))).action, second);
+  await refused(await redirectLogin(manual(entity, ' AssertionConsumerServiceIndex="0"')), "index the metadata does not list", "saml_acs_mismatch");
+  await refused(await redirectLogin(manual(entity, ' AssertionConsumerServiceIndex="3"')), "index past the end", "saml_acs_mismatch");
+  // Entered by hand without indexes: numbered 0, 1, ... in the order given.
+  const manualEntry = await freshSp({ acsUrls: ["https://manual-acs.example.test/a", "https://manual-acs.example.test/b"] });
+  assert.deepEqual(manualEntry.created.acsIndexes, [0, 1]);
+  const byIndex = async index => (await form(await continueWith(await redirectLogin(manual(manualEntry.entity, ' AssertionConsumerServiceIndex="' + index + '"')), user))).action;
+  assert.equal(await byIndex(1), "https://manual-acs.example.test/b");
+  await refused(await redirectLogin(manual(manualEntry.entity, ' AssertionConsumerServiceIndex="2"')), "unknown index", "saml_acs_mismatch");
 });

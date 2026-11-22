@@ -154,41 +154,48 @@ export async function nathanClientToken(fetcher, { issuer, clientId, clientSecre
 }
 
 /**
- * One raw HTTP/1.1 exchange with a Miniflare instance, for requests fetch() cannot make: a body on
- * GET, or a chunked body without Content-Length. MF-Original-URL tells Miniflare's entry the public
- * https URL. `body` is sent in one write with Content-Length; `chunked` streams that many bytes of
- * filler in 64 KiB chunks and stops as soon as a response arrives. Returns the status, the raw
- * response text and how many body bytes were written.
+ * One raw HTTP/1.1 exchange with a Miniflare instance, for requests fetch() cannot make, such as a
+ * body on GET. The request goes out in a single write (with Content-Length when there is a body)
+ * and the response is read until the server closes. MF-Original-URL tells Miniflare's entry the
+ * public https URL. Returns the status and the raw response text.
  */
-export async function rawHttp(mf, host, { method = "GET", path = "/", headers = {}, body, chunked } = {}) {
+export async function rawHttp(mf, host, { method = "GET", path = "/", headers = {}, body } = {}) {
   const { connect } = await import("node:net");
   const base = new URL(await mf.ready);
   const payload = body === undefined ? null : Buffer.from(body);
   const head = [method + " " + path + " HTTP/1.1", "Host: " + host, "Connection: close", "MF-Original-URL: https://" + host + path,
-    ...(chunked ? ["Transfer-Encoding: chunked"] : payload ? ["Content-Length: " + payload.length] : []),
-    ...Object.entries(headers).map(([k, v]) => k + ": " + v)].join("\r\n") + "\r\n\r\n";
+    ...(payload ? ["Content-Length: " + payload.length] : []), ...Object.entries(headers).map(([k, v]) => k + ": " + v)].join("\r\n") + "\r\n\r\n";
   return new Promise((resolve, reject) => {
     const chunks = [];
-    let written = 0, answered = false, socketError = null;
-    const socket = connect(Number(base.port), base.hostname, async () => {
-      if (!chunked) return socket.end(payload ? Buffer.concat([Buffer.from(head), payload]) : head);
-      socket.write(head);
-      const filler = Buffer.alloc(65536, "a");
-      while (!answered && !socket.destroyed && written < chunked) {
-        const piece = filler.subarray(0, Math.min(filler.length, chunked - written));
-        const flushed = socket.write(Buffer.concat([Buffer.from(piece.length.toString(16) + "\r\n"), piece, Buffer.from("\r\n")]));
-        written += piece.length;
-        if (!flushed) await new Promise(r => { socket.once("drain", r); socket.once("close", r); });
-        else await new Promise(r => setImmediate(r));
-      }
-      if (!answered && !socket.destroyed) socket.end("0\r\n\r\n");
-    });
-    socket.on("data", c => { answered = true; chunks.push(c); });
+    let socketError = null;
+    const socket = connect(Number(base.port), base.hostname, () => socket.end(payload ? Buffer.concat([Buffer.from(head), payload]) : head));
+    socket.on("data", c => chunks.push(c));
     socket.on("error", e => { socketError = e; });
     socket.on("close", () => {
       const text = Buffer.concat(chunks).toString("utf8");
       if (!text) return reject(socketError ?? new Error("no response"));
-      resolve({ status: Number(text.split(" ")[1]), text, written });
+      resolve({ status: Number(text.split(" ")[1]), text });
     });
   });
+}
+
+/**
+ * A request body streamed without Content-Length (chunked) that never ends: `bytes` of filler in
+ * 64 KiB pieces, then the stream stays open. A server that reads with a byte limit answers once it
+ * has seen more than the limit; one that buffers the whole body (request.text()) waits forever.
+ * (A body that does end, sent faster than it is read, races the server's early close: the client
+ * can lose the response to EPIPE/ECONNRESET, so tests do not use one.) `pulled()` counts the
+ * bytes the receiver asked for.
+ */
+export function openEndedBody(bytes) {
+  let pulled = 0;
+  const body = new ReadableStream({
+    pull(controller) {
+      if (pulled >= bytes) return new Promise(() => {});
+      const size = Math.min(65536, bytes - pulled);
+      pulled += size;
+      controller.enqueue(new Uint8Array(size).fill(97));
+    }
+  });
+  return { body, pulled: () => pulled };
 }

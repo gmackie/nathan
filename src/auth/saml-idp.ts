@@ -48,7 +48,7 @@ const STUDIO_MAX_BYTES = 160_000;
 type Attribute = { name: string; source: string };
 type Certificate = { der: string; sha256: string; notAfter: string };
 type ServiceProvider = {
-  id: string; name: string; entityId: string; appId: string; acsUrls: string[]; nameIdFormat: "persistent" | "email";
+  id: string; name: string; entityId: string; appId: string; acsUrls: string[]; acsIndexes: number[]; nameIdFormat: "persistent" | "email";
   attributes: Attribute[]; wantRequestsSigned: boolean; certificates: Certificate[]; signResponse: boolean;
   requirePasskey: boolean; allowIdpInitiated: boolean; defaultRelayState: string | null; enabled: boolean;
   createdBy: string; createdAt: number; updatedBy: string; updatedAt: number;
@@ -69,7 +69,7 @@ async function hmac(env: AuthEnv, message: string) {
 
 function spFrom(row: any): ServiceProvider {
   return {
-    id: row.id, name: row.name, entityId: row.entity_id, appId: row.app_id, acsUrls: JSON.parse(row.acs_urls),
+    id: row.id, name: row.name, entityId: row.entity_id, appId: row.app_id, acsUrls: JSON.parse(row.acs_urls), acsIndexes: JSON.parse(row.acs_indexes),
     nameIdFormat: row.name_id_format, attributes: JSON.parse(row.attributes), wantRequestsSigned: row.want_requests_signed === 1,
     certificates: JSON.parse(row.certificates), signResponse: row.sign_response === 1, requirePasskey: row.require_passkey === 1,
     allowIdpInitiated: row.allow_idp_initiated === 1, defaultRelayState: row.default_relay_state ?? null, enabled: row.enabled === 1,
@@ -182,9 +182,10 @@ async function sso(request: Request, env: AuthEnv, url: URL): Promise<Response> 
       if (!sp.acsUrls.includes(parsed.acsUrl)) fail("saml_acs_mismatch", "The AssertionConsumerServiceURL is not registered for this application");
       acsUrl = parsed.acsUrl;
     } else if (parsed.acsIndex !== null) {
-      const indexed = sp.acsUrls[parsed.acsIndex];
-      if (!indexed) return fail("saml_acs_mismatch", "The AssertionConsumerServiceIndex is not registered for this application");
-      acsUrl = indexed;
+      // Resolved by the registered index values (the SP metadata's), never by list position.
+      const position = sp.acsIndexes.length === sp.acsUrls.length ? sp.acsIndexes.indexOf(parsed.acsIndex) : -1;
+      if (position < 0) return fail("saml_acs_mismatch", "The AssertionConsumerServiceIndex is not registered for this application");
+      acsUrl = sp.acsUrls[position];
     } else acsUrl = sp.acsUrls[0];
     // NameIDPolicy is not honoured: the administrator's NameID choice for this SP is authoritative, so an
     // SP cannot ask for an email address where the administrator chose a pairwise identifier.
@@ -395,7 +396,7 @@ async function validated(env: AuthEnv, body: any) {
     refuseAdmin("Unknown application: register the application under Protected applications first");
   return sp;
 }
-const spColumns = (sp: Awaited<ReturnType<typeof validated>>) => [sp.name, sp.entityId, sp.appId, JSON.stringify(sp.acsUrls), sp.nameIdFormat,
+const spColumns = (sp: Awaited<ReturnType<typeof validated>>) => [sp.name, sp.entityId, sp.appId, JSON.stringify(sp.acsUrls), JSON.stringify(sp.acsIndexes), sp.nameIdFormat,
   JSON.stringify(sp.attributes), sp.wantRequestsSigned ? 1 : 0, JSON.stringify(sp.certificates), sp.signResponse ? 1 : 0, sp.requirePasskey ? 1 : 0,
   sp.allowIdpInitiated ? 1 : 0, sp.defaultRelayState];
 
@@ -422,11 +423,11 @@ export async function applySamlIdpOperation(env: AuthEnv, body: any, actor: stri
       if (clash) refuseAdmin("Another service provider already uses this entity ID");
       if (op === "sp.create") {
         if (await loadSp(env, { id })) refuseAdmin("A service provider with this ID already exists");
-        await env.DB.prepare("INSERT INTO nathan_saml_service_providers(id,name,entity_id,app_id,acs_urls,name_id_format,attributes,want_requests_signed," +
-          "certificates,sign_response,require_passkey,allow_idp_initiated,default_relay_state,enabled,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)")
+        await env.DB.prepare("INSERT INTO nathan_saml_service_providers(id,name,entity_id,app_id,acs_urls,acs_indexes,name_id_format,attributes,want_requests_signed," +
+          "certificates,sign_response,require_passkey,allow_idp_initiated,default_relay_state,enabled,created_by,updated_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)")
           .bind(id, ...spColumns(sp), actor, actor).run();
       } else {
-        const r = await env.DB.prepare("UPDATE nathan_saml_service_providers SET name=?,entity_id=?,app_id=?,acs_urls=?,name_id_format=?,attributes=?," +
+        const r = await env.DB.prepare("UPDATE nathan_saml_service_providers SET name=?,entity_id=?,app_id=?,acs_urls=?,acs_indexes=?,name_id_format=?,attributes=?," +
           "want_requests_signed=?,certificates=?,sign_response=?,require_passkey=?,allow_idp_initiated=?,default_relay_state=?,updated_by=?,updated_at=unixepoch() WHERE id=?")
           .bind(...spColumns(sp), actor, id).run();
         if (r.meta.changes !== 1) refuseAdmin("Unknown service provider");
