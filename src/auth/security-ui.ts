@@ -1,3 +1,4 @@
+import { authenticatorLink } from "./totp-link.mjs";
 const escapeHtml=(s:string)=>s.replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;");
 export function securityPage(userEmail:string):Response {
   const nonce=btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
@@ -21,9 +22,12 @@ export function securityPage(userEmail:string):Response {
   Nathan only asserts MFA assurance after an actual verified authentication ceremony; enabling TOTP alone does not force MFA on social logins.</p>
   <label>Password (if this account uses password login)<input type="password" id="password" autocomplete="current-password"></label>
   <button id="totp-start">Start TOTP enrollment</button>
-  <div id="totp-enroll" hidden><p>Scan this code with your authenticator app (or Yubico Authenticator for a YubiKey):</p>
+  <div id="totp-enroll" hidden>
+  <p><strong>On this phone?</strong> <a id="totp-open" hidden>Open in authenticator app</a> (Google Authenticator, Microsoft Authenticator, 1Password, Yubico Authenticator), then come back here and enter the code it shows.</p>
+  <p><strong>On a computer?</strong> Scan this code with your phone's authenticator app (or Yubico Authenticator for a YubiKey):</p>
   <div id="totp-qr" role="img" aria-label="TOTP enrollment QR code"></div>
-  <p>Can't scan? Enter this key manually: <code id="totp-secret"></code></p></div><pre id="totp-setup"></pre>
+  <p>Can't scan or open the app? Add the account manually with this key (time-based, 6 digits): <code id="totp-secret"></code>
+  <button id="totp-copy" type="button">Copy key</button></p></div><pre id="totp-setup"></pre>
   <label>Six-digit code<input id="totp-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}"></label>
   <button id="totp-verify">Verify TOTP</button><p id="totp-status" role="status"></p>
   </section>
@@ -85,6 +89,12 @@ export function securityPage(userEmail:string):Response {
     const box=document.getElementById('totp-qr');box.replaceChildren();
     let secret='';try{secret=new URL(uri).searchParams.get('secret')||''}catch{}
     document.getElementById('totp-secret').textContent=secret.replace(/(.{4})/g,'$1 ').trim();
+    const open=document.getElementById('totp-open'),href=(${authenticatorLink.toString()})(uri);
+    if(href){open.href=href;open.hidden=false}else{open.removeAttribute('href');open.hidden=true}
+    document.getElementById('totp-copy').onclick=async()=>{
+      try{await navigator.clipboard.writeText(secret);totpStatus.textContent='Key copied. Paste it into your authenticator app, then enter the 6-digit code.'}
+      catch{totpStatus.textContent='Copy failed; select the key and copy it manually.'}
+    };
     document.getElementById('totp-enroll').hidden=false;
     const res=await fetch('/security/api/totp-qr',{method:'POST',credentials:'same-origin',
       headers:{'Content-Type':'application/json',Origin:location.origin},body:JSON.stringify({uri})});
