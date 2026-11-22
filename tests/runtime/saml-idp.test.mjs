@@ -87,10 +87,23 @@ async function refused(page, label) {
   return html;
 }
 const xmlOf = b64 => Buffer.from(b64, "base64").toString("utf8");
+/** A hand-built unsigned AuthnRequest URL (HTTP-Redirect) for cases an SP library does not produce. */
+const manual = (attrs, issuedAt = new Date().toISOString()) => SSO + "?SAMLRequest=" + encodeURIComponent(deflateRawSync(
+  `<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_m${randomKey().replace(/-/g, "")}" Version="2.0" IssueInstant="${issuedAt}"${attrs}><saml:Issuer>${SP_ENTITY}</saml:Issuer></samlp:AuthnRequest>`).toString("base64"));
+
+const SP_METADATA_URL = "https://sp.example.com/saml/metadata";
+const spMetadata = (acs = ACS) => `<md:EntityDescriptor xmlns:md="urn:oasis:names:tc:SAML:2.0:metadata" entityID="${SP_ENTITY}"><md:SPSSODescriptor protocolSupportEnumeration="urn:oasis:names:tc:SAML:2.0:protocol"><md:AssertionConsumerService Binding="${POST_BINDING}" Location="${acs}" index="0"/></md:SPSSODescriptor></md:EntityDescriptor>`;
+const outbound = [];
+async function outboundService(request) {
+  outbound.push(request.url);
+  if (request.url === SP_METADATA_URL) return new Response(spMetadata(), { headers: { "content-type": "application/samlmetadata+xml" } });
+  if (request.url === "https://sp.example.com/redirecting") return new Response(null, { status: 302, headers: { Location: SP_METADATA_URL } });
+  return new Response("unexpected outbound request", { status: 599 });
+}
 
 let user, idp;
 before(async () => {
-  mf = await authWorker(HOST, { BETTER_AUTH_SECRET: SECRET });
+  mf = await authWorker(HOST, { BETTER_AUTH_SECRET: SECRET }, { outboundService });
   db = await mf.getD1Database("DB");
   admin = (await enrollAdmin(db, SECRET)).cookie;
   await run("INSERT INTO nathan_applications(id,hostname,enabled,access_mode) VALUES ('grafana','grafana.example.test',1,'approved')");
@@ -143,6 +156,39 @@ test("SP registration: validated, bound to an existing app, disabled by default,
   await ok(await studio({ op: "sp.status", id: "grafana", enabled: true, confirm: "CONFIRM ENABLE SAML SP grafana" }));
   assert.deepEqual((await auditRows("saml_idp_sp_create", "grafana")).map(r => r.outcome).slice(-2), ["attempted", "succeeded"]);
   assert.deepEqual((await auditRows("saml_idp_sp_enable", "grafana")).map(r => r.outcome), ["attempted", "succeeded"]);
+});
+
+test("SP metadata preview: pasted or fetched over HTTPS without redirects, audited by host, never stored", async () => {
+  const pasted = await ok(await studio({ op: "sp.preview", metadataXml: spMetadata() }));
+  assert.deepEqual([pasted.entityId, pasted.acsUrls, pasted.nameIdFormat], [SP_ENTITY, [ACS], "persistent"]);
+  const fetched = await ok(await studio({ op: "sp.preview", metadataUrl: SP_METADATA_URL }));
+  assert.equal(fetched.entityId, SP_ENTITY);
+  assert.ok(outbound.includes(SP_METADATA_URL));
+  const redirected = await studio({ op: "sp.preview", metadataUrl: "https://sp.example.com/redirecting" });
+  assert.equal(redirected.status, 409, "redirects are not followed");
+  for (const [body, pattern] of [[{ metadataUrl: "http://sp.example.com/m" }, /HTTPS/i], [{ metadataUrl: "https://10.0.0.1/m" }, /public/],
+    [{ metadataXml: '<!DOCTYPE x [<!ENTITY e SYSTEM "file:///etc/passwd">]>' + spMetadata() }, /DTD/]]) {
+    const r = await studio({ op: "sp.preview", ...body });
+    assert.equal(r.status, 409);
+    assert.match((await r.json()).error, pattern);
+  }
+  const rows = await auditRows("saml_idp_sp_metadata_preview", "%");
+  assert.ok(rows.some(r => r.target === "sp.example.com" && r.outcome === "succeeded"));
+  assert.ok(rows.some(r => r.target === "pasted" && r.outcome === "succeeded"));
+  assert.ok(rows.every(r => !r.target.includes("/")), "the URL path is never logged");
+  assert.equal((await db.prepare("SELECT count(*) AS n FROM nathan_saml_service_providers WHERE id<>'grafana'").first()).n, 0);
+});
+
+test("ForceAuthn needs a sign-in after the request; IsPassive never prompts", async () => {
+  const stale = await insertSession(db, SECRET, "jane");
+  await run('UPDATE "session" SET "createdAt"=? WHERE "id"=?', new Date(Date.now() - 3600e3).toISOString(), stale.id);
+  const forced = await continueWith(await redirectLogin(manual(' ForceAuthn="true"')), stale.cookie);
+  assert.equal(forced.status, 302);
+  assert.equal(forced.headers.get("location"), ORIGIN + "/sign-in", "an old session must sign in again");
+  const fresh = await form(await continueWith(await redirectLogin(manual(' ForceAuthn="true"')), user));
+  assert.equal(fresh.action, ACS, "a session created for this request is accepted");
+  await refused(await continueWith(await redirectLogin(manual(' IsPassive="true"'))), "passive without a session");
+  assert.equal((await auditRows("saml_idp_assertion", "grafana")).at(-1).outcome, "denied:passive_requires_sign_in");
 });
 
 test("SP-initiated login (HTTP-Redirect): a signed Response that an independent SP library validates", async () => {
@@ -222,8 +268,6 @@ test("unknown SP, wrong ACS, replayed request ID, stale or misaddressed requests
   const { context } = serviceProvider().createLoginRequest(idp, "redirect");
   await continueWith(await redirectLogin(context), user);
   assert.match(await refused(await redirectLogin(context), "replayed request ID"), /saml_replayed_request/);
-  const manual = (attrs, issuedAt = new Date().toISOString()) => SSO + "?SAMLRequest=" + encodeURIComponent(deflateRawSync(
-    `<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_m${randomKey().replace(/-/g, "")}" Version="2.0" IssueInstant="${issuedAt}"${attrs}><saml:Issuer>${SP_ENTITY}</saml:Issuer></samlp:AuthnRequest>`).toString("base64"));
   assert.match(await refused(await redirectLogin(manual("", new Date(Date.now() - 10 * 60e3).toISOString())), "stale"), /saml_stale_request/);
   assert.match(await refused(await redirectLogin(manual(' Destination="https://other-idp.example.test/sso"')), "destination"), /saml_destination_mismatch/);
   assert.match(await refused(await redirectLogin(manual(' AssertionConsumerServiceIndex="5"')), "bad index"), /saml_acs_mismatch/);
@@ -306,7 +350,7 @@ test("users without access, blocked, deprovisioned, not admitted or unverified g
   const unverified = await seedUser("unverified", { emailVerified: 0 });
   await grant("grafana", "unverified");
   await refused(await attempt(unverified), "unverified email");
-  const outcomes = Object.fromEntries((await auditRows("saml_idp_assertion", "grafana")).filter(r => r.outcome.startsWith("denied")).map(r => [r.actor, r.outcome]));
+  const outcomes = Object.fromEntries((await auditRows("saml_idp_assertion", "grafana")).filter(r => r.outcome.startsWith("denied") && r.actor !== "anonymous").map(r => [r.actor, r.outcome]));
   assert.deepEqual(outcomes, { nogrant: "denied:no_access:no_grant", banned: "denied:user_blocked", gone: "denied:deprovisioned",
     provisional: "denied:not_admitted", unverified: "denied:email_unverified" });
   // Disabling the app (NATH-13 evaluator) also stops the SP.

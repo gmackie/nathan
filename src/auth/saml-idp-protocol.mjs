@@ -423,7 +423,10 @@ export function checkAcsUrl(value) {
   try { url = new URL(value); } catch { throw Error("ACS URL is not a valid URL"); }
   if (url.protocol !== "https:" || url.username || url.password || url.hash || value.includes("#"))
     throw Error("ACS URL must use https, without credentials or fragment");
-  if (url.href !== value) throw Error("ACS URL must be written in canonical form: " + url.href);
+  // Exact string matching follows, so only one spelling per URL is accepted: the canonical one, or
+  // the canonical one without the root "/" before a query (Salesforce's https://x.my.salesforce.com?so=...).
+  if (url.href !== value && !(url.pathname === "/" && url.search && value === url.origin + url.search))
+    throw Error("ACS URL must be written in canonical form: " + url.href);
   if (!url.hostname.includes(".") || /^(localhost|\d+\.\d+\.\d+\.\d+|\[.*\])$/i.test(url.hostname))
     throw Error("ACS URL must use a public DNS hostname");
   return value;

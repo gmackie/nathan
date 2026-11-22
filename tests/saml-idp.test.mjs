@@ -205,7 +205,10 @@ test("SP registration validation: exact HTTPS ACS URLs, bound app, attribute sou
     "https://GRAFANA.example.com/acs", "https://localhost/acs", "https://10.0.0.1/acs", "https://grafana.example.com/a cs"])
     assert.throws(() => checkAcsUrl(bad), undefined, bad);
   assert.equal(checkAcsUrl("https://acme.my.salesforce.com/?so=00D000000000001"), "https://acme.my.salesforce.com/?so=00D000000000001", "queries are allowed");
-  assert.throws(() => checkAcsUrl("https://acme.my.salesforce.com?so=00D000000000001"), /canonical/);
+  assert.equal(checkAcsUrl("https://acme.my.salesforce.com?so=00D000000000001"), "https://acme.my.salesforce.com?so=00D000000000001",
+    "Salesforce's spelling without the root slash is kept verbatim (matching is exact)");
+  assert.throws(() => checkAcsUrl("https://acme.my.salesforce.com/a/../b"), /canonical/);
+  assert.throws(() => checkAcsUrl("https://acme.my.salesforce.com:443/acs"), /canonical/);
   const reject = async (over, pattern) => assert.rejects(validateServiceProvider({ ...base, ...over }, { idpEntityId: IDP, isAppId }), pattern);
   await reject({ appId: undefined }, /application/);
   await reject({ entityId: IDP }, /own entity ID/);
