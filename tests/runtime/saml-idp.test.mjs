@@ -113,11 +113,26 @@ const resumeCookie = response => {
   assert.match(c.raw, /HttpOnly/); assert.match(c.raw, /Secure/); assert.match(c.raw, /SameSite=Lax/);
   return "__Host-nathan-saml-idp=" + c.value;
 };
-/** Follows Nathan's 303 to /saml/idp/continue with the browser's cookies; returns the page. */
-async function continueWith(response, session) {
+/** Nathan's "Continue to <SP> as <user>?" page: its single-use confirmation token, or null. */
+const confirmationToken = html => /<form method="post" action="\/saml\/idp\/continue"><input type="hidden" name="confirm" value="([A-Za-z0-9_-]+)">/.exec(html)?.[1] ?? null;
+/** The browser pressing Continue (or Cancel) on Nathan's confirmation page: a same-origin form POST. */
+function confirmPost(resume, session, token, action = "continue", headers = {}) {
+  return dispatch(ORIGIN + "/saml/idp/continue", { method: "POST", redirect: "manual", body: "confirm=" + token + "&action=" + action,
+    headers: { Cookie: resume + (session ? "; " + session : ""), Origin: ORIGIN, "Sec-Fetch-Site": "same-origin", "Content-Type": "application/x-www-form-urlencoded", ...headers } });
+}
+/**
+ * Follows Nathan's 303 to /saml/idp/continue with the browser's cookies; returns the page. An
+ * unsigned request answered with a session that already existed shows the confirmation page: the
+ * user presses Continue unless `confirm` is false (then the confirmation page itself is returned).
+ */
+async function continueWith(response, session, { confirm = true } = {}) {
   assert.equal(response.status, 303, (await response.clone().text()).slice(0, 300));
   assert.equal(response.headers.get("location"), ORIGIN + "/saml/idp/continue");
-  return dispatch(ORIGIN + "/saml/idp/continue", { redirect: "manual", headers: { Cookie: resumeCookie(response) + (session ? "; " + session : "") } });
+  const resume = resumeCookie(response);
+  const page = await dispatch(ORIGIN + "/saml/idp/continue", { redirect: "manual", headers: { Cookie: resume + (session ? "; " + session : "") } });
+  if (!confirm || page.status !== 200) return page;
+  const token = confirmationToken(await page.clone().text());
+  return token ? confirmPost(resume, session, token) : page;
 }
 const unescapeHtml = s => s.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 /** The hidden form fields of Nathan's auto-POST page. */
@@ -367,9 +382,10 @@ test("signed AuthnRequests: required means unsigned is refused; Redirect and POS
   const signingIdp = samlify.IdentityProvider({ metadata: (await idpFromMetadata()).metadata.replace('WantAuthnRequestsSigned="false"', 'WantAuthnRequestsSigned="true"') });
   const signer = serviceProvider(s.entity, s.acs, { authnRequestsSigned: true, privateKey: spKey.privateKey, signingCert: spKey.certPem,
     requestSignatureAlgorithm: "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256" });
-  const viaRedirect = await form(await continueWith(await redirectLogin(signer.createLoginRequest(signingIdp, "redirect").context), user));
+  // A valid signature (with Nathan as Destination) goes straight through, even with an older session.
+  const viaRedirect = await form(await continueWith(await redirectLogin(signer.createLoginRequest(signingIdp, "redirect").context), user, { confirm: false }));
   assert.equal(viaRedirect.action, s.acs);
-  const viaPost = await form(await continueWith(await postLogin({ SAMLRequest: signer.createLoginRequest(signingIdp, "post").context }), user));
+  const viaPost = await form(await continueWith(await postLogin({ SAMLRequest: signer.createLoginRequest(signingIdp, "post").context }), user, { confirm: false }));
   assert.equal(viaPost.action, s.acs);
   // A signature from another key, or over a different message, is refused.
   const otherKey = makeCertificate();
@@ -507,4 +523,104 @@ test("AssertionConsumerServiceIndex resolves by the SP metadata's index attribut
   const byIndex = async index => (await form(await continueWith(await redirectLogin(manual(manualEntry.entity, ' AssertionConsumerServiceIndex="' + index + '"')), user))).action;
   assert.equal(await byIndex(1), "https://manual-acs.example.test/b");
   await refused(await redirectLogin(manual(manualEntry.entity, ' AssertionConsumerServiceIndex="2"')), "unknown index", "saml_acs_mismatch");
+});
+
+test("a forged unsigned AuthnRequest answered with an existing Nathan session asks the user first; nothing is posted to the SP", async () => {
+  // The reported attack: an SP that neither allows IdP-initiated sign-in nor requires signed requests.
+  const s = await freshSp({ name: "Grafana <Prod> & \"Ops\"" });
+  assert.equal(s.created.allowIdpInitiated, false);
+  assert.equal(s.created.wantRequestsSigned, false);
+  // An attacker's page navigates the victim's browser cross-site (a top-level GET carries the Lax
+  // session cookie) with an unsigned request: the SP's public entity ID, a fresh ID, their RelayState.
+  const attackerRelay = "https://attacker.example/landing?next=<b>x</b>";
+  const forged = manual(s.entity, "", undefined, "&RelayState=" + encodeURIComponent(attackerRelay));
+  const sso = await redirectLogin(forged, user, { "Sec-Fetch-Site": "cross-site", Referer: "https://attacker.example/" });
+  const resume = resumeCookie(sso);
+  const page = await continueWith(sso, user, { confirm: false });
+  const html = await page.text();
+  assert.equal(page.status, 200);
+  assert.doesNotMatch(html, /SAMLResponse/, "no assertion without the user's confirmation");
+  assert.doesNotMatch(html, /<script/, "the page never submits itself");
+  assert.ok(html.includes("Continue to Grafana &lt;Prod&gt; &amp; &quot;Ops&quot; as jane@example.test?"), html.slice(0, 900));
+  assert.ok(!html.includes(attackerRelay) && !html.includes("<b>x</b>"), "the RelayState is not shown or echoed");
+  const csp = page.headers.get("content-security-policy");
+  assert.match(csp, /frame-ancestors 'none'/);
+  assert.match(csp, /form-action 'self'/);
+  assert.match(csp, /style-src 'nonce-[^']+'/);
+  assert.equal(page.headers.get("referrer-policy"), "same-origin");
+  assert.equal(page.headers.get("x-frame-options"), "DENY");
+  const token = confirmationToken(html);
+  assert.ok(token, "the page carries a confirmation token");
+  assert.equal((await auditRows("saml_idp_assertion", s.id)).length, 0, "nothing issued or denied yet");
+
+  // A cross-site POST, or one without Origin, cannot press Continue.
+  await refused(await confirmPost(resume, user, token, "continue", { Origin: "https://attacker.example", "Sec-Fetch-Site": "cross-site" }), "cross-site Continue", "saml_cross_site_request");
+  await refused(await confirmPost(resume, user, token, "continue", { Origin: ORIGIN, "Sec-Fetch-Site": "cross-site" }), "Sec-Fetch-Site cross-site", "saml_cross_site_request");
+  const noOrigin = await dispatch(ORIGIN + "/saml/idp/continue", { method: "POST", body: "confirm=" + token + "&action=continue",
+    headers: { Cookie: resume + "; " + user, "Content-Type": "application/x-www-form-urlencoded" } });
+  await refused(noOrigin, "no Origin", "saml_cross_site_request");
+  // Bound to the session that saw the page, and to the token on it.
+  const other = await insertSession(db, SECRET, "jane");
+  await refused(await confirmPost(resume, other.cookie, token), "another session", "saml_confirmation_invalid");
+  await refused(await confirmPost(resume, user, token.slice(0, -2) + (token.endsWith("AA") ? "BB" : "AA")), "wrong token", "saml_confirmation_invalid");
+  await refused(await confirmPost(resume, user, token, "elsewhere"), "unknown action", "saml_invalid_confirmation_form");
+
+  // The user presses Continue on Nathan's page: a same-origin POST issues the assertion.
+  const issued = await form(await confirmPost(resume, user, token));
+  assert.equal(issued.action, s.acs);
+  assert.equal(issued.RelayState, attackerRelay, "after the user confirmed, the RelayState is echoed verbatim");
+  await s.sp.parseLoginResponse(s.idp, "post", { body: { SAMLResponse: issued.SAMLResponse } });
+  assert.deepEqual((await auditRows("saml_idp_assertion", s.id)).map(r => r.outcome), ["issued"]);
+  // Single use: replaying the confirmation issues nothing.
+  await refused(await confirmPost(resume, user, token), "replayed confirmation", "saml_resume_used");
+});
+
+test("the confirmation expires, Cancel issues nothing, and an unsigned IsPassive request cannot be confirmed", async () => {
+  const s = await freshSp();
+  const pageFor = async (url = manual(s.entity)) => {
+    const sso = await redirectLogin(url, user);
+    const resume = resumeCookie(sso);
+    const page = await continueWith(sso, user, { confirm: false });
+    const token = confirmationToken(await page.text());
+    assert.ok(token, "confirmation page");
+    return { resume, token };
+  };
+  const late = await pageFor();
+  await run("UPDATE nathan_saml_idp_pending SET confirm_expires=unixepoch()-1 WHERE sp_id=? AND used=0", s.id);
+  await refused(await confirmPost(late.resume, user, late.token), "expired confirmation", "saml_confirmation_expired");
+
+  const cancel = await pageFor();
+  const cancelled = await confirmPost(cancel.resume, user, cancel.token, "cancel");
+  const html = await cancelled.text();
+  assert.equal(cancelled.status, 200);
+  assert.doesNotMatch(html, /SAMLResponse/);
+  assert.match(html, /\(saml_cancelled\)/);
+  assert.match(cancelled.headers.get("set-cookie"), /__Host-nathan-saml-idp=; .*Max-Age=0/);
+  await refused(await confirmPost(cancel.resume, user, cancel.token), "Continue after Cancel", "saml_resume_used");
+  assert.equal((await auditRows("saml_idp_assertion", s.id)).at(-1).outcome, "denied:cancelled");
+
+  await refused(await continueWith(await redirectLogin(manual(s.entity, ' IsPassive="true"'), user), user, { confirm: false }),
+    "passive unsigned request with an older session", "saml_passive_requires_confirmation");
+  assert.equal((await auditRows("saml_idp_assertion", s.id)).at(-1).outcome, "denied:passive_requires_confirmation");
+});
+
+test("no confirmation after a sign-in made for this request, or for a validly signed request", async () => {
+  const s = await freshSp();
+  // Interactive: no session when the request arrives; the user signs in, and the new session continues.
+  const sso = await redirectLogin(manual(s.entity));
+  const resume = resumeCookie(sso);
+  assert.equal((await continueWith(sso)).headers.get("location"), ORIGIN + "/sign-in");
+  const signedIn = (await insertSession(db, SECRET, "jane")).cookie;
+  const page = await dispatch(ORIGIN + "/saml/idp/continue", { headers: { Cookie: resume + "; " + signedIn } });
+  assert.equal((await form(page)).action, s.acs, "straight to the SP");
+  // Signed: covered in the signed-request test (Redirect and POST, older session, no confirmation).
+  // A signature without Nathan as Destination is not enough to skip the confirmation.
+  const spKey = makeCertificate({ cn: "Optional signer" });
+  const optional = await freshSp({ certificates: [spKey.certPem] });
+  const { createSign } = await import("node:crypto");
+  const xml = `<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_n${randomKey().replace(/-/g, "")}" Version="2.0" IssueInstant="${new Date().toISOString()}"><saml:Issuer>${optional.entity}</saml:Issuer></samlp:AuthnRequest>`;
+  const signedQuery = "SAMLRequest=" + encodeURIComponent(deflateRawSync(xml).toString("base64")) + "&SigAlg=" + encodeURIComponent("http://www.w3.org/2001/04/xmldsig-more#rsa-sha256");
+  const signature = createSign("RSA-SHA256").update(signedQuery).sign(spKey.privateKey, "base64");
+  const noDestination = await continueWith(await redirectLogin(SSO + "?" + signedQuery + "&Signature=" + encodeURIComponent(signature), user), user, { confirm: false });
+  assert.ok(confirmationToken(await noDestination.text()), "signed without Destination: still confirmed by the user");
 });

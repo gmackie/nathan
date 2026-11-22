@@ -64,6 +64,10 @@ CREATE INDEX IF NOT EXISTS nathan_saml_idp_request_ids_expiry ON nathan_saml_idp
 
 -- A validated AuthnRequest waiting for the browser's Nathan session (sign-in, then resume). The
 -- browser holds a signed random handle in a __Host- cookie; only its SHA-256 is stored. Single use.
+-- `signed`: the request carried a valid SP signature naming Nathan as Destination. An unsigned
+-- request answered with a session older than the request (requested_at_ms, Worker clock) needs
+-- the user's confirmation: confirm_hash is the SHA-256 of the token on that page, bound to
+-- confirm_session and valid until confirm_expires.
 CREATE TABLE IF NOT EXISTS nathan_saml_idp_pending (
   id_hash TEXT PRIMARY KEY NOT NULL,
   sp_id TEXT NOT NULL,
@@ -72,6 +76,11 @@ CREATE TABLE IF NOT EXISTS nathan_saml_idp_pending (
   relay_state TEXT,
   force_authn INTEGER NOT NULL DEFAULT 0 CHECK(force_authn IN (0,1)),
   is_passive INTEGER NOT NULL DEFAULT 0 CHECK(is_passive IN (0,1)),
+  signed INTEGER NOT NULL DEFAULT 0 CHECK(signed IN (0,1)),
+  requested_at_ms INTEGER NOT NULL,
+  confirm_hash TEXT,
+  confirm_session TEXT,
+  confirm_expires INTEGER,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   expires_at INTEGER NOT NULL,
   used INTEGER NOT NULL DEFAULT 0 CHECK(used IN (0,1))

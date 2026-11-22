@@ -35,10 +35,13 @@ import {
   checkRelayState, parseAuthnRequest, verifyRedirectSignature, verifyPostSignature, buildSignedResponse, buildIdpMetadata,
   validateServiceProvider, parseSpMetadata, NAMEID, AC_PASSKEY, AC_UNSPECIFIED, MAX_QUERY_BYTES, MAX_FORM_BYTES, SP_ID
 } from "./saml-idp-protocol.mjs";
-import { autoPostPage, idpErrorPage, idpInitiatedPage } from "./saml-idp-ui.mjs";
+import { autoPostPage, idpErrorPage, idpInitiatedPage, ssoConfirmPage } from "./saml-idp-ui.mjs";
 
 const RESUME_COOKIE = "__Host-nathan-saml-idp";
 const PENDING_SECONDS = 600;
+/** How long the "Continue to <SP> as <user>?" page stays valid. */
+const CONFIRM_SECONDS = 300;
+const MAX_CONFIRM_FORM_BYTES = 1024;
 const REPLAY_SECONDS = 900;
 /** A next key must be published this long before it may sign (SPs cache metadata). */
 export const ROTATION_OVERLAP_SECONDS = 86400;
@@ -160,12 +163,13 @@ async function sso(request: Request, env: AuthEnv, url: URL): Promise<Response> 
     spId = sp.id;
     if (!sp.enabled) fail("saml_sp_disabled", "Sign-in to this application is disabled", 403);
     const certificates = sp.certificates.map(c => c.der);
-    let parsed = outer;
+    let parsed = outer, verified = false;
     if (binding === "redirect") {
       // The binding forbids an enveloped signature inside a DEFLATE-encoded message.
       if (outer.signed) fail("saml_invalid_request", "HTTP-Redirect messages are signed in the query, not in the XML");
       if (params.has("Signature") && certificates.length) {
         if (!await verifyRedirectSignature(params, certificates)) fail("saml_bad_signature", "The AuthnRequest signature is invalid");
+        verified = true;
       } else if (sp.wantRequestsSigned) fail("saml_signature_required", "This application must sign its AuthnRequests");
     } else if (outer.signed && certificates.length) {
       const signed = verifyPostSignature(xml, certificates);
@@ -173,6 +177,7 @@ async function sso(request: Request, env: AuthEnv, url: URL): Promise<Response> 
       // Process only the bytes the signature covers.
       parsed = parseAuthnRequest(signed);
       if (parsed.id !== outer.id || parsed.issuer !== outer.issuer) fail("saml_bad_signature", "The AuthnRequest signature does not cover this request");
+      verified = true;
     } else if (sp.wantRequestsSigned) fail("saml_signature_required", "This application must sign its AuthnRequests");
     const ssoUrl = idpValues(env.NATHAN_ISSUER).ssoUrl;
     if (parsed.destination !== null && parsed.destination !== ssoUrl) fail("saml_destination_mismatch", "The AuthnRequest is addressed to another identity provider");
@@ -193,9 +198,13 @@ async function sso(request: Request, env: AuthEnv, url: URL): Promise<Response> 
       .bind(sp.id, parsed.id, REPLAY_SECONDS).run();
     if (replay.meta.changes !== 1) fail("saml_replayed_request", "This sign-in request was already used; start again from the application");
     const handle = b64url(crypto.getRandomValues(new Uint8Array(32)));
-    await env.DB.prepare("INSERT INTO nathan_saml_idp_pending(id_hash,sp_id,request_id,acs_url,relay_state,force_authn,is_passive,expires_at) " +
-      "VALUES (?,?,?,?,?,?,?,unixepoch()+?)")
-      .bind(await sha256Hex(handle), sp.id, parsed.id, acsUrl, relayState, parsed.forceAuthn ? 1 : 0, parsed.isPassive ? 1 : 0, PENDING_SECONDS).run();
+    // Only a valid SP signature that names Nathan as Destination shows the SP itself sent this
+    // request to Nathan; anything else could come from any web page, so it may need confirming.
+    const signedForNathan = verified && parsed.destination === ssoUrl;
+    await env.DB.prepare("INSERT INTO nathan_saml_idp_pending(id_hash,sp_id,request_id,acs_url,relay_state,force_authn,is_passive,signed,requested_at_ms,expires_at) " +
+      "VALUES (?,?,?,?,?,?,?,?,?,unixepoch()+?)")
+      .bind(await sha256Hex(handle), sp.id, parsed.id, acsUrl, relayState, parsed.forceAuthn ? 1 : 0, parsed.isPassive ? 1 : 0, signedForNathan ? 1 : 0,
+        Date.now(), PENDING_SECONDS).run();
     return redirectWithCookies(origin(env) + "/saml/idp/continue", 303,
       [makeCookie(RESUME_COOKIE, handle + await hmac(env, handle), { maxAge: PENDING_SECONDS })]);
   } catch (e) {
@@ -225,16 +234,9 @@ export async function samlIdpReturnRedirect(request: Request, env: AuthEnv): Pro
 }
 
 async function continueSso(request: Request, env: AuthEnv, auth: any): Promise<Response> {
-  const resume = await resumeHandle(env, request);
-  const expired = (code: string) => withClearedResume(refusal("Sign-in expired",
-    "This sign-in request expired or was already used. Start again from the application.", code, { status: 400 }));
-  if (!("handle" in resume)) return expired(resume.error);
-  const idHash = await sha256Hex(resume.handle);
-  const row = await env.DB.prepare("SELECT *, expires_at>unixepoch() AS live FROM nathan_saml_idp_pending WHERE id_hash=? LIMIT 1").bind(idHash).first<any>();
-  if (!row || row.used === 1 || row.live !== 1) return expired(!row || row.used !== 1 ? "saml_resume_expired" : "saml_resume_used");
-  const pending = row;
-  const consume = async () => (await env.DB.prepare("UPDATE nathan_saml_idp_pending SET used=1 WHERE id_hash=? AND used=0 AND expires_at>unixepoch()")
-    .bind(idHash).run()).meta.changes === 1;
+  const found = await pendingRequest(env, request);
+  if ("refused" in found) return found.refused;
+  const { pending, idHash, consume, expired }: Pending = found;
   const session = await auth.api.getSession({ headers: request.headers });
   const userId: string | null = typeof session?.user?.id === "string" ? session.user.id : null;
   // ForceAuthn: only a session created after the request counts (unixepoch() has second precision).
@@ -252,9 +254,79 @@ async function continueSso(request: Request, env: AuthEnv, auth: any): Promise<R
   if (sp?.requirePasskey && !await passkeyEvidence(env, userId!, session.session.id))
     return refusal("Passkey sign-in required", sp.name + " requires a sign-in with your passkey. Sign in to Nathan with your passkey to continue.",
       "saml_passkey_required", { signIn: true });
+  // An unsigned request answered with a session that existed before it: any web page can send the
+  // browser here with such a request (the SP's entity ID is public), so the user confirms first.
+  const interactive = timestampMs(session.session.createdAt) >= Number(pending.requested_at_ms);
+  if (sp?.enabled && pending.signed !== 1 && !interactive) {
+    if (pending.is_passive === 1) {
+      await consume();
+      await audit(env, userId!, "saml_idp_assertion", pending.sp_id, "denied:passive_requires_confirmation");
+      return withClearedResume(refusal("Confirmation required", "The application asked Nathan not to interact with you, but this sign-in needs your confirmation. Start again from the application.",
+        "saml_passive_requires_confirmation"));
+    }
+    const token = b64url(crypto.getRandomValues(new Uint8Array(32)));
+    const r = await env.DB.prepare("UPDATE nathan_saml_idp_pending SET confirm_hash=?,confirm_session=?,confirm_expires=unixepoch()+? WHERE id_hash=? AND used=0")
+      .bind(await sha256Hex(token), session.session.id, CONFIRM_SECONDS, idHash).run();
+    if (r.meta.changes !== 1) return expired("saml_resume_used");
+    return ssoConfirmPage({ spName: sp.name, email: String(session.user.email ?? ""), acsHost: new URL(pending.acs_url).host, token });
+  }
   if (!await consume()) return expired("saml_resume_used");
-  return withClearedResume(await issue(env, { sp, userId: userId!, sessionId: session.session.id, sessionCreatedAt: timestampMs(session.session.createdAt),
-    requestId: pending.request_id, acsUrl: pending.acs_url, relayState: pending.relay_state ?? null, spId: pending.sp_id }));
+  return withClearedResume(await issueFor(env, sp, pending, userId!, session));
+}
+
+function issueFor(env: AuthEnv, sp: ServiceProvider | null, pending: any, userId: string, session: any) {
+  return issue(env, { sp, userId, sessionId: session.session.id, sessionCreatedAt: timestampMs(session.session.createdAt),
+    requestId: pending.request_id, acsUrl: pending.acs_url, relayState: pending.relay_state ?? null, spId: pending.sp_id });
+}
+
+type Pending = { pending: any; idHash: string; consume: () => Promise<boolean>; expired: (code: string) => Response };
+/** The live pending request named by the resume cookie, or the refusal page saying why there is none. */
+async function pendingRequest(env: AuthEnv, request: Request): Promise<{ refused: Response } | Pending> {
+  const resume = await resumeHandle(env, request);
+  const expired = (code: string) => withClearedResume(refusal("Sign-in expired",
+    "This sign-in request expired or was already used. Start again from the application.", code, { status: 400 }));
+  if (!("handle" in resume)) return { refused: expired(resume.error) };
+  const idHash = await sha256Hex(resume.handle);
+  const pending = await env.DB.prepare("SELECT *, expires_at>unixepoch() AS live, coalesce(confirm_expires>unixepoch(),0) AS confirm_live " +
+    "FROM nathan_saml_idp_pending WHERE id_hash=? LIMIT 1").bind(idHash).first<any>();
+  if (!pending || pending.used === 1 || pending.live !== 1) return { refused: expired(!pending || pending.used !== 1 ? "saml_resume_expired" : "saml_resume_used") };
+  const consume = async () => (await env.DB.prepare("UPDATE nathan_saml_idp_pending SET used=1 WHERE id_hash=? AND used=0 AND expires_at>unixepoch()")
+    .bind(idHash).run()).meta.changes === 1;
+  return { pending, idHash, consume, expired };
+}
+
+/**
+ * POST /saml/idp/continue: the user pressed Continue or Cancel on the confirmation page. Same-origin
+ * only; the token must be the one on the page this session was shown, unexpired and unused.
+ */
+async function confirmSso(request: Request, env: AuthEnv, auth: any): Promise<Response> {
+  if (request.headers.get("Origin") !== origin(env) || request.headers.get("Sec-Fetch-Site") === "cross-site")
+    return refusal("Request refused", "Confirm the sign-in on Nathan's own page.", "saml_cross_site_request", { status: 403 });
+  if (request.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() !== "application/x-www-form-urlencoded")
+    return refusal("Request refused", "Confirm the sign-in on Nathan's own page.", "saml_invalid_confirmation_form", { status: 415 });
+  const raw = await readBoundedText(request, MAX_CONFIRM_FORM_BYTES);
+  if (raw === null) return refusal("Request refused", "Confirm the sign-in on Nathan's own page.", "saml_invalid_confirmation_form", { status: 413 });
+  let form: Map<string, { raw: string; value: string }>;
+  try { form = parseBindingParameters(raw, ["confirm", "action"]); } catch { form = new Map(); }
+  const token = form.get("confirm")?.value ?? "", action = form.get("action")?.value;
+  if (form.size !== 2 || !/^[A-Za-z0-9_-]{43}$/.test(token) || (action !== "continue" && action !== "cancel"))
+    return refusal("Request refused", "Confirm the sign-in on Nathan's own page.", "saml_invalid_confirmation_form", { status: 400 });
+  const found = await pendingRequest(env, request);
+  if ("refused" in found) return found.refused;
+  const { pending, consume, expired } = found;
+  const session = await auth.api.getSession({ headers: request.headers });
+  if (typeof session?.user?.id !== "string")
+    return refusal("Sign in first", "Sign in to Nathan, then start again from the application.", "saml_sign_in_required", { status: 401, signIn: true });
+  if (!pending.confirm_hash || pending.confirm_session !== session.session.id || !constantTimeEqual(await sha256Hex(token), pending.confirm_hash))
+    return refusal("Confirmation not valid", "This confirmation belongs to another page or sign-in. Start again from the application.", "saml_confirmation_invalid");
+  if (pending.confirm_live !== 1)
+    return withClearedResume(refusal("Confirmation expired", "This confirmation expired. Start again from the application.", "saml_confirmation_expired", { status: 400 }));
+  if (!await consume()) return expired("saml_resume_used");
+  if (action === "cancel") {
+    await audit(env, session.user.id, "saml_idp_assertion", pending.sp_id, "denied:cancelled");
+    return withClearedResume(refusal("Sign-in cancelled", "Nothing was sent to the application.", "saml_cancelled", { status: 200 }));
+  }
+  return withClearedResume(await issueFor(env, await loadSp(env, { id: pending.sp_id }), pending, session.user.id, session));
 }
 
 async function passkeyEvidence(env: AuthEnv, userId: string, sessionId: string) {
@@ -530,6 +602,7 @@ export async function handleSamlIdp(request: Request, env: AuthEnv, auth: any, u
   if ((path === "/saml/idp" || path === "/saml/idp/metadata") && request.method === "GET") return metadata(env);
   if (path === "/saml/idp/sso") return sso(request, env, url);
   if (path === "/saml/idp/continue" && request.method === "GET") return continueSso(request, env, auth);
+  if (path === "/saml/idp/continue" && request.method === "POST") return confirmSso(request, env, auth);
   const start = /^\/saml\/idp\/start\/([^/]+)$/.exec(path);
   if (start && SP_ID.test(start[1])) return idpInitiated(request, env, auth, start[1]);
   return refusal("Not found", "Unknown SAML endpoint.", "saml_unknown_endpoint", { status: 404 });
