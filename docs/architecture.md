@@ -17,7 +17,7 @@ flowchart TB
 
 ## Identity Provider
 
-The identity Worker instantiates Better Auth inside the request using a D1 binding and installs the Better Auth OAuth Provider, JWT, organizations, admin, passkey and TOTP plugins, plus optional enterprise SSO. It exposes standard discovery metadata and OIDC clients independent of application location. Enterprise SAML consumption is distinct from acting as a downstream SAML identity provider.
+The identity Worker instantiates Better Auth inside the request using a D1 binding and installs the Better Auth OAuth Provider, JWT, organizations, admin, passkey and TOTP plugins, plus optional enterprise SSO. It exposes standard discovery metadata and OIDC clients independent of application location. Enterprise SAML consumption is distinct from acting as a downstream SAML identity provider, which Nathan does for registered SPs bound to an application ([saml-idp.md](saml-idp.md), NATH-12).
 
 Admin registration is restricted to verified Better Auth admin users whose email is separately allowlisted in deploy secrets/configuration. No unprotected bootstrap API is exposed.
 
