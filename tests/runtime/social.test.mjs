@@ -106,12 +106,12 @@ function cookieHeader(jar, context = "same-site") {
 
 let clients = 0;
 /** Starts a social sign-in exactly like the sign-in page does (a same-origin fetch). */
-async function begin(provider, jar = jarOf(), callbackURL = "/") {
+async function begin(provider, jar = jarOf(), callbackURL = "/", extra = {}) {
   const response = await mf.dispatchFetch(ORIGIN + "/api/auth/sign-in/social", {
     method: "POST", redirect: "manual",
     // Each simulated browser gets its own client IP, as Better Auth rate-limits sign-in per IP.
     headers: { "Content-Type": "application/json", Origin: ORIGIN, Cookie: cookieHeader(jar), "cf-connecting-ip": "198.51.100." + (++clients) },
-    body: JSON.stringify({ provider, callbackURL })
+    body: JSON.stringify({ provider, callbackURL, ...extra })
   });
   assert.equal(response.status, 200, "sign-in/social: " + response.status + " " + await response.clone().text());
   merge(jar, response);
@@ -119,9 +119,9 @@ async function begin(provider, jar = jarOf(), callbackURL = "/") {
   return { authorize: new URL(url), jar };
 }
 /** The provider redirects the browser back: a cross-site top-level GET navigation. */
-async function callback(provider, code, state, jar) {
+async function callback(provider, code, state, jar, headers = {}) {
   const response = await mf.dispatchFetch(ORIGIN + "/api/auth/callback/" + provider + "?code=" + code + "&state=" + encodeURIComponent(state),
-    { redirect: "manual", headers: { Cookie: cookieHeader(jar, "cross-site-get") } });
+    { redirect: "manual", headers: { Cookie: cookieHeader(jar, "cross-site-get"), ...headers } });
   merge(jar, response);
   return response;
 }
@@ -468,4 +468,56 @@ test("callback URLs are identical in the hosted installer page, Studio API and C
   assert.deepEqual(fromInstaller, studioCallbacks);
   assert.deepEqual(fromCli, studioCallbacks);
   assert.equal(studioCallbacks.twitter, ORIGIN + "/api/auth/callback/twitter");
+});
+
+// Staging 2026-11-22: a successful sign-in landed on "/", which always redirected to /sign-in, which
+// never looked at the session, so the browser looped back to the sign-in page.
+test("a signed-in browser landing on / or /sign-in goes to its account page, not back to sign-in", async () => {
+  const jar = await signIn("discord", "dc-landing", { id: "100000000000000009", email: "landing@example.test", verified: true });
+  const root = await visit("/", jar);
+  assert.equal(root.status, 302);
+  assert.equal(root.headers.get("Location"), ORIGIN + "/security");
+  const signInAgain = await visit("/sign-in", jar);
+  assert.equal(signInAgain.status, 302);
+  assert.equal(signInAgain.headers.get("Location"), ORIGIN + "/security");
+  assert.equal((await visit("/security", jar)).status, 200);
+  // Signed out, both still lead to the sign-in page.
+  const anonymous = await visit("/", jarOf());
+  assert.equal(anonymous.headers.get("Location"), ORIGIN + "/sign-in");
+  assert.equal((await visit("/sign-in", jarOf())).status, 200);
+});
+
+// "Sign in with gmacko": an app sends the browser to /oauth2/authorize; Nathan sends it to /sign-in with a
+// signed query; after the social round trip Better Auth must resume that authorization, not land on "/".
+// NATH-44: the signed query reaches the OAuth state (serverContext), but the callback still lands on "/";
+// Better Auth's post-login authorize hook does not resume yet. Tracked until fixed; blocks the app pilot.
+test("an app's authorization resumes after a social sign-in that carries the signed oauth_query", { todo: "NATH-44" }, async () => {
+  const CLIENT = "app-" + randomKey().slice(0, 8), REDIRECT = "https://app.example.test/api/auth/callback/nathan";
+  await db.prepare('INSERT INTO "oauthClient"("id","clientId","redirectUris","disabled","skipConsent","tokenEndpointAuthMethod","requirePKCE","subjectType","createdAt","updatedAt") VALUES (?,?,?,0,1,\'none\',1,\'public\',?,?)')
+    .bind("oc-" + CLIENT, CLIENT, JSON.stringify([REDIRECT]), Date.now(), Date.now()).run();
+  const state = randomKey();
+  const query = new URLSearchParams({ response_type: "code", client_id: CLIENT, redirect_uri: REDIRECT, scope: "openid profile email",
+    state, code_challenge: createHash("sha256").update(randomKey()).digest("base64url"), code_challenge_method: "S256" });
+  const jar = jarOf();
+  const authorize = await mf.dispatchFetch(ORIGIN + "/api/auth/oauth2/authorize?" + query, { redirect: "manual",
+    headers: { Accept: "text/html", "Sec-Fetch-Mode": "navigate", Cookie: cookieHeader(jar) } });
+  merge(jar, authorize);
+  const login = new URL(authorize.headers.get("Location") ?? (await authorize.json()).url, ORIGIN);
+  assert.equal(login.pathname, "/sign-in");
+  assert.ok(login.searchParams.has("sig"), "Nathan signs the query it hands the sign-in page");
+
+  // The sign-in page sends what signedOAuthQuery derives from its own URL.
+  const { signedOAuthQuery } = await import("../../src/auth/oauth-query.mjs");
+  const oauthQuery = signedOAuthQuery(login.search);
+  assert.ok(oauthQuery, "the page URL carries a signed query");
+  const started = await begin("discord", jar, "/", { oauth_query: oauthQuery });
+  codes.set("dc-app", { id: "100000000000000010", email: "app-user@example.test", verified: true });
+  // A real browser follows the provider's redirect as a top-level navigation.
+  const back = await callback("discord", "dc-app", started.authorize.searchParams.get("state"), jar,
+    { Accept: "text/html", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "cross-site" });
+  assert.equal(back.status, 302, await back.clone().text());
+  const resumed = new URL(back.headers.get("Location"), ORIGIN);
+  assert.equal(resumed.origin + resumed.pathname, REDIRECT, "the browser returns to the app, not to Nathan's /: " + resumed.href);
+  assert.ok(resumed.searchParams.get("code"), "with an authorization code");
+  assert.equal(resumed.searchParams.get("state"), state);
 });

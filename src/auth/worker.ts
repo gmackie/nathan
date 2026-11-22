@@ -67,8 +67,21 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     if(samlGate)return samlGate;
     return auth.handler(request);
   }
-  if (url.pathname === "/") return (await mcpReturnRedirect(request, env, auth)) ?? (await samlIdpReturnRedirect(request, env)) ?? Response.redirect(issuer.origin + "/sign-in", 302);
+  if (url.pathname === "/") {
+    const pending = (await mcpReturnRedirect(request, env, auth)) ?? (await samlIdpReturnRedirect(request, env));
+    if (pending) return pending;
+    // A signed-in browser with nothing to resume lands on its account page; sending it to
+    // /sign-in looped every successful sign-in back to the sign-in page.
+    const session = await auth.api.getSession({ headers: request.headers });
+    return Response.redirect(issuer.origin + (session?.user?.id ? "/security" : "/sign-in"), 302);
+  }
   if (url.pathname === "/sign-in" && request.method === "GET") {
+    // With a session and no signed authorization to resume (an app's /oauth2/authorize adds `sig`),
+    // there is nothing to sign in to; a prompt=login authorization keeps its signed query and the page.
+    if (!url.searchParams.has("sig")) {
+      const session = await auth.api.getSession({ headers: request.headers });
+      if (session?.user?.id) return Response.redirect(issuer.origin + "/security", 302);
+    }
     const providers = enabledProviderIds(socialProviders);
     return signInPage(providers, env.ENABLE_PASSWORD === "true", env.ENTERPRISE_SSO === "true");
   }

@@ -7,6 +7,7 @@ import { displayName } from "../shared/providers.mjs";
 import { providerStudioSection, providerStudioScript } from "./provider-ui.mjs";
 import { samlStudioSection, samlStudioScript } from "./saml-ui.mjs";
 import { samlIdpStudioSection, samlIdpStudioScript } from "./saml-idp-ui.mjs";
+import { signedOAuthQuery } from "./oauth-query.mjs";
 const htmlEscape = (s: string) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 
 function page(title: string, body: string, script = ""): Response {
@@ -46,6 +47,12 @@ export function signInPage(providers: string[], passwordEnabled: boolean, enterp
   return page("Sign in",'<p>Use your configured identity provider, passkey, or approved enterprise account.</p>'+
     buttons+passkey+sso+password+'<p id="status" role="alert"></p>',String.raw`
     const status=document.getElementById('status');
+    // An app's /oauth2/authorize sent the browser here with a signed query; every sign-in request
+    // carries it so Better Auth resumes that authorization (back to the app) instead of landing on "/".
+    const oauthQuery=(${signedOAuthQuery.toString()})(location.search);
+    const withOAuth=b=>oauthQuery?{...b,oauth_query:oauthQuery}:b;
+    // After a sign-in, follow the resumed authorization when Better Auth returns one.
+    const land=d=>location.assign(d&&typeof d.url==='string'&&d.url?d.url:'/');
     const unwrap=x=>x.data||x;
     async function request(path,payload){
       const res=await fetch('/api/auth'+path,{method:'POST',headers:{'Content-Type':'application/json'},
@@ -60,26 +67,25 @@ export function signInPage(providers: string[], passwordEnabled: boolean, enterp
     const signInError=new URLSearchParams(location.search).get('error');
     if(signInError&&/^[A-Za-z_]{1,64}$/.test(signInError))status.textContent=Object.hasOwn(signInErrors,signInError)?signInErrors[signInError]:('Sign-in failed ('+signInError+').');
     document.querySelectorAll('[data-provider]').forEach(b=>b.onclick=async()=>{
-      try{const d=await request('/sign-in/social',{provider:b.dataset.provider,callbackURL:'/',errorCallbackURL:'/sign-in'});
+      try{const d=await request('/sign-in/social',withOAuth({provider:b.dataset.provider,callbackURL:'/',errorCallbackURL:'/sign-in'}));
         if(!d.url)throw Error('No OAuth redirect URL');location.assign(d.url);
       }catch(e){status.textContent=e.message}
     });
     const pwd=document.getElementById('password-submit');
     if(pwd)pwd.onclick=async()=>{
       try{
-        const d=await request('/sign-in/email',{email:document.getElementById('email').value,
-          password:document.getElementById('password').value});
+        const d=await request('/sign-in/email',withOAuth({email:document.getElementById('email').value,
+          password:document.getElementById('password').value}));
         if(d.twoFactorRedirect){
           document.getElementById('two-factor').hidden=false;
           status.textContent='Enter the code from your authenticator to finish signing in.';
-        }else location.assign('/');
+        }else land(d);
       }catch(e){status.textContent=e.message}
     };
     const totp=document.getElementById('two-factor-submit');
     if(totp)totp.onclick=async()=>{
       try{
-        await request('/two-factor/verify-totp',{code:document.getElementById('totp-code').value,trustDevice:false});
-        location.assign('/');
+        land(await request('/two-factor/verify-totp',withOAuth({code:document.getElementById('totp-code').value,trustDevice:false})));
       }catch(e){status.textContent=e.message}
     };
     const sso=document.getElementById('sso-submit');
@@ -87,7 +93,7 @@ export function signInPage(providers: string[], passwordEnabled: boolean, enterp
       try{
         // Nathan routes the email domain to its enabled SAML or verified OIDC connection.
         const res=await fetch('/sign-in/sso/start',{method:'POST',headers:{'Content-Type':'application/json'},
-          credentials:'same-origin',body:JSON.stringify({email:document.getElementById('sso-email').value})});
+          credentials:'same-origin',body:JSON.stringify(withOAuth({email:document.getElementById('sso-email').value}))});
         const d=unwrap(await res.json().catch(()=>({})));if(!res.ok)throw Error(d.error||d.message||'SSO provider unavailable');
         if(!d.url)throw Error('SSO provider unavailable');
         location.assign(d.url);
@@ -114,8 +120,7 @@ export function signInPage(providers: string[], passwordEnabled: boolean, enterp
             signature:encode(cred.response.signature),
             userHandle:cred.response.userHandle?encode(cred.response.userHandle):undefined},
           clientExtensionResults:cred.getClientExtensionResults()};
-        await request('/passkey/verify-authentication',{response});
-        location.assign('/');
+        land(await request('/passkey/verify-authentication',withOAuth({response})));
       }catch(e){status.textContent=e.message}
     };
   `);

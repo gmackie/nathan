@@ -112,14 +112,17 @@ export async function handleSamlRoutes(request:Request,env:AuthEnv,auth:any,url:
       return reject(403,"Cross-origin request denied");
     if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")return reject(415,"JSON required");
     const raw=await request.text();
-    if(raw.length>2048)return reject(413,"Request too large");
+    // An app's signed authorization query (oauth_query) rides along, so allow its size.
+    if(raw.length>8192)return reject(413,"Request too large");
     let body:any;try{body=JSON.parse(raw)}catch{return reject(400,"Invalid JSON")}
     const target=await resolveSsoConnection(env.DB,typeof body?.email==="string"?body.email.trim():"");
     if(!target)return reject(404,"No enterprise sign-in is configured for this email domain");
     const headers=new Headers({"Content-Type":"application/json",Origin:issuer.origin});
     for(const h of ["Cookie","User-Agent","cf-connecting-ip"]){const v=request.headers.get(h);if(v)headers.set(h,v);}
     return auth.handler(new Request(issuer.origin+"/api/auth/sign-in/sso",{method:"POST",headers,
-      body:JSON.stringify({providerId:target.providerId,providerType:target.type,callbackURL:"/"})}));
+      body:JSON.stringify({providerId:target.providerId,providerType:target.type,callbackURL:"/",
+        // Better Auth verifies the signature; anything else is dropped.
+        ...(typeof body?.oauth_query==="string"&&body.oauth_query.length<=6144?{oauth_query:body.oauth_query}:{})})}));
   }
   if(url.pathname==="/studio/api/saml"&&request.method==="GET"){
     if(!await adminSession(auth,env,request))return reject(403,"Admin enrollment incomplete");
