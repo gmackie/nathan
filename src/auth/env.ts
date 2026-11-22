@@ -11,6 +11,8 @@ export interface AuthEnv {
   NATHAN_BOOTSTRAP_REQUIRED?: string;
   NATHAN_ADMIN_STEPUP_REQUIRED?: string;
   NATHAN_ISSUER: string;
+  /** NATH-43: passkey relying-party display name (default "Nathan"); the rpID is the issuer hostname. */
+  NATHAN_PASSKEY_RP_NAME?: string;
   NATHAN_REALM_APEX?: string;
   NATHAN_ADMIN_EMAILS: string;
   ENABLE_PASSWORD: string;
