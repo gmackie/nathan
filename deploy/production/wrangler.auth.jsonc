@@ -16,7 +16,7 @@
     {
       "binding": "DB",
       "database_name": "nathan-prod-auth",
-      "database_id": "REPLACE_WITH_PRODUCTION_D1_ID",
+      "database_id": "5dde28ff-338c-475c-a72d-e775eb594a1b",
       "migrations_dir": "../../migrations"
     }
   ],
