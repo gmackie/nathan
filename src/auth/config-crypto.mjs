@@ -87,3 +87,30 @@ export async function sealProviderCredentials(provider,values,masterKey){
   for(const name of secrets)if(!sealed[name])throw Error("Missing provider secret field");
   return {clientId:values.clientId,config:JSON.stringify(config),secretFields:JSON.stringify(sealed)};
 }
+
+/**
+ * NATH-12: a Nathan-generated secret (for example the SAML IdP signing key) sealed under
+ * NATHAN_CONFIG_KEY with AAD "nathan:<purpose>", so a ciphertext cannot be moved to another
+ * purpose or record. `purpose` names the record, e.g. "saml-idp-key:v1:<key id>".
+ */
+const PURPOSE=/^[a-z][a-z0-9-]{0,40}:v[0-9]+:[A-Za-z0-9_-]{1,80}$/;
+function purposeAad(purpose){
+  if(typeof purpose!=="string"||!PURPOSE.test(purpose))throw Error("Invalid secret purpose");
+  return enc.encode("nathan:"+purpose);
+}
+export async function sealConfigSecret(purpose,secret,masterKey){
+  const additionalData=purposeAad(purpose);
+  if(typeof secret!=="string"||secret.length<1||secret.length>16384)throw Error("Invalid secret");
+  const iv=crypto.getRandomValues(new Uint8Array(12));
+  const cipher=await crypto.subtle.encrypt({name:"AES-GCM",iv,additionalData},await key(masterKey),enc.encode(secret));
+  return "v1."+base64url(iv)+"."+base64url(new Uint8Array(cipher));
+}
+export async function openConfigSecret(purpose,value,masterKey){
+  const additionalData=purposeAad(purpose);
+  if(typeof value!=="string")throw Error("Invalid sealed secret");
+  const parts=value.split(".");
+  if(parts.length!==3||parts[0]!=="v1")throw Error("Unsupported sealed secret format");
+  const iv=fromBase64Url(parts[1]),cipher=fromBase64Url(parts[2]);
+  if(iv.length!==12||cipher.length<17||cipher.length>24000)throw Error("Malformed sealed secret");
+  return dec.decode(await crypto.subtle.decrypt({name:"AES-GCM",iv,additionalData},await key(masterKey),cipher));
+}

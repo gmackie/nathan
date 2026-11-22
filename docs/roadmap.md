@@ -37,6 +37,15 @@
 - [x] Wizard-vs-Studio settings/recovery guide: [setup-lifecycle.md](setup-lifecycle.md).
 - [x] Inbound enterprise SAML (NATH-10): samlify/xmldom proven in workerd; IdP metadata validator (Okta/Entra/Google shapes); hardened plugin plus Nathan's pre-parse message guard (duplicate SAML parameters refused so the checked message is the processed one; SHA-1/MD5 rejected including POSTed XML signatures, which the plugin's onDeprecated does not cover; encrypted content refused), 2 minute skew, timestamps, SP-initiated only, InResponseTo and assertion replay protection); Studio connections that start disabled, require DNS-verified domains, rotate certificates (compare-and-swap) and warn before expiry; audited metadata preview; invitation-only or just-in-time provisioning limited to the verified domain; "Sign in with SSO" domain routing. Runtime-tested in workerd with a test IdP; live IdP tenants pending ([saml.md](saml.md)).
 
+## Nathan as a SAML identity provider (NATH-12; implemented source, staging pending)
+
+- [x] SPs (AWS IAM Identity Center, Salesforce, Grafana, any SAML 2.0 SP) registered in Identity Studio from metadata (pasted or fetched over HTTPS without redirects) or by hand: disabled by default, bound to one Nathan application, exact HTTPS ACS URLs, persistent pairwise NameIDs unless email is chosen, attribute mapping (email, name, the bound app's roles, permissions and granting groups), optional signed AuthnRequests, Response signing, passkey requirement and IdP-initiated sign-in. Admin with step-up, exact confirmation, audited (migration 0018).
+- [x] IdP signing keys generated in the Worker (RSA 2048/3072/4096, self-signed SHA-256 certificate), sealed under NATHAN_CONFIG_KEY with purpose AAD, never returned; rotation publishes the next certificate in metadata, activates it after a 24 h overlap and retires the old key. Global metadata at `/saml/idp/metadata`, SSO for HTTP-Redirect and HTTP-POST at `/saml/idp/sso`.
+- [x] SP-initiated SSO through one strict parser (inbound lessons: one of each parameter, canonical encoding, no body on GET, processed bytes = inspected bytes, POST requests processed from the signed bytes), registered/enabled SP, exact ACS, signatures when required, 5-minute freshness and single-use request IDs in D1; a signed single-use resume handle across sign-in; issuance only after NATH-13 allows the bound app and ban, SCIM, admission and email checks pass; signed assertion (RSA-SHA256, exclusive c14n, ≤ 5 min, audience/recipient/InResponseTo) on an auto-POST page with nonce CSP and `form-action` limited to the ACS origin. AuthnContextClassRef only from passkey evidence. Every assertion audited (SP, user, outcome).
+- [x] Unsigned AuthnRequests answered with a pre-existing session need the user's confirmation on Nathan's page (forged cross-site requests cannot auto-post an assertion); ACS indexes resolved by the SP metadata's values; bounded body reads; a reason code on every refusal.
+- [x] Workerd-tested with samlify's ServiceProvider validating Nathan's responses (Redirect and POST, signed requests, tampering, signature wrapping, every refusal case with its reason code, the confirmation page, rotation gates through the overlap, 3072/4096-bit keys), each test on its own SP and independent of order. [Guide](saml-idp.md).
+- [ ] Verify against real AWS IAM Identity Center, Salesforce and Grafana tenants on staging (including the `form-action` check for ACS endpoints that redirect cross-origin). Single logout is not implemented.
+
 ## Roles and minimal RBAC (NATH-13; implemented source, staging pending)
 
 - [x] Per-app permissions, roles, groups, members and grants (migration 0011) with both NATH-1 access modes; deny by default; legacy role lists migrated without changing any current decision.
@@ -126,7 +135,7 @@
 
 - Custom plugin approvals and isolation for out-of-process extensions.
 - SCIM ingress/egress and verified enterprise OIDC provisioning. SAML follow-ups: encrypted assertions, signed AuthnRequests, single logout, scheduled metadata refresh.
-- Nathan as a SAML identity provider for downstream applications (NATH-12).
+- SAML IdP follow-ups (NATH-12 shipped the base): single logout, encrypted assertions, outbound SCIM to SPs, AWS IAM role-ARN attributes, honouring RequestedAuthnContext.
 - Authentik-style flow designer. Rich authorization policy (conditions, approvals, resource rules) belongs to Gatekeeper, which reads Nathan's roles.
 - RADIUS/LDAP/SSH/non-HTTP outposts via native edge agents.
 

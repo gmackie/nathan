@@ -1,6 +1,6 @@
 # Inbound enterprise SAML
 
-Nathan can let a company's own identity provider (IdP) sign its people in to Nathan over SAML 2.0. Nathan is the **service provider (SP)**: it receives signed assertions from Okta, Microsoft Entra ID, Google Workspace or another SAML 2.0 IdP and then acts as the OIDC issuer for your applications as usual. Nathan acting as a SAML *IdP* for downstream apps is a separate, later feature (NATH-12).
+Nathan can let a company's own identity provider (IdP) sign its people in to Nathan over SAML 2.0. Nathan is the **service provider (SP)**: it receives signed assertions from Okta, Microsoft Entra ID, Google Workspace or another SAML 2.0 IdP and then acts as the OIDC issuer for your applications as usual. Nathan acting as a SAML *IdP* for downstream apps is a separate feature (NATH-12, [saml-idp.md](saml-idp.md)).
 
 > **Status (NATH-10):** source, unit tests and workerd runtime tests are complete. Signed logins and every rejection case below are tested against the built Worker in workerd with a test IdP. The DNS TXT domain check is tested in workerd with the lookup mocked at its real boundary (workerd's `node:dns` resolves over DNS-over-HTTPS at `cloudflare-dns.com`). Not yet verified: real Okta, Entra or Google tenants; DNS TXT verification against live DNS from a deployed Worker; staging. Treat a connection as untested until you have signed in through it on staging.
 

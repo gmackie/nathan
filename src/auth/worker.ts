@@ -30,6 +30,7 @@ import { deliverLogouts } from "./logout-queue";
 import { scimUserOperation, scimOutboxView, skipScimOutbox, SCIM_REVIEW_ERRORS } from "./scim/reviews";
 import { admissionOverview, applyAdmissionOperation, ADMISSION_ERRORS } from "./admission";
 import { healthResponse } from "./health";
+import { handleSamlIdp, samlIdpReturnRedirect, pruneSamlIdp } from "./saml-idp";
 
 function reject(status: number, reason: string) {
   return Response.json({ error: reason }, { status, headers: { "Cache-Control": "no-store" } });
@@ -57,13 +58,16 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
   if (isMcpOAuthPath(url.pathname)) return handleMcpOAuth(request, env, auth);
   if (url.pathname === "/mcp") return handleMcp(request,env,auth);
   if (url.pathname.startsWith("/directory/")) return handleDirectory(request,env,auth);
+  // NATH-12: Nathan as a SAML IdP for downstream service providers (src/auth/saml-idp.ts).
+  const samlIdp = await handleSamlIdp(request, env, auth, url);
+  if (samlIdp) return samlIdp;
   if (url.pathname.startsWith("/api/auth/") || url.pathname.startsWith("/.well-known/")) {
     if(isRawManagementEndpoint(url.pathname))return reject(404,"Management route unavailable; use the protected Identity Studio");
     const samlGate=await samlProtocolGate(request,env,url);
     if(samlGate)return samlGate;
     return auth.handler(request);
   }
-  if (url.pathname === "/") return (await mcpReturnRedirect(request, env, auth)) ?? Response.redirect(issuer.origin + "/sign-in", 302);
+  if (url.pathname === "/") return (await mcpReturnRedirect(request, env, auth)) ?? (await samlIdpReturnRedirect(request, env)) ?? Response.redirect(issuer.origin + "/sign-in", 302);
   if (url.pathname === "/sign-in" && request.method === "GET") {
     const providers = enabledProviderIds(socialProviders);
     return signInPage(providers, env.ENABLE_PASSWORD === "true", env.ENTERPRISE_SSO === "true");
@@ -532,6 +536,7 @@ export default {
     await env.DB.prepare("DELETE FROM nathan_mcp_limits WHERE expires_at < unixepoch()").run();
     await pruneRbacChanges(env);
     await pruneMcp(env);
+    await pruneSamlIdp(env);
     // NATH-11: retry due back-channel logouts (connection Durable Objects also retry their own).
     await deliverLogouts(env,{limit:100}).catch(()=>{});
   }

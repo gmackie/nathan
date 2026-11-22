@@ -50,6 +50,7 @@ Visit \`https://login.example.com/studio\` as a fully enrolled administrator. Se
 | OIDC provider and RP clients | Enabled with initial Worker | Register individual external/Worker/gateway clients, including reviewed subdomain batches |
 | Enterprise OIDC federation | SSO plugin opt-in | Register provider, obtain DNS TXT challenge, verify domain before login |
 | Enterprise SAML federation | SSO plugin opt-in | Create from validated IdP metadata (disabled), verify domain, enable, choose provisioning, rotate certificates ([saml.md](saml.md)) |
+| SAML applications (Nathan as IdP) | Nothing until an administrator generates a signing key | Generate and rotate the IdP signing key, register SPs bound to an application (disabled), enable/disable, update ([saml-idp.md](saml-idp.md)) |
 | SCIM directory | Optional disabled initial directory connection | Create, list, enable/disable and rotate bearer token |
 | Passkeys / TOTP | Enrollment required to complete initial admin | Self-service enrollment, authenticator inspection and passkey reauthentication |
 | MFA posture | Standard or Business profile | View effective policy and *increase* admin requirements without redeploying |
