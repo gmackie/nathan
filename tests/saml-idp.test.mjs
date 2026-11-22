@@ -17,6 +17,7 @@ import {
   AC_UNSPECIFIED, xmlEscape, SamlRequestError
 } from "../src/auth/saml-idp-protocol.mjs";
 import { makeCertificate } from "./fixtures/x509.mjs";
+import { readBoundedText } from "../src/auth/bounded-body.mjs";
 import { deflateRawSync } from "node:zlib";
 
 samlify.setSchemaValidator({ async validate(xml) { if (XMLValidator.validate(xml) === true) return "ok"; throw Error("invalid xml"); } });
@@ -258,4 +259,18 @@ test("0018 is the only 0018 migration, is packaged with the release and enforces
   assert.equal(db.prepare("SELECT enabled, name_id_format AS f, allow_idp_initiated AS i FROM nathan_saml_service_providers WHERE id='a'").get().enabled, 0, "disabled by default");
   assert.throws(() => sp("b", 1, "[]"), /CHECK/, "signed requests need a certificate");
   assert.throws(() => db.prepare("INSERT INTO nathan_saml_service_providers(id,name,entity_id,app_id,acs_urls,created_by,updated_by) VALUES ('c','c','urn:c','missing','[]','a','a')").run(), /FOREIGN KEY|constraint/i);
+});
+
+test("bounded body reads count bytes, not characters, and stop at the limit without Content-Length", async () => {
+  const twoByte = "é".repeat(100);
+  const streamed = (text, pulled = { bytes: 0 }) => new Request("https://login.example.com/x", { method: "POST", duplex: "half",
+    body: new ReadableStream({ pull(c) { const b = new TextEncoder().encode(text); pulled.bytes += b.length; c.enqueue(b); } }) });
+  assert.equal(await readBoundedText(new Request("https://login.example.com/x", { method: "POST", body: twoByte }), 200), twoByte);
+  assert.equal(await readBoundedText(new Request("https://login.example.com/x", { method: "POST", body: twoByte }), 199), null, "200 bytes even though only 100 characters");
+  const pulled = { bytes: 0 };
+  assert.equal(await readBoundedText(streamed("a".repeat(65536), pulled), 200_000), null, "an endless stream is cut off");
+  assert.ok(pulled.bytes <= 200_000 + 2 * 65536, "read stops right after the limit: " + pulled.bytes);
+  const declared = new Request("https://login.example.com/x", { method: "POST", body: "x", headers: { "Content-Length": "999999" } });
+  assert.equal(await readBoundedText(declared, 1000), null, "a declared length over the limit is refused before reading");
+  assert.equal(await readBoundedText(new Request("https://login.example.com/x"), 10), "", "no body reads as empty");
 });

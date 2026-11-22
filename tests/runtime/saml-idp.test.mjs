@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import * as samlify from "samlify";
 import { XMLValidator } from "fast-xml-parser";
 import { deflateRawSync } from "node:zlib";
-import { authWorker, cookiesOf, randomKey, enrollAdmin, insertSession, studioPost } from "./helpers.mjs";
+import { authWorker, cookiesOf, randomKey, enrollAdmin, insertSession, studioPost, rawHttp } from "./helpers.mjs";
 import { makeCertificate } from "../fixtures/x509.mjs";
 
 // samlify's XSD schema validation is replaced by a well-formedness check (it needs a JVM or a
@@ -470,4 +470,17 @@ test("key rotation: next key published first, activation after the overlap, SPs 
   assert.equal((await db.prepare("SELECT private_key FROM nathan_saml_idp_keys WHERE status='retired'").first()).private_key, null, "a retired key's private key is deleted");
   for (const action of ["saml_idp_key_generate", "saml_idp_key_activate", "saml_idp_key_retire"])
     assert.ok((await auditRows(action, "%")).some(r => r.outcome === "succeeded"), action);
+});
+
+test("request bodies are read with a byte limit: a chunked body without Content-Length stops at the limit (413)", async () => {
+  const HUGE = 40e6;
+  const sso = await rawHttp(mf, HOST, { method: "POST", path: "/saml/idp/sso", chunked: HUGE,
+    headers: { "Content-Type": "application/x-www-form-urlencoded", "cf-connecting-ip": "10.77.0.1" } });
+  assert.equal(sso.status, 413, sso.text.slice(0, 300));
+  assert.match(sso.text, /\(saml_unreadable\)/);
+  assert.ok(sso.written < 8e6, "Nathan stopped reading near the 200 KB limit, but " + sso.written + " bytes were accepted");
+  const studioPage = await rawHttp(mf, HOST, { method: "POST", path: "/studio/api/saml-idp", chunked: HUGE,
+    headers: { "Content-Type": "application/json", Origin: ORIGIN, "Sec-Fetch-Site": "same-origin", Cookie: admin } });
+  assert.equal(studioPage.status, 413, studioPage.text.slice(0, 300));
+  assert.ok(studioPage.written < 8e6, "Studio stopped reading near the 160 KB limit, but " + studioPage.written + " bytes were accepted");
 });

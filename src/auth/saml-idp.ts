@@ -28,6 +28,7 @@ import { userBanned, timestampMs } from "../shared/token-claims.mjs";
 import { makeCookie, parseCookie, redirectWithCookies, constantTimeEqual } from "../shared/security.mjs";
 import { sealConfigSecret, openConfigSecret } from "./config-crypto.mjs";
 import { fetchIdpMetadata } from "./saml-metadata.mjs";
+import { readBoundedText } from "./bounded-body.mjs";
 import { generateSigningKey, importSigningKey, KEY_SIZES } from "./saml-idp-keys.mjs";
 import {
   SamlRequestError, idpValues, parseBindingParameters, REDIRECT_PARAMETERS, POST_PARAMETERS, decodeRedirectRequest, decodePostRequest,
@@ -42,6 +43,7 @@ const REPLAY_SECONDS = 900;
 /** A next key must be published this long before it may sign (SPs cache metadata). */
 export const ROTATION_OVERLAP_SECONDS = 86400;
 const noStore = { "Cache-Control": "no-store" };
+const STUDIO_MAX_BYTES = 160_000;
 
 type Attribute = { name: string; source: string };
 type Certificate = { der: string; sha256: string; notAfter: string };
@@ -140,9 +142,8 @@ async function sso(request: Request, env: AuthEnv, url: URL): Promise<Response> 
       if (url.search) fail("saml_unknown_parameter", "The HTTP-POST binding carries no query parameters");
       if (request.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() !== "application/x-www-form-urlencoded")
         fail("saml_form_required", "SAML messages must use the form-encoded HTTP-POST binding", 415);
-      if (Number(request.headers.get("Content-Length") ?? 0) > MAX_FORM_BYTES) fail("saml_unreadable", "SAML request is too large", 413);
-      const raw = await request.text();
-      if (raw.length > MAX_FORM_BYTES) fail("saml_unreadable", "SAML request is too large", 413);
+      const raw = await readBoundedText(request, MAX_FORM_BYTES);
+      if (raw === null) return fail("saml_unreadable", "SAML request is too large", 413);
       params = parseBindingParameters(raw, POST_PARAMETERS);
       binding = "post";
     } else {
@@ -513,8 +514,8 @@ async function studio(request: Request, env: AuthEnv, auth: any): Promise<Respon
   if (!await isAdminPrincipal(session?.user, env) || !await mayAdminister(env, session!.user.id, session!.session.id))
     return reject(403, "Verified administrator with completed enrollment and recent passkey required");
   if (request.method === "GET") return Response.json(await samlIdpOverview(env), { headers: noStore });
-  const raw = await request.text();
-  if (raw.length > 160_000) return reject(413, "Request too large");
+  const raw = await readBoundedText(request, STUDIO_MAX_BYTES);
+  if (raw === null) return reject(413, "Request too large");
   let body: any; try { body = JSON.parse(raw); } catch { return reject(400, "Invalid JSON"); }
   try { return Response.json(await applySamlIdpOperation(env, body, session!.user.id), { headers: noStore }); }
   catch (e) { return reject(409, publicMessage(e)); }

@@ -152,3 +152,43 @@ export async function nathanClientToken(fetcher, { issuer, clientId, clientSecre
   if (response.status !== 200 || !body.access_token) throw Error("Nathan client-credentials request failed: " + response.status + " " + JSON.stringify(body));
   return body.access_token;
 }
+
+/**
+ * One raw HTTP/1.1 exchange with a Miniflare instance, for requests fetch() cannot make: a body on
+ * GET, or a chunked body without Content-Length. MF-Original-URL tells Miniflare's entry the public
+ * https URL. `body` is sent in one write with Content-Length; `chunked` streams that many bytes of
+ * filler in 64 KiB chunks and stops as soon as a response arrives. Returns the status, the raw
+ * response text and how many body bytes were written.
+ */
+export async function rawHttp(mf, host, { method = "GET", path = "/", headers = {}, body, chunked } = {}) {
+  const { connect } = await import("node:net");
+  const base = new URL(await mf.ready);
+  const payload = body === undefined ? null : Buffer.from(body);
+  const head = [method + " " + path + " HTTP/1.1", "Host: " + host, "Connection: close", "MF-Original-URL: https://" + host + path,
+    ...(chunked ? ["Transfer-Encoding: chunked"] : payload ? ["Content-Length: " + payload.length] : []),
+    ...Object.entries(headers).map(([k, v]) => k + ": " + v)].join("\r\n") + "\r\n\r\n";
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let written = 0, answered = false, socketError = null;
+    const socket = connect(Number(base.port), base.hostname, async () => {
+      if (!chunked) return socket.end(payload ? Buffer.concat([Buffer.from(head), payload]) : head);
+      socket.write(head);
+      const filler = Buffer.alloc(65536, "a");
+      while (!answered && !socket.destroyed && written < chunked) {
+        const piece = filler.subarray(0, Math.min(filler.length, chunked - written));
+        const flushed = socket.write(Buffer.concat([Buffer.from(piece.length.toString(16) + "\r\n"), piece, Buffer.from("\r\n")]));
+        written += piece.length;
+        if (!flushed) await new Promise(r => { socket.once("drain", r); socket.once("close", r); });
+        else await new Promise(r => setImmediate(r));
+      }
+      if (!answered && !socket.destroyed) socket.end("0\r\n\r\n");
+    });
+    socket.on("data", c => { answered = true; chunks.push(c); });
+    socket.on("error", e => { socketError = e; });
+    socket.on("close", () => {
+      const text = Buffer.concat(chunks).toString("utf8");
+      if (!text) return reject(socketError ?? new Error("no response"));
+      resolve({ status: Number(text.split(" ")[1]), text, written });
+    });
+  });
+}
