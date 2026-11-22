@@ -258,6 +258,20 @@ test("ForceAuthn needs a sign-in after the request; IsPassive never prompts", as
   const response = await redirectLogin(manual(s.entity, ' ForceAuthn="true"'));
   const fresh = await form(await continueWith(response, (await insertSession(db, SECRET, "jane")).cookie));
   assert.equal(fresh.action, s.acs, "a session created for this request is accepted");
+  // The boundary, in milliseconds: a session created at the request's instant counts, one 1 ms older does not.
+  const atBoundary = async offsetMs => {
+    const sso = await redirectLogin(manual(s.entity, ' ForceAuthn="true"'));
+    const { requested } = await db.prepare("SELECT requested_at_ms AS requested FROM nathan_saml_idp_pending WHERE sp_id=? AND used=0 ORDER BY requested_at_ms DESC LIMIT 1").bind(s.id).first();
+    const session = await insertSession(db, SECRET, "jane");
+    await run('UPDATE "session" SET "createdAt"=? WHERE "id"=?', new Date(Number(requested) + offsetMs).toISOString(), session.id);
+    return continueWith(sso, session.cookie, { confirm: false });
+  };
+  assert.ok(confirmationToken(await (await atBoundary(0)).text()), "created at the request's instant: fresh (then confirmed, it is unsigned)");
+  assert.equal((await atBoundary(-1)).headers.get("location"), ORIGIN + "/sign-in", "1 ms older: sign in again");
+  // Re-authenticating is not consent: a forged unsigned ForceAuthn request still asks after the new sign-in.
+  const forcedForged = await continueWith(await redirectLogin(manual(s.entity, ' ForceAuthn="true"', undefined, "&RelayState=evil")),
+    (await insertSession(db, SECRET, "jane")).cookie, { confirm: false });
+  assert.ok(confirmationToken(await forcedForged.text()), "the confirmation page, not an auto-post");
   await refused(await continueWith(await redirectLogin(manual(s.entity, ' IsPassive="true"'))), "passive without a session", "saml_passive_requires_sign_in");
   assert.equal((await auditRows("saml_idp_assertion", s.id)).at(-1).outcome, "denied:passive_requires_sign_in");
 });
@@ -315,7 +329,9 @@ test("without a Nathan session the browser signs in first and resumes through '/
   const home = await dispatch(ORIGIN + "/", { redirect: "manual", headers: { Cookie: resume + "; " + signedIn } });
   assert.equal(home.headers.get("location"), ORIGIN + "/saml/idp/continue");
   const page = await dispatch(ORIGIN + "/saml/idp/continue", { headers: { Cookie: resume + "; " + signedIn } });
-  await s.sp.parseLoginResponse(s.idp, "post", { body: { SAMLResponse: (await form(page)).SAMLResponse } });
+  const token = confirmationToken(await page.text());
+  assert.ok(token, "an unsigned request is confirmed even right after a sign-in");
+  await s.sp.parseLoginResponse(s.idp, "post", { body: { SAMLResponse: (await form(await confirmPost(resume, signedIn, token))).SAMLResponse } });
   await refused(await dispatch(ORIGIN + "/saml/idp/continue", { headers: { Cookie: resume + "; " + signedIn } }), "the pending request is single use", "saml_resume_used");
 });
 
@@ -387,6 +403,17 @@ test("signed AuthnRequests: required means unsigned is refused; Redirect and POS
   assert.equal(viaRedirect.action, s.acs);
   const viaPost = await form(await continueWith(await postLogin({ SAMLRequest: signer.createLoginRequest(signingIdp, "post").context }), user, { confirm: false }));
   assert.equal(viaPost.action, s.acs);
+  // The POST signature covers the XML, not the RelayState field: with a RelayState the user confirms.
+  const postWithRelay = await continueWith(await postLogin({ SAMLRequest: signer.createLoginRequest(signingIdp, "post").context, RelayState: "https://attacker.example/x" }), user, { confirm: false });
+  assert.ok(confirmationToken(await postWithRelay.text()), "signed POST with an unsigned RelayState: confirmed");
+  // The Redirect signature covers RelayState, so a signed Redirect request with one goes straight through.
+  const relaySigner = serviceProvider(s.entity, s.acs, { authnRequestsSigned: true, privateKey: spKey.privateKey, signingCert: spKey.certPem,
+    requestSignatureAlgorithm: "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256", relayState: "rs-signed" });
+  const relayUrl = relaySigner.createLoginRequest(signingIdp, "redirect").context;
+  assert.match(relayUrl, /RelayState=rs-signed/);
+  const redirectWithRelay = await form(await continueWith(await redirectLogin(relayUrl), user, { confirm: false }));
+  assert.equal(redirectWithRelay.action, s.acs);
+  assert.equal(redirectWithRelay.RelayState, "rs-signed");
   // A signature from another key, or over a different message, is refused.
   const otherKey = makeCertificate();
   const impostor = serviceProvider(s.entity, s.acs, { authnRequestsSigned: true, privateKey: otherKey.privateKey, signingCert: otherKey.certPem,
@@ -599,20 +626,44 @@ test("the confirmation expires, Cancel issues nothing, and an unsigned IsPassive
   await refused(await confirmPost(cancel.resume, user, cancel.token), "Continue after Cancel", "saml_resume_used");
   assert.equal((await auditRows("saml_idp_assertion", s.id)).at(-1).outcome, "denied:cancelled");
 
+  // Continue for a request whose page was never shown, and a reload that replaces the token.
+  const unseen = resumeCookie(await redirectLogin(manual(s.entity), user));
+  await refused(await confirmPost(unseen, user, randomKey()), "Continue without the page", "saml_confirmation_invalid");
+  const reloaded = await pageFor();
+  const again = confirmationToken(await (await dispatch(ORIGIN + "/saml/idp/continue", { headers: { Cookie: reloaded.resume + "; " + user } })).text());
+  assert.ok(again && again !== reloaded.token);
+  await refused(await confirmPost(reloaded.resume, user, reloaded.token), "the first page's token after a reload", "saml_confirmation_invalid");
+  assert.equal((await form(await confirmPost(reloaded.resume, user, again))).action, s.acs, "the reloaded page's token works");
+  // The SP is disabled, or its ACS URL removed, between the page and Continue.
+  const disabled = await pageFor();
+  await ok(await studio({ op: "sp.status", id: s.id, enabled: false, confirm: "CONFIRM DISABLE SAML SP " + s.id }));
+  await refused(await confirmPost(disabled.resume, user, disabled.token), "SP disabled after the page", "saml_sp_unavailable");
+  assert.equal((await auditRows("saml_idp_assertion", s.id)).at(-1).outcome, "denied:sp_unavailable");
+  await ok(await studio({ op: "sp.status", id: s.id, enabled: true, confirm: "CONFIRM ENABLE SAML SP " + s.id }));
+  const moved = await pageFor();
+  await s.update({ acsUrls: ["https://" + s.host + "/saml/acs2"] });
+  await refused(await confirmPost(moved.resume, user, moved.token), "ACS removed after the page", "saml_acs_changed");
+  await s.update({ acsUrls: [s.acs] });
+
   await refused(await continueWith(await redirectLogin(manual(s.entity, ' IsPassive="true"'), user), user, { confirm: false }),
     "passive unsigned request with an older session", "saml_passive_requires_confirmation");
   assert.equal((await auditRows("saml_idp_assertion", s.id)).at(-1).outcome, "denied:passive_requires_confirmation");
 });
 
-test("no confirmation after a sign-in made for this request, or for a validly signed request", async () => {
+test("a sign-in is not consent: a request planted before an unrelated sign-in is still confirmed; a signature without Destination is not enough", async () => {
   const s = await freshSp();
-  // Interactive: no session when the request arrives; the user signs in, and the new session continues.
-  const sso = await redirectLogin(manual(s.entity));
+  // A page sends a signed-out browser to Nathan with an unsigned request and its own RelayState...
+  const sso = await redirectLogin(manual(s.entity, "", undefined, "&RelayState=" + encodeURIComponent("https://attacker.example/x")));
   const resume = resumeCookie(sso);
   assert.equal((await continueWith(sso)).headers.get("location"), ORIGIN + "/sign-in");
+  // ...later the user signs in to Nathan for something else, and "/" resumes the planted request.
   const signedIn = (await insertSession(db, SECRET, "jane")).cookie;
+  assert.equal((await dispatch(ORIGIN + "/", { redirect: "manual", headers: { Cookie: resume + "; " + signedIn } })).headers.get("location"), ORIGIN + "/saml/idp/continue");
   const page = await dispatch(ORIGIN + "/saml/idp/continue", { headers: { Cookie: resume + "; " + signedIn } });
-  assert.equal((await form(page)).action, s.acs, "straight to the SP");
+  const html = await page.text();
+  assert.equal(page.status, 200);
+  assert.doesNotMatch(html, /SAMLResponse/, "nothing is posted to the SP without the user's click");
+  assert.ok(confirmationToken(html), "the user is asked first");
   // Signed: covered in the signed-request test (Redirect and POST, older session, no confirmation).
   // A signature without Nathan as Destination is not enough to skip the confirmation.
   const spKey = makeCertificate({ cn: "Optional signer" });

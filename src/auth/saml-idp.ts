@@ -199,8 +199,10 @@ async function sso(request: Request, env: AuthEnv, url: URL): Promise<Response> 
     if (replay.meta.changes !== 1) fail("saml_replayed_request", "This sign-in request was already used; start again from the application");
     const handle = b64url(crypto.getRandomValues(new Uint8Array(32)));
     // Only a valid SP signature that names Nathan as Destination shows the SP itself sent this
-    // request to Nathan; anything else could come from any web page, so it may need confirming.
-    const signedForNathan = verified && parsed.destination === ssoUrl;
+    // request to Nathan; anything else could come from any web page, so the user confirms it.
+    // An HTTP-POST signature covers the XML only, not the RelayState form field, so a signed POST
+    // request that carries a RelayState is confirmed too (the Redirect signature covers RelayState).
+    const signedForNathan = verified && parsed.destination === ssoUrl && (binding === "redirect" || relayState === null);
     await env.DB.prepare("INSERT INTO nathan_saml_idp_pending(id_hash,sp_id,request_id,acs_url,relay_state,force_authn,is_passive,signed,requested_at_ms,expires_at) " +
       "VALUES (?,?,?,?,?,?,?,?,?,unixepoch()+?)")
       .bind(await sha256Hex(handle), sp.id, parsed.id, acsUrl, relayState, parsed.forceAuthn ? 1 : 0, parsed.isPassive ? 1 : 0, signedForNathan ? 1 : 0,
@@ -239,8 +241,8 @@ async function continueSso(request: Request, env: AuthEnv, auth: any): Promise<R
   const { pending, idHash, consume, expired }: Pending = found;
   const session = await auth.api.getSession({ headers: request.headers });
   const userId: string | null = typeof session?.user?.id === "string" ? session.user.id : null;
-  // ForceAuthn: only a session created after the request counts (unixepoch() has second precision).
-  const fresh = userId !== null && (pending.force_authn !== 1 || timestampMs(session.session.createdAt) >= (pending.created_at - 1) * 1000);
+  // ForceAuthn: only a session created after the request counts (both in milliseconds).
+  const fresh = userId !== null && (pending.force_authn !== 1 || timestampMs(session.session.createdAt) >= Number(pending.requested_at_ms));
   if (!fresh) {
     if (pending.is_passive === 1) {
       await consume();
@@ -254,10 +256,11 @@ async function continueSso(request: Request, env: AuthEnv, auth: any): Promise<R
   if (sp?.requirePasskey && !await passkeyEvidence(env, userId!, session.session.id))
     return refusal("Passkey sign-in required", sp.name + " requires a sign-in with your passkey. Sign in to Nathan with your passkey to continue.",
       "saml_passkey_required", { signIn: true });
-  // An unsigned request answered with a session that existed before it: any web page can send the
-  // browser here with such a request (the SP's entity ID is public), so the user confirms first.
-  const interactive = timestampMs(session.session.createdAt) >= Number(pending.requested_at_ms);
-  if (sp?.enabled && pending.signed !== 1 && !interactive) {
+  // Any web page can send the browser here with an unsigned request (the SP's entity ID is public),
+  // so the user always confirms it. A sign-in during the flow is not consent: the pending request is
+  // not tied to the sign-in (a page could plant it before an unrelated sign-in, or force one with
+  // ForceAuthn), and the sign-in page does not name the SP.
+  if (sp?.enabled && pending.signed !== 1) {
     if (pending.is_passive === 1) {
       await consume();
       await audit(env, userId!, "saml_idp_assertion", pending.sp_id, "denied:passive_requires_confirmation");
