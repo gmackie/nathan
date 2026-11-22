@@ -56,21 +56,29 @@ export async function completeBootstrap(env:AuthEnv,userId:string) {
   return {complete:true,identityVerified:true,authenticatorsEnrolled:true,
     note:"Initial admin setup is complete. These enrollment checks alone do not establish current-session MFA."};
 }
-/** For any administrator, enrollment is required before privileged UI and MCP. */
-export async function mayAdminister(env:AuthEnv,userId:string,sessionId?:string) {
-  if(env.NATHAN_BOOTSTRAP_REQUIRED!=="true")return true; // Legacy manual installations
+/**
+ * Why an administrator may or may not use privileged UI and MCP right now. `mayAdminister` is this
+ * decision as a boolean; the Studio API (src/auth/studio-api/authorize.ts) also reports the reason.
+ */
+export type AdminAssurance={ok:true}|{ok:false;reason:"enrollment_incomplete"|"step_up_required"};
+export async function adminAssurance(env:AuthEnv,userId:string,sessionId?:string):Promise<AdminAssurance> {
+  if(env.NATHAN_BOOTSTRAP_REQUIRED!=="true")return {ok:true}; // Legacy manual installations
   const b=await row(env);
-  if(!b||b.state!=="complete")return false;
+  if(!b||b.state!=="complete")return {ok:false,reason:"enrollment_incomplete"};
   const auth=await enrollment(env,userId);
   const policy=await effectiveAdminPolicy(env);
   const enrolled=policy.requireBothAuthenticators
     ?(auth.passkeys>0&&auth.totpVerified):(auth.passkeys>0||auth.totpVerified);
-  if(!enrolled)return false;
-  if(!policy.requireRecentPasskey)return true;
-  if(!sessionId || sessionId.length>256)return false;
+  if(!enrolled)return {ok:false,reason:"enrollment_incomplete"};
+  if(!policy.requireRecentPasskey)return {ok:true};
+  if(!sessionId || sessionId.length>256)return {ok:false,reason:"step_up_required"};
   const stepup=await env.DB.prepare(
     "SELECT session_id FROM nathan_admin_assurance WHERE session_id=? AND user_id=? "+
     "AND method='passkey' AND verified_at>=unixepoch()-900 LIMIT 1"
   ).bind(sessionId,userId).first();
-  return Boolean(stepup);
+  return stepup?{ok:true}:{ok:false,reason:"step_up_required"};
+}
+/** For any administrator, enrollment is required before privileged UI and MCP. */
+export async function mayAdminister(env:AuthEnv,userId:string,sessionId?:string) {
+  return (await adminAssurance(env,userId,sessionId)).ok;
 }
