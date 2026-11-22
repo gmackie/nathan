@@ -1,45 +1,16 @@
 /*
- * NATH-37: Nathan's theme as Kumo token overrides (token names from
- * @cloudflare/kumo/dist/styles/theme-kumo.css). Placeholder until the NATH-34 design pass picks
- * the gmacko look: Kumo's neutral palette with today's Nathan orange as the brand colour.
+ * NATH-37/NATH-34: Nathan's default look is stock Kumo on every surface, including the hosted
+ * pages. This file deliberately overrides no Kumo colour token.
  *
- * <html data-theme="nathan" data-mode="light|dark|system">. Kumo itself switches its tokens on
+ * <html data-theme="nathan" data-mode="light|dark|system">. Kumo switches its own tokens on
  * :root / :root[data-mode=dark]; build-ui.mjs adds the "system" mode (Kumo's dark tokens under
- * prefers-color-scheme: dark). This file is unlayered and loads after Kumo, so it wins.
+ * prefers-color-scheme: dark).
  *
- * Per-app branding (NATH-30b) may override only BRANDABLE_TOKENS in src/ui/theme.ts.
- * tests/ui-render.test.mjs checks the contrast of the pairs below.
- */
-
-[data-theme="nathan"] {
-  --color-kumo-brand: #ef9028;
-  --color-kumo-brand-hover: #f5a24a;
-  --text-color-kumo-brand: #a65300;
-  /* Text drawn on the brand colour (primary buttons). Contrast-critical, not brandable. */
-  --nathan-on-brand: #171717;
-}
-
-[data-theme="nathan"][data-mode="dark"] {
-  --color-kumo-brand: #ef9028;
-  --color-kumo-brand-hover: #f5a24a;
-  --text-color-kumo-brand: #f5aa62;
-  --nathan-on-brand: #171717;
-}
-
-@media (prefers-color-scheme: dark) {
-  [data-theme="nathan"][data-mode="system"] {
-    --color-kumo-brand: #ef9028;
-    --color-kumo-brand-hover: #f5a24a;
-    --text-color-kumo-brand: #f5aa62;
-    --nathan-on-brand: #171717;
-  }
-}
-
-/*
- * Kumo's primary Button forces white text (!text-white) over the brand colour. White on Nathan
- * orange is about 2.4:1, below WCAG AA, so Nathan draws dark text there (today's page() does the
- * same). The selector matches only emphasis (primary) buttons and link buttons.
+ * Hosted pages may be restyled by an instance or per-app appearance (src/ui/appearance.ts,
+ * DESIGN.md). renderPage emits appearanceCss() after this file; with no appearance it emits nothing.
+ * Primary buttons on a custom colorPrimary use the derived --nathan-on-brand text colour, because
+ * Kumo's primary Button forces white text.
  */
 [data-theme="nathan"] [data-kumo-component].bg-\(--kumo-button-emphasis-bg\) {
-  color: var(--nathan-on-brand) !important;
+  color: var(--nathan-on-brand, #ffffff) !important;
 }
