@@ -1,4 +1,5 @@
 import { betterAuth } from "better-auth";
+import { passkeyRpName } from "./passkey-config.mjs";
 import {createAuthMiddleware} from "better-auth/api";
 import { admin, jwt, organization, twoFactor } from "better-auth/plugins";
 import { passkey } from "@better-auth/passkey";
@@ -111,7 +112,7 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
       admin(),
       organization(),
       twoFactor({ allowPasswordless: true }),
-      passkey({ rpID: issuer.hostname, rpName: "Nathan" }),
+      passkey({ rpID: issuer.hostname, rpName: passkeyRpName(env) }),
       jwt({disableSettingJwtHeader:true,jwks:{rotationInterval:30*24*60*60,gracePeriod:30*24*60*60}}),
       oauthProvider({
         loginPage: "/sign-in",
