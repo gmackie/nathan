@@ -1,12 +1,20 @@
 /**
- * The passkey relying-party name: what iCloud Keychain, Google Password Manager and security-key
- * prompts show, and what is stored inside each passkey when it is created. Instance configuration
- * (NATHAN_PASSKEY_RP_NAME, e.g. "gmacko" for id.gmac.io; NATH-43), defaulting to "Nathan".
- * The relying-party ID stays the issuer hostname: it cannot change once passkeys exist.
+ * Instance naming (NATH-43). NATHAN_INSTANCE_NAME is what people see this identity provider called:
+ * the issuer label authenticator apps show for TOTP, Better Auth's appName, and by default the passkey
+ * relying-party name that iCloud Keychain, Google Password Manager and security-key prompts show (it
+ * is stored inside each passkey when created). "gmacko" for id.gmac.io; default "Nathan".
+ * NATHAN_PASSKEY_RP_NAME overrides the passkey name only. The passkey rpID stays the issuer hostname:
+ * it cannot change once passkeys exist.
  */
-export function passkeyRpName(env) {
-  const raw = typeof env?.NATHAN_PASSKEY_RP_NAME === "string" ? env.NATHAN_PASSKEY_RP_NAME.trim() : "";
-  if (!raw) return "Nathan";
-  if (raw.length > 64 || /[\u0000-\u001f\u007f<>]/.test(raw)) throw new Error("NATHAN_PASSKEY_RP_NAME must be 1-64 printable characters");
+function displayName(env, key) {
+  const raw = typeof env?.[key] === "string" ? env[key].trim() : "";
+  if (!raw) return null;
+  if (raw.length > 64 || /[\u0000-\u001f\u007f<>:]/.test(raw)) throw new Error(key + " must be 1-64 printable characters without < > or :");
   return raw;
+}
+export function instanceName(env) {
+  return displayName(env, "NATHAN_INSTANCE_NAME") ?? "Nathan";
+}
+export function passkeyRpName(env) {
+  return displayName(env, "NATHAN_PASSKEY_RP_NAME") ?? instanceName(env);
 }
