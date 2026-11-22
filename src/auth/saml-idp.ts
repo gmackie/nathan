@@ -120,10 +120,13 @@ async function metadata(env: AuthEnv) {
 // ---- SP-initiated SSO ----------------------------------------------------------------------------
 
 const fail = (code: string, message: string, status?: number): never => { throw new SamlRequestError(code, message, status); };
+/** Every page that refuses a sign-in names Nathan's reason code (the same code the audit log uses). */
+const refusal = (title: string, message: string, code: string, options: { status?: number; signIn?: boolean } = {}) =>
+  idpErrorPage(title, message + " (" + code + ")", options);
 
 async function sso(request: Request, env: AuthEnv, url: URL): Promise<Response> {
   if (!await allow(env, "sso", request.headers.get("cf-connecting-ip") ?? "unknown", 120))
-    return idpErrorPage("Too many sign-in requests", "Wait a minute and start the sign-in again from the application.", { status: 429 });
+    return refusal("Too many sign-in requests", "Wait a minute and start the sign-in again from the application.", "saml_rate_limited", { status: 429 });
   let spId = "unknown";
   try {
     let params: Map<string, { raw: string; value: string }>, binding: "redirect" | "post";
@@ -143,7 +146,7 @@ async function sso(request: Request, env: AuthEnv, url: URL): Promise<Response> 
       params = parseBindingParameters(raw, POST_PARAMETERS);
       binding = "post";
     } else {
-      return idpErrorPage("Method not allowed", "Use the HTTP-Redirect or HTTP-POST binding.", { status: 405 });
+      return refusal("Method not allowed", "Use the HTTP-Redirect or HTTP-POST binding.", "saml_method_not_allowed", { status: 405 });
     }
     const message = params.get("SAMLRequest");
     if (!message) return fail("saml_missing_request", "SAML message rejected: exactly one SAMLRequest is required");
@@ -196,33 +199,38 @@ async function sso(request: Request, env: AuthEnv, url: URL): Promise<Response> 
   } catch (e) {
     if (!(e instanceof SamlRequestError)) throw e;
     await auditRejection(env, spId, e.code);
-    return idpErrorPage("Sign-in request refused", e.message + " (" + e.code + ")", { status: e.status });
+    return refusal("Sign-in request refused", e.message, e.code, { status: e.status });
   }
 }
 
-/** The pending-request handle from the resume cookie, only when its HMAC verifies. */
-async function resumeHandle(env: AuthEnv, request: Request): Promise<string | null> {
+/**
+ * The pending-request handle from the resume cookie, only when its HMAC verifies; otherwise the
+ * reason: no cookie, or a cookie that is malformed, of the wrong length or not signed by Nathan.
+ */
+async function resumeHandle(env: AuthEnv, request: Request): Promise<{ handle: string } | { error: "saml_resume_missing" | "saml_resume_invalid" }> {
   const value = parseCookie(request.headers.get("Cookie"), RESUME_COOKIE);
-  if (!value || !/^[A-Za-z0-9_-]{86}$/.test(value)) return null;
+  if (!value) return { error: "saml_resume_missing" };
+  if (!/^[A-Za-z0-9_-]{86}$/.test(value)) return { error: "saml_resume_invalid" };
   const handle = value.slice(0, 43);
-  return constantTimeEqual(value.slice(43), await hmac(env, handle)) ? handle : null;
+  return constantTimeEqual(value.slice(43), await hmac(env, handle)) ? { handle } : { error: "saml_resume_invalid" };
 }
 const clearResume = () => makeCookie(RESUME_COOKIE, "", { deleteCookie: true });
 function withClearedResume(response: Response) { response.headers.append("Set-Cookie", clearResume()); return response; }
 
 /** After any sign-in Nathan lands on "/": continue a pending SAML request if this browser has one. */
 export async function samlIdpReturnRedirect(request: Request, env: AuthEnv): Promise<Response | null> {
-  return await resumeHandle(env, request) ? redirectWithCookies(origin(env) + "/saml/idp/continue", 302) : null;
+  return "handle" in await resumeHandle(env, request) ? redirectWithCookies(origin(env) + "/saml/idp/continue", 302) : null;
 }
 
 async function continueSso(request: Request, env: AuthEnv, auth: any): Promise<Response> {
-  const handle = await resumeHandle(env, request);
-  const expired = () => withClearedResume(idpErrorPage("Sign-in expired", "This sign-in request expired or was already used. Start again from the application.", { status: 400 }));
-  if (!handle) return expired();
-  const idHash = await sha256Hex(handle);
-  const pending = await env.DB.prepare("SELECT * FROM nathan_saml_idp_pending WHERE id_hash=? AND used=0 AND expires_at>unixepoch() LIMIT 1")
-    .bind(idHash).first<any>();
-  if (!pending) return expired();
+  const resume = await resumeHandle(env, request);
+  const expired = (code: string) => withClearedResume(refusal("Sign-in expired",
+    "This sign-in request expired or was already used. Start again from the application.", code, { status: 400 }));
+  if (!("handle" in resume)) return expired(resume.error);
+  const idHash = await sha256Hex(resume.handle);
+  const row = await env.DB.prepare("SELECT *, expires_at>unixepoch() AS live FROM nathan_saml_idp_pending WHERE id_hash=? LIMIT 1").bind(idHash).first<any>();
+  if (!row || row.used === 1 || row.live !== 1) return expired(!row || row.used !== 1 ? "saml_resume_expired" : "saml_resume_used");
+  const pending = row;
   const consume = async () => (await env.DB.prepare("UPDATE nathan_saml_idp_pending SET used=1 WHERE id_hash=? AND used=0 AND expires_at>unixepoch()")
     .bind(idHash).run()).meta.changes === 1;
   const session = await auth.api.getSession({ headers: request.headers });
@@ -233,14 +241,16 @@ async function continueSso(request: Request, env: AuthEnv, auth: any): Promise<R
     if (pending.is_passive === 1) {
       await consume();
       await audit(env, userId ?? "anonymous", "saml_idp_assertion", pending.sp_id, "denied:passive_requires_sign_in");
-      return withClearedResume(idpErrorPage("Sign-in required", "The application asked Nathan not to interact with you, but you need to sign in. Start again from the application."));
+      return withClearedResume(refusal("Sign-in required", "The application asked Nathan not to interact with you, but you need to sign in. Start again from the application.",
+        "saml_passive_requires_sign_in"));
     }
     return redirectWithCookies(origin(env) + "/sign-in", 302);
   }
   const sp = await loadSp(env, { id: pending.sp_id });
   if (sp?.requirePasskey && !await passkeyEvidence(env, userId!, session.session.id))
-    return idpErrorPage("Passkey sign-in required", sp.name + " requires a sign-in with your passkey. Sign in to Nathan with your passkey to continue.", { signIn: true });
-  if (!await consume()) return expired();
+    return refusal("Passkey sign-in required", sp.name + " requires a sign-in with your passkey. Sign in to Nathan with your passkey to continue.",
+      "saml_passkey_required", { signIn: true });
+  if (!await consume()) return expired("saml_resume_used");
   return withClearedResume(await issue(env, { sp, userId: userId!, sessionId: session.session.id, sessionCreatedAt: timestampMs(session.session.createdAt),
     requestId: pending.request_id, acsUrl: pending.acs_url, relayState: pending.relay_state ?? null, spId: pending.sp_id }));
 }
@@ -259,7 +269,7 @@ async function issue(env: AuthEnv, ctx: { sp: ServiceProvider | null; spId: stri
   const { sp, userId } = ctx;
   const deny = async (reason: string, title: string, message: string, status = 403) => {
     await audit(env, userId, "saml_idp_assertion", ctx.spId, "denied:" + reason);
-    return idpErrorPage(title, message, { status });
+    return refusal(title, message, "saml_" + reason.split(":")[0], { status });
   };
   if (!sp || !sp.enabled) return deny("sp_unavailable", "Application unavailable", "Sign-in to this application is disabled.");
   if (!sp.acsUrls.includes(ctx.acsUrl)) return deny("acs_changed", "Application changed", "This application's configuration changed during sign-in. Start again.");
@@ -326,15 +336,15 @@ async function appGroups(env: AuthEnv, appId: string, userId: string): Promise<s
 async function idpInitiated(request: Request, env: AuthEnv, auth: any, spId: string): Promise<Response> {
   const sp = await loadSp(env, { id: spId });
   if (!sp || !sp.enabled || !sp.allowIdpInitiated)
-    return idpErrorPage("Not available", "IdP-initiated sign-in is not enabled for this application.", { status: 404 });
+    return refusal("Not available", "IdP-initiated sign-in is not enabled for this application.", "saml_idp_initiated_unavailable", { status: 404 });
   if (request.method === "POST" && (request.headers.get("Origin") !== origin(env) || request.headers.get("Sec-Fetch-Site") === "cross-site"))
-    return idpErrorPage("Request refused", "IdP-initiated sign-in must be confirmed on Nathan's own page.", { status: 403 });
+    return refusal("Request refused", "IdP-initiated sign-in must be confirmed on Nathan's own page.", "saml_cross_site_request", { status: 403 });
   const session = await auth.api.getSession({ headers: request.headers });
-  if (!session?.user?.id) return idpErrorPage("Sign in first", "Sign in to Nathan, then open this link again.", { status: 401, signIn: true });
+  if (!session?.user?.id) return refusal("Sign in first", "Sign in to Nathan, then open this link again.", "saml_sign_in_required", { status: 401, signIn: true });
   if (request.method === "GET") return idpInitiatedPage({ spId: sp.id, spName: sp.name, email: session.user.email ?? "" });
-  if (request.method !== "POST") return idpErrorPage("Method not allowed", "Use the confirmation page.", { status: 405 });
+  if (request.method !== "POST") return refusal("Method not allowed", "Use the confirmation page.", "saml_method_not_allowed", { status: 405 });
   if (sp.requirePasskey && !await passkeyEvidence(env, session.user.id, session.session.id))
-    return idpErrorPage("Passkey sign-in required", sp.name + " requires a sign-in with your passkey.", { signIn: true });
+    return refusal("Passkey sign-in required", sp.name + " requires a sign-in with your passkey.", "saml_passkey_required", { signIn: true });
   return issue(env, { sp, spId: sp.id, userId: session.user.id, sessionId: session.session.id, sessionCreatedAt: timestampMs(session.session.createdAt),
     requestId: null, acsUrl: sp.acsUrls[0], relayState: sp.defaultRelayState });
 }
@@ -520,7 +530,7 @@ export async function handleSamlIdp(request: Request, env: AuthEnv, auth: any, u
   if (path === "/saml/idp/continue" && request.method === "GET") return continueSso(request, env, auth);
   const start = /^\/saml\/idp\/start\/([^/]+)$/.exec(path);
   if (start && SP_ID.test(start[1])) return idpInitiated(request, env, auth, start[1]);
-  return idpErrorPage("Not found", "Unknown SAML endpoint.", { status: 404 });
+  return refusal("Not found", "Unknown SAML endpoint.", "saml_unknown_endpoint", { status: 404 });
 }
 
 /** Scheduled cleanup of expired replay-cache and pending rows. */
