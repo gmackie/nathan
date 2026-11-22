@@ -78,9 +78,9 @@
 
   <h2 class="reveal" style="--i:3">Owner decisions (2026-11-22)</h2>
   <div class="grid2">
-    <section class="card reveal" style="--i:4"><h3>Scope: everything</h3><p class="muted">Studio, hosted pages, installer, gateway and the marketing site. Absorbs NATH-26 and NATH-30 (a) and (d).</p></section>
+    <section class="card reveal" style="--i:4"><h3>Scope: all product UI</h3><p class="muted">Studio, hosted pages, installer and gateway pages. The marketing site is out of scope. Absorbs NATH-26 and NATH-30 (a), (c) and (d).</p></section>
     <section class="card reveal" style="--i:5"><h3>Server-rendered pages with small islands</h3><p class="muted">Hosted pages are rendered in the Worker. Forms post without JS. Only passkey (WebAuthn) and similar features hydrate as islands.</p></section>
-    <section class="card reveal" style="--i:6"><h3>Start now, in parallel</h3><p class="muted">Branch off the stack and rebase as NATH-21 and NATH-24 land.</p></section>
+    <section class="card reveal" style="--i:6"><h3>Design first, foundation now</h3><p class="muted">The gmacko design pass (NATH-34, formerly NATH-30c) produces Kumo token-set variants and the owner picks one before any surface is built. K0 starts now, in parallel with NATH-21 and NATH-24.</p></section>
   </div>
 
   <h2>Spike findings (measured)</h2>
@@ -126,14 +126,14 @@
     <section class="card"><h3>Non-goals</h3><ul class="nongoals">
       <li>No auth, policy or API behavior changes. Those stay in their own issues.</li>
       <li>No relaxing the CSP (no <code>'unsafe-inline'</code>).</li>
-      <li>The gmacko brand design pass (NATH-30c) is a separate owner choice.</li>
+      <li>The marketing site. It keeps its own styling.</li>
       <li>No new Studio features beyond parity and the branding editor.</li>
     </ul></section>
   </div>
 
   <h2>Phases</h2>
-  <div class="progress" role="img" aria-label="Phase K0 in progress, K1 to K5 to do">
-    <span class="active" style="--i:0"></span><span style="--i:1"></span><span style="--i:2"></span><span style="--i:3"></span><span style="--i:4"></span><span style="--i:5"></span>
+  <div class="progress" role="img" aria-label="K0 and the design pass in progress; K1, K2, K3 and K5 to do">
+    <span class="active" style="--i:0"></span><span class="active" style="--i:1"></span><span style="--i:2"></span><span style="--i:3"></span><span style="--i:4"></span><span style="--i:5"></span>
   </div>
   <ol class="timeline">
     <li class="active reveal" style="--i:7"><div class="head"><h3>K0: Foundation (NATH-37)</h3><span class="chip active">In progress</span></div>
@@ -148,14 +148,14 @@
           <tr><td>Phosphor icon map: providers (Google, Apple, GitHub, Discord, Twitch, X), security, status</td><td><code>src/ui/icons.tsx</code></td><td>Every provider in the registry has an icon</td><td><span class="chip todo">Todo</span></td></tr>
           <tr><td>Layouts: <code>AuthLayout</code>, <code>RefusalPage</code> (keeps reason codes), <code>AutoPostPage</code></td><td><code>src/ui/layouts/*</code></td><td>Server-render tests</td><td><span class="chip todo">Todo</span></td></tr>
         </tbody></table></div></details></li>
+    <li class="active reveal" style="--i:8"><div class="head"><h3>Design pass: gmacko look (NATH-34)</h3><span class="chip active">Next</span></div>
+      <p class="muted">A design consultation on type, colour, the wordmark, density, motion and Phosphor weight and size rules. It ends with several bold variants, each a complete Kumo token set for light and dark, with mock sign-in, consent and Studio users pages. The owner picks one; it becomes the gmacko <code>data-theme</code>, together with the per-app override rules that NATH-30 (b) validates. K1 to K3 wait for this pick.</p></li>
     <li class="reveal" style="--i:8"><div class="head"><h3>K1: Hosted pages (NATH-38)</h3><span class="chip todo">Todo</span></div>
       <p class="muted">Sign-in (providers, passkey island, enterprise SSO, password and TOTP), the security and MFA page, OAuth consent, MCP per-scope consent, SAML IdP confirmation, auto-post and refusal pages, admission and invitations, bootstrap, and errors. This work does not touch the Studio files NATH-24 is extracting.</p></li>
     <li class="reveal" style="--i:9"><div class="head"><h3>K2: Identity Studio SPA (NATH-39, absorbs NATH-26)</h3><span class="chip todo">Todo</span></div>
       <p class="muted">A Kumo app shell with Sidebar and CommandPalette. Users come first, then parity for apps and RBAC, tokens, MCP, providers, SAML (inbound and IdP), SCIM, admission, audit and branding. It is built on NATH-24's API; the panel shell can start before that API lands.</p></li>
     <li class="reveal" style="--i:10"><div class="head"><h3>K3: Installer and gateway (NATH-40)</h3><span class="chip todo">Todo</span></div>
       <p class="muted">The installer wizard and gateway pages move to the K0 renderer. The Origin checks and <code>Referrer-Policy: same-origin</code> stay, and the installer runtime tests keep passing.</p></li>
-    <li class="reveal" style="--i:11"><div class="head"><h3>K4: Marketing site (NATH-41)</h3><span class="chip todo">Todo</span></div>
-      <p class="muted">The static Pages site is pre-rendered with Kumo at build time and needs no runtime JS. <code>verify:site</code> must pass.</p></li>
     <li class="reveal" style="--i:12"><div class="head"><h3>K5: Cleanup and verification (NATH-42)</h3><span class="chip todo">Todo</span></div>
       <p class="muted">Delete <code>page()</code> and the <code>*-ui.ts</code> HTML strings. On staging, check light, dark and phone layouts, and passkey sign-in in Safari and Chrome. An independent security review covers the renderer and CSP change.</p></li>
   </ol>
@@ -186,13 +186,13 @@
 
   <h2>Coordination</h2>
   <ul>
-    <li>The NATH-20 sequencing thread is told that NATH-26 becomes K2 and that NATH-30 (a) and (d) move here.</li>
+    <li>Agreed with the NATH-20 thread: NATH-26 becomes K2; NATH-30 (a), (c) and (d) move here. NATH-30 (b) publishes the validated per-client token-override schema on <code>/studio/api/v1</code>, and K0's theme module consumes it with matching token names.</li>
     <li>The parallel Llavero overhaul (LLAV-4) uses the same stack, so renderer and theme lessons are worth sharing.</li>
   </ul>
 
   <h2>Open questions</h2>
   <ul>
-    <li>Brand look: keep today's dark-orange Nathan palette as the Kumo brand token, or wait for the NATH-30c gmacko design pass? The default proposed here is the current palette, until NATH-30c picks a variant.</li>
+    <li>Which design-pass variant becomes the gmacko theme (NATH-34). Until the owner picks, K0 ships a neutral Kumo theme with today's orange as the brand token.</li>
   </ul>
 </main>
 </body>
