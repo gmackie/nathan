@@ -25,7 +25,7 @@ function totp(secret, { period = 30, digits = 6, at = Date.now() } = {}) {
 }
 
 before(async () => {
-  mf = await authWorker(HOST, { BETTER_AUTH_SECRET: SECRET });
+  mf = await authWorker(HOST, { BETTER_AUTH_SECRET: SECRET, NATHAN_INSTANCE_NAME: "gmacko" });
   db = await mf.getD1Database("DB");
   const now = new Date().toISOString();
   await db.prepare('INSERT INTO "user"("id","name","email","emailVerified","createdAt","updatedAt") VALUES (\'u-1\',\'u\',\'user@example.test\',1,?,?)').bind(now, now).run();
@@ -42,6 +42,9 @@ test("a passwordless signed-in user enrolls TOTP from /security's requests and v
   assert.equal(enabled.status, 200, JSON.stringify(body));
   const uri = new URL(body.totpURI);
   assert.equal(uri.protocol, "otpauth:");
+  // Authenticator apps show the issuer: the instance name, never Better Auth's default.
+  assert.equal(uri.searchParams.get("issuer"), "gmacko");
+  assert.match(decodeURIComponent(body.totpURI), /^otpauth:\/\/totp\/gmacko:/);
   const params = uri.searchParams;
   const code = totp(params.get("secret"), { period: Number(params.get("period") || 30), digits: Number(params.get("digits") || 6) });
   const verified = await api("/two-factor/verify-totp", { code, trustDevice: false });

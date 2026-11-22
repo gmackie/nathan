@@ -30,7 +30,7 @@
     "ENABLE_PASSWORD": "false",
     "ENTERPRISE_SSO": "true",
     "NATHAN_ADMIN_STEPUP_REQUIRED": "true",
-    "NATHAN_PASSKEY_RP_NAME": "gmacko"
+    "NATHAN_INSTANCE_NAME": "gmacko"
   },
   "routes": [{ "pattern": "id.gmac.io", "custom_domain": true }],
   "triggers": { "crons": ["17 5 * * *"] },

@@ -29,7 +29,8 @@
     "NATHAN_REALM_APEX": "",
     "ENABLE_PASSWORD": "false",
     "ENTERPRISE_SSO": "true",
-    "NATHAN_ADMIN_STEPUP_REQUIRED": "true"
+    "NATHAN_ADMIN_STEPUP_REQUIRED": "true",
+    "NATHAN_INSTANCE_NAME": "gmacko staging"
   },
   "routes": [{ "pattern": "nathan-stg.gmac.io", "custom_domain": true }],
   "triggers": { "crons": ["17 5 * * *"] },
