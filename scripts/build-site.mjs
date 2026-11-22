@@ -30,7 +30,7 @@ const inlineScript = calculator.replace('export function createCostModel','funct
   + '\nconst NATHAN_COST_INPUTS = ' + JSON.stringify(inputs).replaceAll('<','\\u003c') + ';\n' + interaction;
 const inlineAsset = async name => (await readFile(join(site,'assets',name))).toString('base64');
 const html = template.replace('/* SITE_STYLES */', css).replace('/* SITE_SCRIPT */', inlineScript)
-  .replace('href="/assets/favicon.svg"', `href="data:image/svg+xml;base64,${await inlineAsset('favicon.svg')}"`)
+  .replace('href="/assets/favicon-32.png"', `href="data:image/png;base64,${await inlineAsset('favicon-32.png')}"`)
   .replace('src="/assets/naming-origin.webp"', `src="data:image/webp;base64,${await inlineAsset('naming-origin.webp')}"`);
 if(html.includes('/* SITE_')) throw new Error('Unresolved site template marker');
 const headline=model.calculateCrud(1000000);
@@ -44,7 +44,8 @@ await rm(out,{recursive:true,force:true});
 await mkdir(join(out,'assets'),{recursive:true});
 await mkdir(join(out,'reports/sources'),{recursive:true});
 await writeFile(join(out,'index.html'),html);
-for(const asset of ['favicon.svg','naming-origin.webp']) await copyFile(join(site,'assets',asset),join(out,'assets',asset));
+for(const asset of ['favicon-32.png','apple-touch-icon.png','naming-origin.webp']) await copyFile(join(site,'assets',asset),join(out,'assets',asset));
+await copyFile(join(site,'assets','favicon.ico'),join(out,'favicon.ico'));
 
 function publicReport(source) {
   const result = source
