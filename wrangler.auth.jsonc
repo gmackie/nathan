@@ -45,6 +45,14 @@
       }
     ]
   },
+  // NATH-37: hashed UI assets (scripts/build-ui.mjs). Every file sits under /__nathan/ui/, so no
+  // asset can shadow a Worker route; requests for anything else still reach the Worker.
+  // _headers sets immutable caching, nosniff and CORP same-origin on them.
+  "assets": {
+    "directory": ".nathan/ui-assets",
+    "html_handling": "none",
+    "not_found_handling": "none"
+  },
   "migrations": [
     {
       "tag": "nathan-scim-v1",
