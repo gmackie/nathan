@@ -31,7 +31,8 @@
     "verify:release": "node scripts/verify-release.mjs",
     "build:test-upstream": "node tests/runtime/fixtures/build-upstream.mjs",
     "build:test-mcp": "node tests/runtime/fixtures/build-mcp.mjs",
-    "test:runtime": "npm run build:auth && npm run build:gateway && npm run build:installer && npm run build:test-upstream && npm run build:test-mcp && node --test --test-concurrency=1 tests/runtime/*.test.mjs"
+    "build:test-ui": "node tests/runtime/fixtures/build-ui-worker.mjs",
+    "test:runtime": "npm run build:auth && npm run build:gateway && npm run build:installer && npm run build:test-upstream && npm run build:test-mcp && npm run build:test-ui && node --test --test-concurrency=1 tests/runtime/*.test.mjs"
   },
   "dependencies": {
     "@better-auth/oauth-provider": "1.7.14",
