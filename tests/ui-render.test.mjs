@@ -14,7 +14,7 @@ import {
   moveInlineStylesToClasses, assertCspSafe, safeDeclarations, decodeAttribute, rewriteTags
 } from "../src/ui/csp-styles.ts";
 import { contentSecurityPolicy, securityHeaders, formActionSource } from "../src/ui/headers.ts";
-import { BRANDABLE_TOKENS, NATHAN_BRAND, isBrandableToken } from "../src/ui/theme.ts";
+import { BRANDABLE_TOKENS, isBrandableToken } from "../src/ui/theme.ts";
 import { PROVIDER_IDS } from "../src/shared/providers.mjs";
 
 assert.ok(existsSync("src/ui/generated/ui-manifest.json"), "run `node scripts/build-ui.mjs` first (npm test does)");
@@ -256,28 +256,15 @@ function contrast(a, b) {
   return (x + 0.05) / (y + 0.05);
 }
 
-test("theme: brandable tokens are real Kumo tokens and the Nathan colours keep AA contrast", () => {
+test("theme: Nathan's default is stock Kumo; appearance may set only real Kumo tokens or Nathan's plate tokens", () => {
   const kumo = readFileSync("node_modules/@cloudflare/kumo/dist/styles/theme-kumo.css", "utf8");
   const theme = readFileSync("src/ui/theme.css", "utf8");
-  for (const token of BRANDABLE_TOKENS) {
-    assert.match(kumo, new RegExp(token + ":"), token + " is a Kumo token");
-    assert.match(theme, new RegExp(token + ":"), token + " is set by the Nathan theme");
-  }
-  assert.ok(!isBrandableToken("--text-color-kumo-default") && !isBrandableToken("--nathan-on-brand"));
-  const blocks = [...theme.matchAll(/\{([^{}]*--color-kumo-brand:[^{}]*)\}/g)].map(m => m[1]);
-  assert.equal(blocks.length, 3, "light, dark and system-dark blocks");
-  const value = (block, name) => new RegExp(name + ":\\s*(#[0-9a-f]{6})").exec(block)[1];
-  for (const block of blocks) {
-    assert.equal(value(block, "--color-kumo-brand"), NATHAN_BRAND);
-    const onBrand = value(block, "--nathan-on-brand");
-    // Primary buttons draw on brand mixed 30% toward white, so the plain brand is the darker case.
-    assert.ok(contrast(onBrand, value(block, "--color-kumo-brand")) >= 4.5, "text on brand");
-    assert.ok(contrast(onBrand, value(block, "--color-kumo-brand-hover")) >= 4.5, "text on brand hover");
-  }
-  assert.ok(contrast(value(blocks[0], "--text-color-kumo-brand"), "#ffffff") >= 4.5, "brand text on light base");
-  // Kumo's dark base is oklch(17% 0 0), about #101010; check against a lighter #1a1a1a to be safe.
-  assert.ok(contrast(value(blocks[1], "--text-color-kumo-brand"), "#1a1a1a") >= 4.5, "brand text on dark base");
-  assert.ok(contrast("#ffffff", NATHAN_BRAND) < 4.5, "why the theme replaces Kumo's white primary text");
+  assert.doesNotMatch(theme.replace(/\/\*[\s\S]*?\*\//g, ""), /--(color|text-color)-kumo-[a-z-]+\s*:/, "theme.css overrides no Kumo colour token");
+  for (const token of BRANDABLE_TOKENS)
+    assert.ok(token.startsWith("--nathan-") || new RegExp(token + ":").test(kumo), token + " is a Kumo token or a Nathan plate token");
+  assert.ok(isBrandableToken("--color-kumo-brand"));
+  assert.ok(!isBrandableToken("--text-color-kumo-default") && !isBrandableToken("--color-kumo-focus"));
+  assert.ok(contrast("#ffffff", "#056DFF") >= 4.5, "Kumo's own primary keeps its white text");
 });
 
 test("CLI-generated identity Worker configs point at the UI assets by absolute path", async () => {
