@@ -6,6 +6,7 @@ import { loadSocialCredentials, providerStatus, upsertSocialProvider, setSocialP
 import { enabledProviderIds, beginProviderTest, completeProviderTest } from "./provider-store";
 import { providerTestResultPage } from "./provider-ui.mjs";
 import {bootstrapStatus,completeBootstrap,mayAdminister} from "./bootstrap";
+import { totpQrResponse } from "./totp-qr";
 import {effectiveAdminPolicy,tightenAdminPolicy} from "./security-policy";
 import {handleScim} from "./scim/gateway";
 import {listScimConnections,createScimConnection,setScimConnectionEnabled,rotateScimToken} from "./scim/admin";
@@ -96,6 +97,10 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     return securityPage(session.user.email);
   }
 
+  if(url.pathname==="/security/api/totp-qr" && request.method==="POST"){
+    const session=await auth.api.getSession({headers:request.headers});
+    return totpQrResponse(request,issuer.origin,Boolean(session?.user?.id));
+  }
   if(url.pathname==="/security/api/bootstrap" && request.method==="GET"){
     const session=await auth.api.getSession({headers:request.headers});
     if(!session?.user?.id)return reject(401,"Authenticated session required");

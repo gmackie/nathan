@@ -20,12 +20,15 @@ export function securityPage(userEmail:string):Response {
   <section><h2>Authenticator application (TOTP)</h2><p>Enroll and confirm an authenticator app, then store backup codes offline.
   Nathan only asserts MFA assurance after an actual verified authentication ceremony; enabling TOTP alone does not force MFA on social logins.</p>
   <label>Password (if this account uses password login)<input type="password" id="password" autocomplete="current-password"></label>
-  <button id="totp-start">Start TOTP enrollment</button><pre id="totp-setup"></pre>
+  <button id="totp-start">Start TOTP enrollment</button>
+  <div id="totp-enroll" hidden><p>Scan this code with your authenticator app (or Yubico Authenticator for a YubiKey):</p>
+  <div id="totp-qr" role="img" aria-label="TOTP enrollment QR code"></div>
+  <p>Can't scan? Enter this key manually: <code id="totp-secret"></code></p></div><pre id="totp-setup"></pre>
   <label>Six-digit code<input id="totp-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}"></label>
   <button id="totp-verify">Verify TOTP</button><p id="totp-status" role="status"></p>
   </section>
   <section><h2>Passkeys</h2><p>Use a platform authenticator or hardware security key. Passkeys may be used as a login method.</p>
-  <button id="passkey-add">Add passkey</button><button id="passkey-list">List my passkeys</button><pre id="passkeys"></pre>
+  <button id="passkey-add">Add passkey</button><button id="security-key-add">Add security key (YubiKey)</button><button id="passkey-list">List my passkeys</button><pre id="passkeys"></pre>
   </section>
   <script nonce="__NONCE__">
   async function api(path,method='GET',body){
@@ -70,23 +73,44 @@ export function securityPage(userEmail:string):Response {
     try {
       const pwd=document.getElementById('password').value;
       const result=unwrap(await api('/two-factor/enable','POST',pwd?{password:pwd,method:'totp'}:{method:'totp'}));
-      const message='Add this TOTP URI in your authenticator: \n'+String(result.totpURI||'Not provided')+
-        '\n\nRecovery codes (copy them to a secure offline manager):\n'+JSON.stringify(result.backupCodes||[]);
+      const uri=String(result.totpURI||'');
+      await showTotpQr(uri);
+      const message='Recovery codes (copy them to a secure offline manager):\n'+JSON.stringify(result.backupCodes||[]);
       document.getElementById('totp-setup').textContent=message;
       totpStatus.textContent='Enter the 6-digit code to verify enrollment.';
     } catch(e){totpStatus.textContent=e.message}
   };
+  // Draws the QR as inline SVG from the module matrix /security/api/totp-qr returns (no img, no third party).
+  async function showTotpQr(uri){
+    const box=document.getElementById('totp-qr');box.replaceChildren();
+    let secret='';try{secret=new URL(uri).searchParams.get('secret')||''}catch{}
+    document.getElementById('totp-secret').textContent=secret.replace(/(.{4})/g,'$1 ').trim();
+    document.getElementById('totp-enroll').hidden=false;
+    const res=await fetch('/security/api/totp-qr',{method:'POST',credentials:'same-origin',
+      headers:{'Content-Type':'application/json',Origin:location.origin},body:JSON.stringify({uri})});
+    if(!res.ok){box.textContent='QR code unavailable; enter the key manually.';return}
+    const {size,rows}=await res.json();const ns='http://www.w3.org/2000/svg',q=4,full=size+2*q;
+    const svg=document.createElementNS(ns,'svg');
+    svg.setAttribute('viewBox','0 0 '+full+' '+full);svg.setAttribute('width','224');svg.setAttribute('height','224');
+    svg.setAttribute('shape-rendering','crispEdges');
+    const bg=document.createElementNS(ns,'rect');bg.setAttribute('width',full);bg.setAttribute('height',full);bg.setAttribute('fill','#fff');svg.appendChild(bg);
+    let d='';rows.forEach((row,y)=>{for(let x=0;x<row.length;x++)if(row[x]==='1')d+='M'+(x+q)+' '+(y+q)+'h1v1h-1z'});
+    const path=document.createElementNS(ns,'path');path.setAttribute('d',d);path.setAttribute('fill','#000');svg.appendChild(path);
+    box.appendChild(svg);
+  }
   document.getElementById('totp-verify').onclick=async()=>{
     try{
       await api('/two-factor/verify-totp','POST',{code:document.getElementById('totp-code').value,trustDevice:false});
       totpStatus.textContent='TOTP enrollment verified.';
     }catch(e){totpStatus.textContent=e.message}
   };
-  document.getElementById('passkey-add').onclick=async()=>{
+  // A YubiKey or other roaming security key asks for a cross-platform authenticator; the plain
+  // button lets the browser offer its built-in passkey store first.
+  const addPasskey=(attachment,name)=>async()=>{
     const output=document.getElementById('passkeys');
     try{
       if(!window.PublicKeyCredential)throw Error('WebAuthn is not available in this browser');
-      const options=unwrap(await api('/passkey/generate-register-options'));
+      const options=unwrap(await api('/passkey/generate-register-options'+(attachment?'?authenticatorAttachment='+attachment:'')));
       const publicKey=options.publicKey||options;
       publicKey.challenge=decode(publicKey.challenge);
       publicKey.user.id=decode(publicKey.user.id);
@@ -98,10 +122,12 @@ export function securityPage(userEmail:string):Response {
           attestationObject:encode(credential.response.attestationObject),
           transports:credential.response.getTransports?credential.response.getTransports():[]},
         clientExtensionResults:credential.getClientExtensionResults()};
-      await api('/passkey/verify-registration','POST',{response,name:'My passkey'});
-      output.textContent='Passkey successfully enrolled.';
+      await api('/passkey/verify-registration','POST',{response,name});
+      output.textContent=name+' successfully enrolled.';
     }catch(e){output.textContent=e.message}
   };
+  document.getElementById('passkey-add').onclick=addPasskey('','Passkey');
+  document.getElementById('security-key-add').onclick=addPasskey('cross-platform','Security key');
 
   document.getElementById('admin-stepup').onclick=async()=>{
     const out=document.getElementById('admin-setup-status');
