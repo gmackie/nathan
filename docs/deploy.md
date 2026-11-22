@@ -8,7 +8,7 @@
 - A Cloudflare-managed active zone for your identity hostname (e.g. `login.example.com`).
 - A Cloudflare API token scoped to the chosen account/zone. Avoid global API keys.
 - A verified email account for administrator bootstrap.
-- A Google or GitHub OAuth application, or another supported upstream IdP.
+- An OAuth client from Google, GitHub, Apple, Discord, Twitch or X (see [providers.md](providers.md)), or another supported upstream IdP.
 
 ## Domain-wide login identity
 
@@ -63,19 +63,9 @@ Apply migrations against a staging D1 database before production. Cloudflare D1'
 
 ## 3. Configure OAuth
 
-When creating a Google OAuth Web application, use the exact URL:
+Each provider needs the exact callback `https://login.example.com/api/auth/callback/<id>`, where `<id>` is `google`, `github`, `apple`, `discord`, `twitch` or `twitter` (X). [providers.md](providers.md) has the console links, scopes and gotchas for each one.
 
-```
-https://login.example.com/api/auth/callback/google
-```
-
-For GitHub OAuth use:
-
-```
-https://login.example.com/api/auth/callback/github
-```
-
-Run `node scripts/nathan.mjs providers guide google` or `providers guide github`, then `providers add google --apply` / `providers add github --apply`. These commands collect the secret in a masked TTY and use `wrangler secret put`. Alternatively set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GITHUB_CLIENT_ID`, and `GITHUB_CLIENT_SECRET` manually via Wrangler. Never include these values in source-controlled Wrangler config, command arguments, logs, or screenshots.
+Run `node scripts/nathan.mjs providers guide <id>`, then `providers add <id> --apply`. These commands validate the credentials, collect secrets in a masked TTY (the Apple `.p8` key from a file path) and store them as one `NATHAN_PROVIDER_<ID>` Worker secret with `wrangler secret put` over stdin. That Worker secret is the provider's single source of truth and overrides credentials saved in Identity Studio. Studio refuses to save that provider until you delete the secret. Without it, credentials saved in Studio (encrypted in D1) are used, and the legacy `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` and `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` Worker secrets come last. See [providers.md](providers.md#storage-secrets-and-precedence). Never include these values in source-controlled Wrangler config, command arguments, logs, or screenshots.
 
 ## 4. Deploy safely
 
@@ -85,7 +75,7 @@ The CLI requires an explicit `--apply` confirmation and uses the current Cloudfl
 node scripts/nathan.mjs deploy --apply
 ```
 
-The IdP must have a secret set before its public custom domain is enabled. Validate `/.well-known/openid-configuration`, `/api/auth/jwks`, and the authorization-code + PKCE flow, not just `/healthz`.
+The IdP must have its secrets set before its public custom domain is enabled. Re-running `npm run deploy -- --apply` after an interruption installs any missing `BETTER_AUTH_SECRET` or `NATHAN_CONFIG_KEY` (never replacing existing ones) and refuses to publish the route while either is missing. Validate discovery at the issuer path `/api/auth/.well-known/openid-configuration` (the host-root path returns 404 because the issuer is `https://<host>/api/auth`), the `jwks_uri` it advertises, and the authorization-code + PKCE flow, not just `/healthz`.
 
 ## 5. Bootstrap an administrator
 

@@ -2,10 +2,14 @@ import type { InstallerEnv } from "./env";
 import type { InstallerTokens } from "./oauth";
 import { cloudflareRequest, cloudflareWrite } from "./cloudflare";
 import { loadRelease, releaseFile, type NathanRelease, type ReleaseFile } from "./release";
-import { validateInstallPlan, validateHostname } from "./validation.mjs";
+import { validateInstallPlan, validateHostname, EMPTY_DATABASE_SQL, INSTALLER_PROVIDER_STATE_SQL, INSTALLER_PROVIDER_AUDIT_SQL } from "./validation.mjs";
 import { realmIssuerHostname } from "../shared/realm.mjs";
-import { generateConfigKey,encryptProviderSecret } from "../auth/config-crypto.mjs";
+import { generateConfigKey,sealProviderCredentials } from "../auth/config-crypto.mjs";
+import { PROVIDER_IDS, validateProviderCredentials } from "../shared/providers.mjs";
+import { mintAppleClientSecret } from "../auth/apple-secret.mjs";
 import {sha256} from "../gateway/crypto";
+import { verifyIdentityHostname } from "./verify-idp";
+import { findD1Database } from "./d1";
 
 const STAGES=["database","schema","upload","domain","activate","verify","bootstrap","complete"] as const;
 type Stage=typeof STAGES[number];
@@ -14,6 +18,7 @@ type InstallJob={
   id:string;owner_user_id:string;owner_email:string;account_id:string;zone_id:string;
   hostname:string;worker_name:string;admin_email:string;profile:"standard"|"business";
   enterprise_sso:number;realm_apex:string|null;scim_requested:number;scim_connection_id:string|null;scim_domain:string|null;release_id:string;stage:Stage;database_id:string|null;error:string|null;
+  lease_token:string|null;database_create_started_at:number|null;
   created_at:number;updated_at:number
 };
 type ApiSession={digest:string;tokens:InstallerTokens};
@@ -72,16 +77,16 @@ async function resolveZone(api:Api,accountId:string,hostname:string) {
   return matching;
 }
 async function nameIsFree(api:Api,accountId:string,name:string,dbName:string,hostname:string,zoneId:string){
-  const [scripts,dbs,dns,domains]=await Promise.all([
+  const [scripts,existingDb,dns,domains]=await Promise.all([
     api<Array<{id:string}>>("/accounts/"+accountId+"/workers/scripts"),
-    api<Array<{name:string}>>("/accounts/"+accountId+"/d1/database"),
+    findD1Database(api,accountId,dbName),
     api<Array<{id:string;type:string}>>("/zones/"+zoneId+"/dns_records?name="+encodeURIComponent(hostname)),
     api<Array<{hostname:string;service:string}>>("/accounts/"+accountId+"/workers/domains")
   ]);
-  if(!Array.isArray(scripts)||!Array.isArray(dbs)||!Array.isArray(dns)||!Array.isArray(domains))
+  if(!Array.isArray(scripts)||!Array.isArray(dns)||!Array.isArray(domains))
     throw Error("Cannot verify Cloudflare resource availability");
   if(scripts.some(s=>s.id===name))throw Error("A Worker with that name already exists. Choose a new name.");
-  if(dbs.some(d=>d.name===dbName))throw Error("A D1 database with that name already exists. Choose a new name.");
+  if(existingDb)throw Error("A D1 database with that name already exists. Choose a new name.");
   if(dns.length)throw Error("The identity hostname has existing DNS records; resolve them before installing");
   if(domains.some(d=>d.hostname===hostname))throw Error("This hostname is already attached to a Worker");
 }
@@ -142,6 +147,18 @@ async function query(write:Write,job:InstallJob,sql:string,params:any[]=[]):Prom
   const result=await write<any[]>("POST","/accounts/"+job.account_id+"/d1/database/"+job.database_id+"/query",{sql,params});
   return records(result);
 }
+/**
+ * True when a D1 database holds no schema objects of any kind (tables, views, indexes,
+ * triggers), ignoring only SQLite's own and Cloudflare's internal `_cf_` objects. Prefixes
+ * are compared with substr(): LIKE treats `_` as a wildcard.
+ */
+async function databaseIsEmpty(write:Write,accountId:string,databaseId:string){
+  if(!/^[a-f0-9-]{36}$/.test(databaseId))throw Error("D1 API returned an invalid database UUID");
+  const result=await write<any[]>("POST","/accounts/"+accountId+"/d1/database/"+databaseId+"/query",{
+    sql:EMPTY_DATABASE_SQL,params:[]});
+  const rows=records(result);
+  return rows.length===1&&Number(rows[0].n)===0;
+}
 async function ensureMigrations(env:InstallerEnv,write:Write,release:NathanRelease,job:InstallJob){
   await query(write,job,
     "CREATE TABLE IF NOT EXISTS nathan_release_migrations(name TEXT PRIMARY KEY,sha256 TEXT NOT NULL,applied_at INTEGER NOT NULL DEFAULT (unixepoch()))");
@@ -166,16 +183,22 @@ function b64url(count:number) {
   let raw="";for(const b of crypto.getRandomValues(new Uint8Array(count)))raw+=String.fromCharCode(b);
   return btoa(raw).replaceAll("+","-").replaceAll("/","_").replace(/=+$/,"");
 }
-function validateProvider(payload:any) {
-  if(!payload||!["google","github"].includes(payload.provider))throw Error("Select Google or GitHub for first administrator login");
-  if(typeof payload.clientId!=="string"||payload.clientId.length<8||payload.clientId.length>512||
-     typeof payload.clientSecret!=="string"||payload.clientSecret.length<12||payload.clientSecret.length>4096)
-    throw Error("OAuth client ID and secret are required at initial upload");
-  return {name:payload.provider,id:payload.clientId,secret:payload.clientSecret};
+/** First-admin login provider, validated by the shared registry (NATH-9). Never echoes values. */
+async function validateProvider(payload:any) {
+  if(!payload||!PROVIDER_IDS.includes(payload.provider))
+    throw Error("Select a supported login provider (Google, GitHub, Apple, Discord, Twitch or X) for first administrator login");
+  let values:Record<string,string>;
+  try{values=validateProviderCredentials(payload.provider,payload) as Record<string,string>}
+  catch(e){throw Error((e as {publicMessage?:string}).publicMessage||"Provider credentials are required at initial upload")}
+  if(payload.provider==="apple"){
+    try{await mintAppleClientSecret(values as {clientId:string;teamId:string;keyId:string;privateKey:string})}
+    catch{throw Error("Apple private key is not a valid ES256 (P-256) PKCS#8 .p8 key")}
+  }
+  return {name:payload.provider as string,values};
 }
 async function uploadWorker(
   env:InstallerEnv,write:Write,release:NathanRelease,job:InstallJob,active:boolean,
-  provider?:ReturnType<typeof validateProvider>, configKey?:string, firstDeploy=false
+  provider?:Awaited<ReturnType<typeof validateProvider>>, configKey?:string, firstDeploy=false
 ){
   if(!job.database_id)throw Error("Database ID missing");
   const bindings:any[]=[
@@ -219,30 +242,64 @@ async function uploadWorker(
   await write("PUT","/accounts/"+job.account_id+"/workers/scripts/"+job.worker_name,form);
 }
 export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:string,input:any={}){
-  const api=readApi(env,session),write=writeApi(env,session);
+  const api=readApi(env,session),unguardedWrite=writeApi(env,session);
   const user=await identity(api);
   let job=await fetchJob(env,id,user.id);
   if(!job)throw Error("Installation job not found");
   if(job.stage==="complete")return describe(job);
   const release=await loadRelease(env);
   if(job.release_id!==release.release)throw Error("This installation is pinned to another release. Resume with the original installer.");
-  if(job.stage==="upload")validateProvider(input); // Fail before claiming lock and touching Cloudflare
-  const claim=await env.INSTALLER_DB.prepare(
-    "UPDATE nathan_install_jobs SET locked_until=unixepoch()+300 WHERE id=? AND owner_user_id=? "+
-    "AND locked_until<unixepoch() RETURNING id"
-  ).bind(job.id,user.id).first<{id:string}>();
-  if(!claim)throw Error("A setup operation is already in progress");
+  if(job.stage==="upload")await validateProvider(input); // Fail before claiming lock and touching Cloudflare
+  // Claim a lease for the stage this request observed. RETURNING * re-reads the job under
+  // the lease, so a request that waited behind another one never re-runs a finished stage.
+  const lease=crypto.randomUUID();
+  const claimed=await env.INSTALLER_DB.prepare(
+    "UPDATE nathan_install_jobs SET locked_until=unixepoch()+300,lease_token=? WHERE id=? AND owner_user_id=? "+
+    "AND stage=? AND locked_until<unixepoch() RETURNING *"
+  ).bind(lease,job.id,user.id,job.stage).first<InstallJob>();
+  if(!claimed)throw Error("Another setup step is running or has just finished; refresh the installation status");
+  job=claimed;
+  const finish=async(sql:string,...params:unknown[])=>{
+    const result=await env.INSTALLER_DB.prepare(sql+" AND lease_token=?").bind(...params,lease).run();
+    if(!result.meta?.changes)throw Error("Setup lease expired before this step was recorded; refresh and retry");
+  };
+  // Every Cloudflare mutation (including D1 queries) first proves and extends the lease. A
+  // single call times out within 60 s, far inside the 300 s extension, so a request whose
+  // lease was taken over can never perform another side effect.
+  const write:Write=async(method,path,body)=>{
+    await finish("UPDATE nathan_install_jobs SET locked_until=unixepoch()+300 WHERE id=?",job!.id);
+    return unguardedWrite(method,path,body);
+  };
   let actionRequired:any=null,updatedDbId:string|undefined,oneTimeScim:any=null;
   try{
     // Every step is independently resumable. No secrets are written to installer D1.
     if(job.stage==="database"){
       const dbName=job.worker_name+"-db";
-      const databases=await api<Array<{uuid:string;name:string}>>("/accounts/"+job.account_id+"/d1/database");
-      const found=databases.find(d=>d.name===dbName);
-      // Never reuse a database that the job cannot prove it created.
-      if(found && !job.database_id)
-        throw Error("D1 database now exists but is not recorded as owned by this installer job; inspect it before retrying");
-      const db=found||await write<{uuid:string}>("POST","/accounts/"+job.account_id+"/d1/database",{name:dbName});
+      const found=await findD1Database(api,job.account_id,dbName);
+      // Never reuse a database that the job cannot prove it created. A create this job started
+      // whose response was lost is adopted only if Cloudflare created that database after the
+      // job started the create, and it still holds no schema objects at all.
+      if(found && !job.database_id){
+        const startedAt=job.database_create_started_at;
+        const createdAt=Date.parse(found.created_at||"")/1000;
+        if(!startedAt||!Number.isFinite(createdAt)||createdAt<startedAt-5)
+          throw Error("D1 database now exists but is not recorded as owned by this installer job; inspect it before retrying");
+        if(!await databaseIsEmpty(write,job.account_id,found.uuid))
+          throw Error("D1 database from an interrupted setup is not empty; inspect it before retrying");
+      }
+      let db=found;
+      if(!db){
+        await finish("UPDATE nathan_install_jobs SET database_create_started_at=unixepoch() WHERE id=?",job.id);
+        try{
+          db=await write<{uuid:string;name:string}>("POST","/accounts/"+job.account_id+"/d1/database",{name:dbName});
+        }catch(error){
+          // Only an unknown outcome (timeout, 5xx) may leave a database behind. A definite
+          // rejection clears the marker so a database someone else creates later is never adopted.
+          if(/\((4\d\d)\)/.test(error instanceof Error?error.message:""))
+            await finish("UPDATE nathan_install_jobs SET database_create_started_at=NULL WHERE id=?",job.id);
+          throw error;
+        }
+      }
       if(!/^[a-f0-9-]{36}$/.test(db.uuid))throw Error("D1 API returned an invalid database UUID");
       updatedDbId=db.uuid;job.database_id=db.uuid;
     }else if(job.stage==="schema"){
@@ -270,21 +327,26 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
           throw Error("Existing domain realm does not match approved account, zone and issuer");
       }
     }else if(job.stage==="upload"){
-      const initialProvider=validateProvider(input);
+      const initialProvider=await validateProvider(input);
       // Both wizard and ongoing Identity Studio use the same encrypted D1 provider store.
       // This inactive IdP can be retried safely before the public route exists.
       const configKey=generateConfigKey();
-      const cipher=await encryptProviderSecret(initialProvider.name,initialProvider.secret,configKey);
+      const sealed=await sealProviderCredentials(initialProvider.name,initialProvider.values,configKey);
       const scripts=await api<Array<{id:string;tags?:string[];migration_tag?:string}>>("/accounts/"+job.account_id+"/workers/scripts");
       const workerName=job.worker_name;
       const existing=scripts.find(s=>s.id===workerName);
       if(existing && (!Array.isArray(existing.tags)||!existing.tags.includes("nathan")))
         throw Error("Worker name was claimed by an unrelated deployment after planning; refusing to overwrite it");
       await query(write,job,
-        "INSERT INTO nathan_oauth_providers(id,client_id,secret_cipher,enabled,updated_by) "+
-        "VALUES (?,?,?,1,?) ON CONFLICT(id) DO UPDATE SET client_id=excluded.client_id,"+
-        "secret_cipher=excluded.secret_cipher,enabled=1,updated_at=unixepoch(),updated_by=excluded.updated_by",
-        [initialProvider.name,initialProvider.id,cipher,"installer:"+user.id]);
+        "INSERT INTO nathan_oauth_providers(id,client_id,secret_cipher,config,secret_fields,updated_by) "+
+        "VALUES (?,?,NULL,?,?,?) ON CONFLICT(id) DO UPDATE SET client_id=excluded.client_id,secret_cipher=NULL,"+
+        "config=excluded.config,secret_fields=excluded.secret_fields,"+
+        "updated_at=unixepoch(),updated_by=excluded.updated_by",
+        [initialProvider.name,sealed.clientId,sealed.config,sealed.secretFields,"installer:"+user.id]);
+      // New credentials start untested; a first install enables the provider, a re-run keeps an
+      // administrator's disable. Every installer credential write is audited (NATH-9 provider state).
+      await query(write,job,INSTALLER_PROVIDER_STATE_SQL,[initialProvider.name,"installer:"+user.id]);
+      await query(write,job,INSTALLER_PROVIDER_AUDIT_SQL,[crypto.randomUUID(),"installer:"+user.id,initialProvider.name]);
       await uploadWorker(env,write,release,job,false,initialProvider,configKey,!existing?.migration_tag);
       // An uploaded Worker must never be reachable at workers.dev or preview URLs.
       await write("POST","/accounts/"+job.account_id+"/workers/scripts/"+job.worker_name+"/subdomain",
@@ -305,18 +367,7 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
     }else if(job.stage==="activate"){
       await uploadWorker(env,write,release,job,true);
     }else if(job.stage==="verify"){
-      const base="https://"+validateHostname(job.hostname);
-      const [health,discovery,jwks]=await Promise.all([
-        fetch(base+"/healthz",{redirect:"error",signal:AbortSignal.timeout(7000)}),
-        fetch(base+"/.well-known/openid-configuration",{redirect:"error",signal:AbortSignal.timeout(7000)}),
-        fetch(base+"/api/auth/jwks",{redirect:"error",signal:AbortSignal.timeout(7000)})
-      ]);
-      if(!health.ok||!discovery.ok||!jwks.ok)throw Error("Identity hostname not healthy yet; check route, secrets, and DNS propagation");
-      const healthJson=await health.json() as {active?:boolean};
-      const metadata=await discovery.json() as {issuer?:string};
-      const keys=await jwks.json() as {keys?:unknown[]};
-      if(!healthJson.active||metadata.issuer!=="https://"+job.hostname+"/api/auth"||
-         !Array.isArray(keys.keys))throw Error("OIDC discovery, JWKS or active flag mismatch");
+      await verifyIdentityHostname(validateHostname(job.hostname));
     }else if(job.stage==="bootstrap"){
       // A verified Better Auth user with exactly the Cloudflare installer identity's
       // approved email is necessary; no unauthenticated bootstrap password.
@@ -373,19 +424,20 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
         }
       }}
     if(actionRequired){
-      await env.INSTALLER_DB.prepare("UPDATE nathan_install_jobs SET locked_until=0,error=NULL,updated_at=unixepoch() WHERE id=?")
-        .bind(job.id).run();
+      await finish("UPDATE nathan_install_jobs SET locked_until=0,lease_token=NULL,error=NULL,updated_at=unixepoch() WHERE id=?",job.id);
       return {...describe(job),actionRequired};
     }
     const following=next(job.stage);
-    await env.INSTALLER_DB.prepare(
-      "UPDATE nathan_install_jobs SET stage=?,database_id=COALESCE(?,database_id),locked_until=0,error=NULL,updated_at=unixepoch() WHERE id=?"
-    ).bind(following,updatedDbId||null,job.id).run();
+    await finish(
+      "UPDATE nathan_install_jobs SET stage=?,database_id=COALESCE(?,database_id),locked_until=0,lease_token=NULL,error=NULL,updated_at=unixepoch() WHERE id=? AND stage=?",
+      following,updatedDbId||null,job.id,job.stage);
     job=(await fetchJob(env,job.id,user.id))!;
     return {...describe(job),...(oneTimeScim?{oneTimeScim}:{})};
   }catch(error){
-    await env.INSTALLER_DB.prepare("UPDATE nathan_install_jobs SET error=?,locked_until=0,updated_at=unixepoch() WHERE id=?")
-      .bind(safeMessage(error),job.id).run();
+    // Only the current lease holder may record an error or release the lock.
+    await env.INSTALLER_DB.prepare(
+      "UPDATE nathan_install_jobs SET error=?,locked_until=0,lease_token=NULL,updated_at=unixepoch() WHERE id=? AND lease_token=?"
+    ).bind(safeMessage(error),job.id,lease).run();
     throw error;
   }
 }

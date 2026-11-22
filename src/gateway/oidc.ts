@@ -1,7 +1,7 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { pkceChallenge, randomId } from "./crypto";
 import type { GatewayEnv } from "./env";
-import { validateIssuer } from "../shared/security.mjs";
+import { validateIssuer, fetchNoRedirect } from "../shared/security.mjs";
 
 type Discovery = {
   issuer: string;
@@ -12,7 +12,7 @@ type Discovery = {
 export async function discover(env: GatewayEnv): Promise<Discovery> {
   const issuer = validateIssuer(env.NATHAN_ISSUER);
   const location = issuer + "/.well-known/openid-configuration";
-  const response = await fetch(location, { headers: { Accept: "application/json" }, redirect: "error", signal: AbortSignal.timeout(6000) });
+  const response = await fetchNoRedirect(location, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(6000) });
   if (!response.ok) throw Error("OIDC discovery failed");
   const metadata = await response.json() as Discovery;
   if (metadata.issuer !== issuer) throw Error("OIDC issuer mismatch");
@@ -43,9 +43,8 @@ export async function authorizeUrl(env: GatewayEnv, metadata: Discovery, state: 
 export async function exchangeCode(env: GatewayEnv, metadata: Discovery, code: string, verifier: string): Promise<{ id_token: string }> {
   if (!env.OIDC_CLIENT_SECRET) throw Error("OIDC client secret missing");
   const basic = btoa(env.OIDC_CLIENT_ID + ":" + env.OIDC_CLIENT_SECRET);
-  const response = await fetch(metadata.token_endpoint, {
+  const response = await fetchNoRedirect(metadata.token_endpoint, {
     method: "POST",
-    redirect: "error",
     headers: { "Content-Type": "application/x-www-form-urlencoded", "Authorization": "Basic " + basic },
     body: new URLSearchParams({
       grant_type: "authorization_code", code, redirect_uri: getCallback(env), code_verifier: verifier

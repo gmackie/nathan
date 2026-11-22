@@ -1,5 +1,6 @@
 import { randomId, pkceChallenge } from "../gateway/crypto";
 import type { InstallerEnv } from "./env";
+import { fetchNoRedirect } from "../shared/security.mjs";
 
 const AUTH="https://dash.cloudflare.com/oauth2/auth";
 const TOKEN="https://dash.cloudflare.com/oauth2/token";
@@ -25,8 +26,8 @@ export interface InstallerTokens { accessToken:string; refreshToken:string|null;
 export async function oauthExchange(env:InstallerEnv,code:string,verifier:string):Promise<InstallerTokens>{
   if(!env.CF_OAUTH_CLIENT_SECRET||!env.CF_OAUTH_CLIENT_ID)throw Error("Cloudflare OAuth credentials missing");
   const basic=btoa(env.CF_OAUTH_CLIENT_ID+":"+env.CF_OAUTH_CLIENT_SECRET);
-  const response=await fetch(TOKEN,{
-    method:"POST",redirect:"error",
+  const response=await fetchNoRedirect(TOKEN,{
+    method:"POST",
     headers:{"Authorization":"Basic "+basic,"Content-Type":"application/x-www-form-urlencoded"},
     body:new URLSearchParams({grant_type:"authorization_code",code,code_verifier:verifier,redirect_uri:oauthCallback(env)}),
     signal:AbortSignal.timeout(12000)
@@ -42,8 +43,8 @@ export async function oauthExchange(env:InstallerEnv,code:string,verifier:string
 }
 export async function oauthRefresh(env:InstallerEnv,token:string):Promise<InstallerTokens>{
   const basic=btoa(env.CF_OAUTH_CLIENT_ID+":"+env.CF_OAUTH_CLIENT_SECRET);
-  const response=await fetch(TOKEN,{
-    method:"POST",redirect:"error",
+  const response=await fetchNoRedirect(TOKEN,{
+    method:"POST",
     headers:{"Authorization":"Basic "+basic,"Content-Type":"application/x-www-form-urlencoded"},
     body:new URLSearchParams({grant_type:"refresh_token",refresh_token:token}),
     signal:AbortSignal.timeout(12000)

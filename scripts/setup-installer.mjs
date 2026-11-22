@@ -44,15 +44,15 @@ async function main(){
   const oauthSecret=await secretPrompt("Cloudflare OAuth client secret (masked)");
   const installedScopes=await ask("Granted OAuth scopes",scopes);
   if(!oauthClientId||!oauthSecret||!installedScopes)throw Error("OAuth credentials and scopes required");
-  const [workers,databases,dns]=await Promise.all([
-    cf.workers(),cf.databases(),cf.dnsRecords(zone.id,hostname)
+  const dbName=workerName+"-db";
+  const [workers,existingDb,dns]=await Promise.all([
+    cf.workers(),cf.databaseNamed(dbName),cf.dnsRecords(zone.id,hostname)
   ]);
   if(dns.length)throw Error("Installer hostname has existing DNS records; no changes made");
   if(workers.some(w=>w.id===workerName)){
     throw Error("An installer Worker already exists with that name. This bootstrap only creates fresh installers.");
   }
-  const dbName=workerName+"-db";
-  if(databases.some(d=>d.name===dbName))throw Error("Installer D1 name is already in use; choose a different Worker name");
+  if(existingDb)throw Error("Installer D1 name is already in use; choose a different Worker name");
   const plan={accountId,hostname,workerName,dbName,zone:zone.name,
     resources:["New D1 database","Private installer Worker upload","Installer migrations","Cloudflare OAuth secrets","Custom domain publish"]};
   console.log("\nDeployment plan:",JSON.stringify(plan,null,2));

@@ -1,5 +1,6 @@
 import type {AuthEnv} from "../env";
 import {sha256} from "../../gateway/crypto";
+import {scimCallerHeaders,SCIM_CALLER_HEADER} from "./caller.ts";
 const DENY={"Cache-Control":"no-store","WWW-Authenticate":'Bearer realm="Nathan SCIM"'};
 const ID=/^[a-z][a-z0-9-]{1,62}$/;
 export async function handleScim(request:Request,env:AuthEnv):Promise<Response>{
@@ -8,6 +9,8 @@ export async function handleScim(request:Request,env:AuthEnv):Promise<Response>{
   const match=/^\/scim\/v2\/([^/]+)(\/.*)?$/.exec(url.pathname);
   if(!match||!ID.test(match[1]))return new Response("SCIM connection not found",{status:404});
   const connId=match[1],relative=match[2]||"/ServiceProviderConfig";
+  // Internal Durable Object operations (/__nathan/*) are never reachable from the public route.
+  if(relative.startsWith("/__"))return new Response("SCIM endpoint unavailable",{status:404,headers:{"Cache-Control":"no-store"}});
   const authorization=request.headers.get("Authorization");
   if(!authorization?.startsWith("Bearer ")){
     return new Response("SCIM connection token required",{status:401,headers:DENY});
@@ -34,8 +37,10 @@ export async function handleScim(request:Request,env:AuthEnv):Promise<Response>{
     if(request.headers.has("Content-Type"))h.set("Content-Type",request.headers.get("Content-Type")!);
     if(request.headers.has("If-Match"))h.set("If-Match",request.headers.get("If-Match")!);
     h.set("X-Nathan-SCIM-Base",issuer.origin+"/scim/v2/"+connId);
+    // NATH-18: proves to the Durable Object that the identity Worker sent this request.
+    h.set(SCIM_CALLER_HEADER,(await scimCallerHeaders(env)).get(SCIM_CALLER_HEADER)!);
     const forwarded=new Request("https://scim.internal"+relative+url.search,{
-      method:request.method,headers:h,body,redirect:"error"
+      method:request.method,headers:h,body,redirect:"manual"
     });
     const stub=env.SCIM_DIRECTORY.getByName("connection:"+connId);
     const response=await stub.fetch(forwarded);

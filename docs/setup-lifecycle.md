@@ -8,9 +8,11 @@ Nathan has one customer-owned identity runtime and one control plane. The **Clou
 
 The installer connects to a Cloudflare account with authorization-code + PKCE, chooses a managed DNS zone and a unique IdP hostname (recommended \`login.example.com\`), and checks Worker/database/domain conflicts.
 
+New accounts are admitted by the installation's admission policy: invitation-only by default, with invitations created in Identity Studio, or self-service ([admission.md](admission.md)). The installer's first administrator is always admitted with the verified installer email.
+
 The installer identity is the **root bootstrap authority**. The initial admin email must match its verified Cloudflare OAuth account email. There is no public "first visitor becomes admin" endpoint, default password or invitation link.
 
-The wizard collects Google or GitHub OAuth credentials, creating exact \`https://login.example.com/api/auth/callback/google\` or \`/github\` callback instructions. The first provider credentials are encrypted using AES-256-GCM in the customer's D1 database; \`NATHAN_CONFIG_KEY\` is generated and stored as a Worker secret. It is not written to the installer database or a source file.
+The wizard collects credentials for one of six social providers (Google, GitHub, Apple, Discord, Twitch or X), with exact \`https://login.example.com/api/auth/callback/<id>\` callback instructions from the shared registry. The first provider credentials are encrypted using AES-256-GCM in the customer's D1 database; \`NATHAN_CONFIG_KEY\` is generated and stored as a Worker secret. It is not written to the installer database or a source file.
 
 The optional selections at initial install:
 - **Domain-wide SSO:** one OIDC issuer for the root and approved subdomains.
@@ -24,7 +26,7 @@ The Worker is uploaded privately and starts with an inactive flag. The installer
 
 The installer writes \`nathan_bootstrap_status\` with the Cloudflare account's user ID and approved email. After deploying, the intended administrator:
 
-1. Signs into Nathan using the configured Google/GitHub upstream provider (or a supported enterprise IdP once verified).
+1. Signs into Nathan using the configured social provider (or a supported enterprise IdP once verified).
 2. Completes verified email authentication using **exactly the Cloudflare-verified bootstrap email**.
 3. Returns to the wizard. It checks the verified Better Auth user, binds its stable user ID to the original Cloudflare installer identity, and promotes only that account to the initial admin role.
 4. Opens \`https://login.example.com/security?setup=admin\`, enrolls a passkey and TOTP authenticator, saves backup codes privately, and confirms setup. For Standard, one enrolled method is acceptable; Business requires both.
@@ -44,10 +46,11 @@ Visit \`https://login.example.com/studio\` as a fully enrolled administrator. Se
 | Cloudflare account and DNS discovery | Yes | Read-only realm inventory after setup |
 | IdP hostname, Worker and D1 provisioning | Yes | Deployment CLI / reviewed infrastructure change |
 | Initial administrator | Cloudflare owner and verified account | See bootstrap status; add/revoke additional verified admins |
-| Google/GitHub OAuth | Setup guides; encrypted first provider | Add/rotate/enable/disable, encrypted runtime configuration |
+| Social login (Google, GitHub, Apple, Discord, Twitch, X) | Setup guides; encrypted first provider | Guided setup, add/rotate/enable/disable, test sign-in, encrypted runtime configuration |
 | OIDC provider and RP clients | Enabled with initial Worker | Register individual external/Worker/gateway clients, including reviewed subdomain batches |
 | Enterprise OIDC federation | SSO plugin opt-in | Register provider, obtain DNS TXT challenge, verify domain before login |
-| Enterprise SAML federation | Plugin option | Metadata/SP certificate admin interface pending validation |
+| Enterprise SAML federation | SSO plugin opt-in | Create from validated IdP metadata (disabled), verify domain, enable, choose provisioning, rotate certificates ([saml.md](saml.md)) |
+| SAML applications (Nathan as IdP) | Nothing until an administrator generates a signing key | Generate and rotate the IdP signing key, register SPs bound to an application (disabled), enable/disable, update ([saml-idp.md](saml-idp.md)) |
 | SCIM directory | Optional disabled initial directory connection | Create, list, enable/disable and rotate bearer token |
 | Passkeys / TOTP | Enrollment required to complete initial admin | Self-service enrollment, authenticator inspection and passkey reauthentication |
 | MFA posture | Standard or Business profile | View effective policy and *increase* admin requirements without redeploying |
@@ -56,7 +59,7 @@ Visit \`https://login.example.com/studio\` as a fully enrolled administrator. Se
 
 ### OAuth providers and encryption
 
-Social credentials are encrypted in \`nathan_oauth_providers\`. Once there is a database record, it takes precedence over older Worker secrets. Disabling a provider must not silently fall back to its old credentials. A server-side check prevents disabling the last configured sign-in path unless another fallback exists.
+Each provider has one credential source: the CLI's \`NATHAN_PROVIDER_<ID>\` Worker secret, else credentials encrypted in \`nathan_oauth_providers\` (Studio or installer), else legacy Worker secrets. Credentials are never copied between sources, and Studio reports any that are present but unused. Disabling a provider never falls back to other credentials. A single conditional D1 write prevents disabling a provider unless another enabled provider has a test sign-in by a current administrator against its current credentials (or password/enterprise SSO is enabled and usable by an administrator). Changing credentials by any path voids the test. See [providers.md](providers.md).
 
 \`NATHAN_CONFIG_KEY\` is held in Cloudflare Workers Secrets; losing it renders managed provider credentials undecryptable. Operators must back up the key in a separate secure secrets manager and rotate credentials deliberately. Encryption at rest does not eliminate the need for access controls, database backups, key rotation, and incident handling.
 
@@ -64,7 +67,11 @@ Social credentials are encrypted in \`nathan_oauth_providers\`. Once there is a 
 
 A registered enterprise provider starts **untrusted**. Better Auth's SSO plugin requires proving ownership of the claimed domain through a TXT record, such as \`_better-auth-token-acme-entra.acme.example\`. Nathan displays the actual provider-generated token, never invents one. Identity Studio calls the domain-verification endpoint only for a verified and currently authorized administrator.
 
-Direct Better Auth SSO management HTTP endpoints are blocked; only authenticated Studio management APIs may register, update, or verify enterprise providers. SAML import, SP key custody and assertion signature handling are not yet claimed as a completed UI workflow.
+Direct Better Auth SSO management HTTP endpoints are blocked; only authenticated Studio management APIs may register, update, or verify enterprise providers.
+
+### Enterprise SAML federation
+
+Inbound SAML connections (NATH-10) are created in Identity Studio from validated IdP metadata, start disabled, can only be enabled after the same DNS TXT domain verification, and never create accounts unless the connection uses just-in-time provisioning for its verified domain. Nathan requires signed assertions, rejects repeated SAML parameters, SHA-1, IdP-initiated responses and replays, and supports certificate rotation (compare-and-swap, so concurrent rotations cannot overwrite each other). Metadata checks, including fetches of admin-supplied metadata URLs, are audited. Encrypted assertions, signed AuthnRequests and single logout are not supported. Setup per IdP: [saml.md](saml.md). Live IdP tenants have not yet been tested.
 
 ### SCIM 2.0
 
@@ -72,7 +79,7 @@ SCIM is not the same as SSO. It provisions directory identities and group data, 
 
 Nathan stores SCIM connection metadata and **one-way SHA-256 hashes** of its high-entropy bearer tokens in D1. The directory itself uses one SQLite-backed Durable Object per connection with atomic transactions. Its endpoints are \`/scim/v2/<connectionId>/Users\` and \`/Groups\`; each connection has a scoped, independently revocable token.
 
-The initial SCIM implementation is deliberately **directory-only**, with users and groups staged transactionally. It does **not** create Better Auth user accounts, implicitly link accounts by email, assign admin rights, deprovision sessions, or satisfy a production directory-lifecycle requirement. Before a connected organization uses SCIM for access control, we must design and test immutable external ID mapping, fail-closed deprovisioning, reconciliation, replay and event delivery.
+New connections are **directory-only**: users and groups are staged transactionally, and nothing is linked, created, granted or revoked. Turning on linking per connection (NATH-11) adds identity linking by immutable externalId (first link only by a verified email on the verified domain), optional just-in-time creation, fail-closed deprovisioning with session and token revocation and back-channel logout, and explicit group mapping. SCIM never assigns admin rights or application roles. Setup for Okta and Entra: [scim.md](scim.md).
 
 Better Auth's official SCIM plugin depends on interactive transaction features unavailable on D1; Nathan therefore uses its own outpost storage boundary. Do not enable the official D1-backed plugin as though it were equivalent.
 
@@ -95,7 +102,7 @@ Before upgrades, back up D1, Worker secrets (through a proper secret-management 
 See [staging-checklist.md](staging-checklist.md). Integration tests must cover:
 - Cloudflare OAuth identity → Better Auth verified user → secure bootstrap → MFA enrollment → recent passkey reauthentication.
 - Wrong Cloudflare owner, email mismatch, replayed installer job, forged session cookie and MFA-bypass attempts.
-- Google/GitHub setup and rotation from both wizard and Studio without leaking client secrets.
+- Setup and rotation of all six social providers from wizard, Studio and CLI without leaking client secrets or the Apple key.
 - Enterprise OIDC registration, TXT ownership verification, untrusted-provider rejection and account-linking safety.
 - SCIM group/user CRUD, duplicate externalId rejection, disabled connection, token rotation/revocation, PATCH and concurrency, with no automatic auth access.
 - Added admin grant and revocation, including online authorization checks and expired bearer tokens.

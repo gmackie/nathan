@@ -1,5 +1,7 @@
 # Admin MCP server
 
+This page covers Nathan's own administration endpoint. To protect **your** Worker as a remote MCP server with per-scope consent, see [remote-mcp.md](remote-mcp.md). The admin endpoint deliberately stays on administrator-registered clients and session-bound step-up checks ([why](remote-mcp.md#design-decisions)).
+
 Nathan exposes a stateless, OAuth-protected Model Context Protocol endpoint at \`https://login.example.com/mcp\`.
 
 **Security:** Never supply Better Auth cookies to MCP. MCP requires a resource-bound JWT access token issued to \`https://login.example.com/mcp\`, with \`nathan:read\` or \`nathan:admin\` scopes. The resource metadata is discoverable at \`/.well-known/oauth-protected-resource\`. All requests are checked against the current Nathan identity store: email must be verified, user must be in the admin role and in \`NATHAN_ADMIN_EMAILS\`, and account must not be suspended.
@@ -7,6 +9,8 @@ Nathan exposes a stateless, OAuth-protected Model Context Protocol endpoint at \
 ## Client registration
 
 From Identity Studio register a **MCP administrator** application with an exact HTTPS redirect URI, such as an agent's OAuth callback. Public clients require PKCE and do not receive a client secret. Ask for the \`resource=https://login.example.com/mcp\` authorization parameter and the \`nathan:read\` scope.
+
+In **Access tokens for Gatekeeper and APIs**, set each agent's client to principal kind **agent**. Its tokens then say `principal_kind: agent` even while acting for an administrator. The MCP endpoint still checks the administrator behind the token on every call.
 
 This initial implementation uses Nathan's own strict stateless JSON-RPC adapter with MCP protocol version **2026-07-28**. It supports \`server/discover\`, \`tools/list\`, and \`tools/call\`. The client must send \`MCP-Protocol-Version\`, \`Mcp-Method\`, \`Mcp-Name\` (when invoking tools), and matching \`params._meta\`. Production client-compatibility tests against the official MCP SDK are still required.
 

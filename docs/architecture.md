@@ -17,13 +17,13 @@ flowchart TB
 
 ## Identity Provider
 
-The identity Worker instantiates Better Auth inside the request using a D1 binding and installs the Better Auth OAuth Provider, JWT, organizations, admin, passkey and TOTP plugins, plus optional enterprise SSO. It exposes standard discovery metadata and OIDC clients independent of application location. Enterprise SAML consumption is distinct from acting as a downstream SAML identity provider.
+The identity Worker instantiates Better Auth inside the request using a D1 binding and installs the Better Auth OAuth Provider, JWT, organizations, admin, passkey and TOTP plugins, plus optional enterprise SSO. It exposes standard discovery metadata and OIDC clients independent of application location. Enterprise SAML consumption is distinct from acting as a downstream SAML identity provider, which Nathan does for registered SPs bound to an application ([saml-idp.md](saml-idp.md), NATH-12).
 
 Admin registration is restricted to verified Better Auth admin users whose email is separately allowlisted in deploy secrets/configuration. No unprotected bootstrap API is exposed.
 
 ## Gateway
 
-Browser requests first hit the gateway. It performs OIDC code + PKCE with a nonce and a short-lived AES-GCM-encrypted flow cookie. It validates ID token issuer, audience, nonce, signature and authentication assurance, then issues a random opaque host-only session cookie. Session handles are SHA-256-hashed in a per-gateway D1 database, and every request checks expiration and current session existence. Requests with no valid session receive 401 or an interactive redirect. Incoming identity headers are removed before forwarding to the private upstream Worker.
+Browser requests first hit the gateway. It performs OIDC code + PKCE with a nonce and a short-lived AES-GCM-encrypted flow cookie. It validates ID token issuer, audience, nonce, signature and authentication assurance, then issues a random opaque host-only session cookie. Session handles are SHA-256-hashed in a per-gateway D1 database, and every request checks expiration and current session existence. Requests with no valid session receive 401 or an interactive redirect. Incoming identity headers are removed before forwarding to the private upstream Worker. It then resolves the session's roles and permissions for its application from the identity Worker's evaluator over the `NATHAN` service binding, which is pinned to that one application in binding props and cannot read other applications or the directory (cached at most 60 s), answers 403 when access is denied, and forwards a signed, at most 60-second `X-Nathan-Principal` that the upstream verifies with the SDK. See [rbac.md](rbac.md).
 
 **Important:** Gateway ID tokens do not currently prove NIST AAL2. Better Auth's OAuth Provider advertises `acr: "0"` by default. If an application requires AAL2, its gateway must fail closed until an assurance-capable upstream implementation is verified.
 

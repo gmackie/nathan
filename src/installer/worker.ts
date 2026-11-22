@@ -1,5 +1,5 @@
 import { randomId, sha256 } from "../gateway/crypto";
-import { parseCookie, makeCookie, constantTimeEqual } from "../shared/security.mjs";
+import { parseCookie, makeCookie, constantTimeEqual, redirectWithCookies } from "../shared/security.mjs";
 import { validateAccountId, validateHostname, validateInstallPlan, isAllowedOrigin } from "./validation.mjs";
 import { oauthAuthorizeUrl, oauthExchange } from "./oauth";
 import { beginOAuthState, consumeOAuthState, createInstallerSession, installerSession, deleteInstallerSession, pruneInstallerState } from "./storage";
@@ -7,6 +7,7 @@ import { cloudflareRequest } from "./cloudflare";
 import { installerPage } from "./ui";
 import { validateDomainName,discoverRealmHostCandidates,realmIssuerHostname } from "../shared/realm.mjs";
 import { createInstall, installStatus, advanceInstall } from "./deploy";
+import { findD1Database } from "./d1";
 import type { InstallerEnv } from "./env";
 
 const STATE_COOKIE="__Host-nathan-installer-state";
@@ -14,7 +15,7 @@ const SESSION_COOKIE="__Host-nathan-installer";
 function error(status:number,error:string){return Response.json({error},{status,headers:{"Cache-Control":"no-store"}})}
 function responseSecurity(response:Response){
   response.headers.set("Cache-Control","no-store");
-  response.headers.set("Referrer-Policy","no-referrer");
+  response.headers.set("Referrer-Policy","same-origin");
   response.headers.set("X-Content-Type-Options","nosniff");
   response.headers.set("X-Frame-Options","DENY");
   response.headers.set("Strict-Transport-Security","max-age=31536000");
@@ -46,9 +47,7 @@ async function dashboard(request:Request,env:InstallerEnv){
     const verifier=randomId();
     const state=await beginOAuthState(env,verifier);
     const authorize=await oauthAuthorizeUrl(env,state,verifier);
-    const r=Response.redirect(authorize,302);
-    r.headers.append("Set-Cookie",makeCookie(STATE_COOKIE,state,{maxAge:300}));
-    return r;
+    return redirectWithCookies(authorize,302,[makeCookie(STATE_COOKIE,state,{maxAge:300})]);
   }
   if(path==="/api/callback"&&request.method==="GET"){
     const state=url.searchParams.get("state");
@@ -60,10 +59,10 @@ async function dashboard(request:Request,env:InstallerEnv){
     if(!code||code.length>4096)return error(400,"Authorization code missing");
     const tokens=await oauthExchange(env,code,verifier);
     const handle=await createInstallerSession(env,tokens);
-    const response=Response.redirect(env.PUBLIC_ORIGIN+"/",303);
-    response.headers.append("Set-Cookie",makeCookie(SESSION_COOKIE,handle,{maxAge:1800}));
-    response.headers.append("Set-Cookie",makeCookie(STATE_COOKIE,"",{deleteCookie:true}));
-    return response;
+    return redirectWithCookies(env.PUBLIC_ORIGIN+"/",303,[
+      makeCookie(SESSION_COOKIE,handle,{maxAge:1800}),
+      makeCookie(STATE_COOKIE,"",{deleteCookie:true})
+    ]);
   }
   if(path==="/api/health"&&request.method==="GET")return Response.json({ok:true,service:"nathan-installer"});
   if(path.startsWith("/api/")&&request.method==="POST"){
@@ -139,13 +138,13 @@ async function dashboard(request:Request,env:InstallerEnv){
     const zones=await api<Array<{id:string;name:string;status:string}>>("/zones?account.id="+plan.accountId+"&per_page=100");
     const zone=zones.filter(z=>z.status==="active"&&(plan.hostname===z.name||plan.hostname.endsWith("."+z.name))).sort((a,b)=>b.name.length-a.name.length)[0];
     if(!zone)return error(400,"Identity hostname is not in an accessible active Cloudflare zone");
-    const [workers,databases,dns,domains]=await Promise.all([
+    const [workers,database,dns,domains]=await Promise.all([
       api<Array<{id:string}>>("/accounts/"+plan.accountId+"/workers/scripts"),
-      api<Array<{uuid:string;name:string}>>("/accounts/"+plan.accountId+"/d1/database"),
+      findD1Database(api,plan.accountId,plan.name+"-db"),
       api<Array<{id:string;type:string;name:string}>>("/zones/"+zone.id+"/dns_records?name="+encodeURIComponent(plan.hostname)),
       api<Array<{hostname:string;service:string}>>("/accounts/"+plan.accountId+"/workers/domains")
     ]);
-    const worker=workers.find(w=>w.id===plan.name),database=databases.find(d=>d.name===plan.name+"-db");
+    const worker=workers.find(w=>w.id===plan.name);
     const domain=domains.find(d=>d.hostname===plan.hostname);
     const available=!worker&&!database&&!dns.length&&!domain;
     return Response.json({

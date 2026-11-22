@@ -19,9 +19,10 @@ export async function listClients(env:AuthEnv) {
   return rows.results.map(c=>({...c,redirectUris:JSON.parse(c.redirectUris||"[]")}));
 }
 export async function listApplications(env:AuthEnv) {
-  const rows=await env.DB.prepare("SELECT id,hostname,roles,enabled,created_at,updated_at FROM nathan_applications ORDER BY id LIMIT 200")
-    .all<{id:string;hostname:string;roles:string;enabled:number;created_at:number;updated_at:number}>();
-  return rows.results.map(x=>({...x,roles:JSON.parse(x.roles||"[]")}));
+  // NATH-13: access comes from access_mode plus per-app roles and grants; the legacy roles column is no longer read.
+  const rows=await env.DB.prepare("SELECT id,hostname,enabled,access_mode AS accessMode,created_at,updated_at FROM nathan_applications ORDER BY id LIMIT 200")
+    .all<{id:string;hostname:string;enabled:number;accessMode:string;created_at:number;updated_at:number}>();
+  return rows.results;
 }
 export async function listSso(env:AuthEnv) {
   const rows=await env.DB.prepare('SELECT "providerId" AS id, "issuer" AS issuer, "domain" AS domain, "organizationId" AS organizationId, "oidcConfig" IS NOT NULL AS oidc, "samlConfig" IS NOT NULL AS saml, "domainVerified" AS domainVerified FROM "ssoProvider" ORDER BY "providerId" LIMIT 100')
@@ -38,22 +39,27 @@ export function validateApplication(input:any){
   try{url=new URL("https://"+input.hostname);}catch{throw new Error("Invalid hostname");}
   if(!/^[a-z0-9.-]+$/.test(input.hostname) || url.hostname!==input.hostname || input.hostname.includes(".."))
     throw new Error("Invalid hostname");
-  if(!Array.isArray(input.roles) || input.roles.length>16 || input.roles.some((r:unknown)=>typeof r!=="string" || !/^[a-z][a-z0-9_-]{0,31}$/.test(r)))
-    throw new Error("Invalid roles");
-  return {id:input.id,hostname:input.hostname,roles:input.roles as string[]};
+  // NATH-13: global required-role lists were replaced by per-application roles and grants.
+  if(input.roles!==undefined && (!Array.isArray(input.roles) || input.roles.length>0))
+    throw new Error("Required-role lists are replaced by per-application roles and grants");
+  return {id:input.id,hostname:input.hostname};
 }
 export async function upsertApplication(env:AuthEnv,input:any,actor:string){
   const app=validateApplication(input);
   // New protected applications start disabled, never online by default.
-  await env.DB.prepare("INSERT INTO nathan_applications(id,hostname,roles,enabled) VALUES (?,?,?,0) ON CONFLICT(id) DO UPDATE SET hostname=excluded.hostname,roles=excluded.roles,updated_at=unixepoch()")
-    .bind(app.id,app.hostname,JSON.stringify(app.roles)).run();
+  // New applications use the 'approved' access mode: nobody gets in until a role is granted.
+  await env.DB.prepare("INSERT INTO nathan_applications(id,hostname,roles,enabled) VALUES (?,?,'[]',0) ON CONFLICT(id) DO UPDATE SET hostname=excluded.hostname,updated_at=unixepoch()")
+    .bind(app.id,app.hostname).run();
   await audit(env,actor,"application_upsert",app.id,"succeeded");
-  return {...app,enabled:false,note:"Existing enabled status is retained; new records are disabled"};
+  return {...app,enabled:false,note:"Existing enabled status and access mode are retained; new records are disabled and deny everyone until roles are granted"};
 }
 export async function setApplicationEnabled(env:AuthEnv,id:string,enabled:boolean,actor:string){
   if(!/^[a-z][a-z0-9-]{0,62}$/.test(id))throw Error("Invalid application id");
   const result=await env.DB.prepare("UPDATE nathan_applications SET enabled=?,updated_at=unixepoch() WHERE id=?").bind(enabled?1:0,id).run();
   if(!result.meta?.changes)throw Error("Unknown application");
+  // NATH-13 change feed: an enable/disable changes every principal's effective access to the app.
+  await env.DB.prepare("INSERT INTO nathan_rbac_changes(kind,app_id,detail,actor) VALUES (?,?,?,?)")
+    .bind(enabled?"app.enabled":"app.disabled",id,"{}",actor).run();
   await audit(env,actor,enabled?"application_enable":"application_disable",id,"succeeded");
   return {id,enabled};
 }

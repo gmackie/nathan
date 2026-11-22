@@ -14,7 +14,15 @@ export function gatewayChecklist(cfg, app) {
     upstream:app.workerName,
     callback:"https://" + app.hostname + "/__nathan/callback",
     backchannelLogout:"https://" + app.hostname + "/__nathan/backchannel",
-    requirement:"The original upstream must have no public custom domains, routes, workers.dev, or preview URLs before gateway publication"
+    requirement:"The original upstream must have no public custom domains, routes, workers.dev, or preview URLs before gateway publication",
+    // NATH-13: the gateway resolves roles from Nathan and forwards a signed, <= 60 s principal.
+    principal:{
+      header:"X-Nathan-Principal",
+      gatewayBindings:["NATHAN -> "+(cfg.name?cfg.name+"-auth":"<nathan auth Worker>")+" (entrypoint NathanVerifier, props {\"applicationId\":\""+app.id+"\"})","NATHAN_PRINCIPAL_KEY (secret)","ACCESS_CACHE_TTL_SECONDS=30"],
+      upstreamBindings:["NATHAN_PRINCIPAL_KEY (secret)","NATHAN_APPLICATION_ID="+app.id,"NATHAN_GATEWAY_ORIGIN=https://"+app.hostname],
+      sdk:'const user = await nathan(request, env); const denied = user.require("invoices:write"); if (denied) return denied;',
+      next:"Declare permissions/roles under applications[].rbac, run `nathan rbac sync "+app.id+" --apply`, then grant roles in Identity Studio. New apps deny everyone until a role is granted."
+    }
   };
 }
 export async function protectCommand(args,file,apply){
@@ -38,8 +46,7 @@ export async function protectCommand(args,file,apply){
   const oidcSecret=await secretPrompt("OIDC client secret (masked)");
   if(!oidcClientId||!oidcSecret)throw Error("Confidential OIDC client credentials required");
   const name=cfg.name+"-"+app.id+"-sessions";
-  const available=await cf.databases();
-  const database=available.find(x=>x.name===name)||await cf.createDatabase(name);
+  const database=(await cf.databaseNamed(name))||await cf.createDatabase(name);
   const dbId=database.uuid||database.id;
   const config=await createGeneratedConfig(cfg,dbId,{...app,oidcClientId});
   if(!(await yesNo("Publish gateway at "+app.hostname+"?")))throw Error("Cancelled");
@@ -53,9 +60,16 @@ export async function protectCommand(args,file,apply){
   await runCli("npx",["wrangler","deploy","--config",privatePath]);
   await runCli("npx",["wrangler","secret","put","OIDC_CLIENT_SECRET","--config",privatePath],{input:oidcSecret});
   await runCli("npx",["wrangler","secret","put","SESSION_ENCRYPTION_KEY","--config",privatePath],{input:randomBytes(32).toString("base64url")});
+  // NATH-13: one principal key per gateway, shared only with its own upstream Worker. Never written to disk.
+  const principalKey=randomBytes(32).toString("base64url");
+  await runCli("npx",["wrangler","secret","put","NATHAN_PRINCIPAL_KEY","--config",privatePath],{input:principalKey});
+  if(await yesNo("Set NATHAN_PRINCIPAL_KEY on upstream Worker "+app.workerName+" so its Nathan SDK can verify the principal?"))
+    await runCli("npx",["wrangler","secret","put","NATHAN_PRINCIPAL_KEY","--name",app.workerName],{input:principalKey});
+  else console.log("Upstream not updated: it cannot verify X-Nathan-Principal until NATHAN_PRINCIPAL_KEY matches the gateway's.");
   // Recheck just before publication: public state may have changed during deployment.
   const last=await cf.workerExposure(app.workerName,zone.id);
   if(last.unknown.length||last.public.length)throw Error("Upstream exposure changed; leaving gateway unpublished");
   await runCli("npx",["wrangler","deploy","--config",config]);
   console.log("Gateway deployed. Test non-interactive 401, browser login, back-channel logout, and origin isolation before use.");
+  console.log("Upstream vars: NATHAN_APPLICATION_ID="+app.id+", NATHAN_GATEWAY_ORIGIN=https://"+app.hostname+". "+plan.principal.next);
 }

@@ -27,7 +27,29 @@
       "kind": "worker",
       "workerName": "my-dashboard",
       "hostname": "app.example.com",
-      "protection": "gateway"
+      "protection": "gateway",
+      "rbac": {
+        "accessMode": "approved",
+        "permissions": {
+          "invoices:read": "Read invoices",
+          "invoices:write": "Create and edit invoices"
+        },
+        "roles": {
+          "viewer": {
+            "description": "Read-only access",
+            "permissions": [
+              "invoices:read"
+            ]
+          },
+          "editor": {
+            "description": "Edit invoices",
+            "permissions": [
+              "invoices:read",
+              "invoices:write"
+            ]
+          }
+        }
+      }
     }
   ],
   "realm": {

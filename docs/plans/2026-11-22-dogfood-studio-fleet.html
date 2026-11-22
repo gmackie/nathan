@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nathan: dogfood, Kumo Studio, fleet</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; color: var(--foreground, #202124); font: 14px/1.5 var(--font-sans, system-ui, sans-serif); }
+  main { width: 100%; min-width: 0; }
+  h1 { font-size: 1.2rem; margin: 0 0 .25rem; }
+  h2 { font-size: 1rem; margin: 1.6rem 0 .5rem; }
+  h3 { font-size: .9rem; margin: 0 0 .25rem; }
+  p { max-width: 75ch; margin: .5rem 0; }
+  ul { margin: .35rem 0; padding-left: 1.15rem; }
+  li { margin: .15rem 0; }
+  a { color: var(--accent-surface-foreground, #2458ac); }
+  .meta, .muted { color: var(--muted-foreground, #606773); }
+  code, pre { font-family: var(--font-mono, Menlo, Consolas, monospace); font-size: .85em; background: var(--code-background, #f1f3f5); color: var(--code-foreground, #202124); border-radius: 4px; padding: 0 .2rem; }
+  .table-scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  th, td { text-align: left; vertical-align: top; padding: .45rem .5rem; border-bottom: 1px solid var(--border, #d8dce2); }
+  th { color: var(--muted-foreground, #606773); font-weight: 600; }
+  .badge, .chip { display: inline-block; border-radius: 999px; padding: .1rem .5rem; font-size: .72rem; font-weight: 600; white-space: nowrap; }
+  .badge { background: var(--accent-surface, #eaf0ff); color: var(--accent-surface-foreground, #2458ac); }
+  .chip.done { background: color-mix(in srgb, var(--success, #1e8e3e) 18%, transparent); color: var(--success, #1e8e3e); }
+  .chip.todo { background: var(--muted, #f1f3f5); color: var(--muted-foreground, #606773); }
+  .chip.risk { background: var(--warning-surface, #fff4d6); color: var(--warning-foreground, #7a5200); }
+  .chip.high { background: var(--destructive-surface, #fde7e7); color: var(--destructive, #b3261e); }
+  .chip.info { background: color-mix(in srgb, var(--info, #2458ac) 16%, transparent); color: var(--info, #2458ac); }
+  .callout { border-left: 3px solid var(--accent, #2458ac); background: var(--accent-surface, #eaf0ff); color: var(--accent-surface-foreground, #1a2b4d); border-radius: 0 var(--radius, .625rem) var(--radius, .625rem) 0; padding: .65rem .85rem; margin: .75rem 0; }
+  .callout.warn { border-left-color: var(--warning, #b07800); background: var(--warning-surface, #fff4d6); color: var(--warning-foreground, #5a3d00); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap: .75rem; }
+  .card { border: 1px solid var(--border, #d8dce2); border-radius: var(--radius, .625rem); background: var(--card, #f7f8fa); color: var(--card-foreground, #202124); padding: .75rem; }
+  .card.rec { border-color: var(--accent, #2458ac); box-shadow: 0 0 0 1px var(--accent, #2458ac); }
+  .card h3 { display: flex; gap: .4rem; align-items: baseline; flex-wrap: wrap; }
+  /* architecture lanes */
+  .arch { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); gap: .6rem; align-items: stretch; }
+  .node { border: 1px solid var(--border, #d8dce2); border-radius: var(--radius, .625rem); padding: .6rem .7rem; background: var(--card, #f7f8fa); }
+  .node.parent { border-color: var(--accent, #2458ac); }
+  .node .k { font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted-foreground, #606773); }
+  .flow { list-style: none; padding: 0; margin: .6rem 0; display: grid; gap: .35rem; }
+  .flow li { display: grid; grid-template-columns: 1.6rem 1fr; gap: .5rem; align-items: start; }
+  .flow .n { width: 1.4rem; height: 1.4rem; border-radius: 50%; display: grid; place-items: center; font-size: .72rem; font-weight: 700; background: var(--accent-surface, #eaf0ff); color: var(--accent-surface-foreground, #2458ac); }
+  /* tracks */
+  .tracks { display: grid; gap: .6rem; }
+  .track { display: grid; grid-template-columns: 6.5rem 1fr; gap: .6rem; align-items: center; }
+  .track .lbl { font-size: .78rem; font-weight: 600; color: var(--muted-foreground, #606773); }
+  .bars { position: relative; height: 26px; background: var(--muted, #f1f3f5); border-radius: 6px; }
+  .bar { position: absolute; top: 3px; bottom: 3px; border-radius: 4px; font-size: .7rem; font-weight: 600; display: flex; align-items: center; padding: 0 .4rem; overflow: hidden; white-space: nowrap; transform-origin: left; color: var(--primary-foreground, #fff); }
+  .b1 { background: var(--chart-1, #2458ac); } .b2 { background: var(--chart-2, #1e8e3e); } .b3 { background: var(--chart-3, #b07800); } .b4 { background: var(--chart-4, #8e24aa); } .b5 { background: var(--chart-5, #c2185b); }
+  /* timeline */
+  .timeline { list-style: none; margin: 0; padding: 0; position: relative; }
+  .timeline::before { content: ""; position: absolute; left: 7px; top: 6px; bottom: 6px; width: 2px; background: var(--border, #d8dce2); }
+  .timeline > li { position: relative; padding: 0 0 1rem 1.75rem; }
+  .timeline > li::before { content: ""; position: absolute; left: 0; top: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--background, #fff); border: 2px solid var(--border, #d8dce2); }
+  .timeline > li.active::before { background: var(--accent, #2458ac); border-color: var(--accent, #2458ac); }
+  .timeline .head { display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap; }
+  details { border: 1px solid var(--border, #d8dce2); border-radius: var(--radius, .625rem); background: var(--card, #f7f8fa); padding: .5rem .75rem; margin: .5rem 0; }
+  summary { cursor: pointer; font-weight: 600; font-size: .85rem; }
+  /* risk grid */
+  .risk { display: grid; grid-template-columns: 4.5rem repeat(3, 1fr); gap: 3px; font-size: .72rem; }
+  .risk .ax { color: var(--muted-foreground, #606773); display: grid; place-items: center; text-align: center; padding: .2rem; }
+  .risk .cell { min-height: 54px; border-radius: 4px; padding: .3rem; display: flex; flex-wrap: wrap; gap: .25rem; align-content: flex-start; background: var(--muted, #f1f3f5); }
+  .risk .cell.h { background: color-mix(in srgb, var(--destructive, #b3261e) 14%, transparent); }
+  .risk .cell.m { background: color-mix(in srgb, var(--warning, #b07800) 14%, transparent); }
+  .risk .tag { background: var(--card, #fff); border: 1px solid var(--border, #d8dce2); border-radius: 999px; padding: 0 .4rem; }
+  .decisions { display: grid; gap: .6rem; }
+  @media (prefers-reduced-motion: no-preference) {
+    .reveal { animation: rise .45s cubic-bezier(.2,.7,.3,1) both; animation-delay: calc(var(--i, 0) * 60ms); }
+    .bar { animation: grow .55s ease-out both; animation-delay: calc(250ms + var(--i, 0) * 90ms); }
+    .timeline > li.active::before { animation: pulse 1.8s ease-in-out infinite; }
+    @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+    @keyframes grow { from { transform: scaleX(0); } }
+    @keyframes pulse { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent, #2458ac) 25%, transparent); } }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1 class="reveal">Nathan: dogfood gmacko apps, Kumo Studio behind Access, parent/child fleet <span class="badge">Proposal</span></h1>
+  <p class="meta reveal" style="--i:1">2026-11-22 · gmackie/nathan (+ create-gmacko-app) · base: NATH-16 stack tip, not <code>main</code> · Kanbanger project Nathan (GMA)</p>
+
+  <div class="callout reveal" style="--i:2"><strong>Recommendation:</strong> Run three tracks on top of the NATH-7…19 stack.
+    <strong>A</strong> makes Nathan the upstream OIDC provider in the shared <code>packages/auth</code> template. Each app keeps Better Auth and its own sessions.
+    <strong>B</strong> rebuilds Identity Studio as a Kumo React SPA on a dedicated admin hostname. Cloudflare Access is the admin session there; children use Nathan admin.
+    <strong>C</strong> adds a parent fleet registry. Children enroll with the parent and choose to opt in, and they can federate identity from it.
+    A and B start in parallel. C needs B's JSON management API.</div>
+
+  <h2 class="reveal" style="--i:3">What the repo says today</h2>
+  <div class="grid">
+    <section class="card reveal" style="--i:4"><h3>Base is not <code>main</code></h3><p class="muted"><code>main</code> trails <code>feat/NATH-16-followups</code> by 92 commits. That stack covers NATH-7 to NATH-19, including RBAC, SAML, SCIM, admission, tokens and MCP. Studio now spans about ten <code>*-ui.ts</code> files of server-rendered HTML. A rewrite started from <code>main</code> would conflict with every one of them.</p></section>
+    <section class="card reveal" style="--i:5"><h3>Template is already OIDC-ready</h3><p class="muted"><code>create-gmacko-app/packages/auth</code> already registers GitHub and Google through <code>genericOAuth</code>, next to <code>expo()</code>, <code>bearer()</code>, device pairing and its own MCP OAuth server. Nine repos carry this package: create-gmacko-app, creator, creator-d1, fabforge, fastbooks, kanbanger, netcontrol, preflight-app and wafflehouse.</p></section>
+    <section class="card reveal" style="--i:6"><h3>Long tail is bespoke</h3><p class="muted">About 40 more <code>package.json</code> files depend on <code>better-auth</code> with their own setup. ForgeGraph's web app is one of them. For these apps the change is still small, but each needs its own PR, not a template sync.</p></section>
+    <section class="card reveal" style="--i:7"><h3>Kumo</h3><p class="muted"><code>@cloudflare/kumo</code> 2.19.0 (npm) is a React 18/19 library built on Base UI. Its peer dependencies are <code>echarts</code>, <code>@phosphor-icons/react</code> and <code>zod</code> 4. Nathan has no React or bundler today, so this adds a frontend build.</p></section>
+  </div>
+
+  <h2 class="reveal" style="--i:8">Target shape</h2>
+  <div class="arch">
+    <div class="node parent reveal" style="--i:9"><div class="k">Parent Nathan</div><strong>login.&lt;gmacko apex&gt;</strong><ul><li>OIDC issuer for dogfood apps</li><li><code>admin.</code> hostname: Kumo Studio + fleet pages behind <strong>Cloudflare Access</strong></li><li>Fleet registry (D1): instances, enrollment, health, audit roll-up</li></ul></div>
+    <div class="node reveal" style="--i:10"><div class="k">Child (own domain)</div><strong>login.&lt;other apex&gt;</strong><ul><li>Trusts parent as enterprise OIDC upstream</li><li>Admin = parent identity + an <em>explicit grant on the child</em></li><li>Issues parent a scoped management credential</li></ul></div>
+    <div class="node reveal" style="--i:11"><div class="k">Child (customer account)</div><strong>login.&lt;customer apex&gt;</strong><ul><li>Same protocol; federation and admin delegation are separate switches, both off by default</li><li>Parent never holds a Cloudflare token for the customer account</li><li>Local break-glass admin always kept</li></ul></div>
+    <div class="node reveal" style="--i:12"><div class="k">gmacko apps</div><strong>Better Auth, unchanged core</strong><ul><li><code>genericOAuth</code> provider <code>nathan</code> (discovery, PKCE)</li><li>Local sessions, Expo, bearer, device and MCP stay as they are</li><li>Roles registry consolidation deferred</li></ul></div>
+  </div>
+
+  <h2 class="reveal" style="--i:13">Tracks</h2>
+  <p class="muted">The bars show order and dependencies only, not effort estimates.</p>
+  <div class="tracks" role="img" aria-label="Track order: P0 base first; A dogfood and B Studio in parallel; C fleet after B's API; D customer children last">
+    <div class="track"><span class="lbl">P0 Base</span><div class="bars"><span class="bar b1" style="left:0;width:14%;--i:0">stack</span></div></div>
+    <div class="track"><span class="lbl">A Dogfood</span><div class="bars"><span class="bar b2" style="left:14%;width:56%;--i:1">template → pilot → 9 repos → bespoke</span></div></div>
+    <div class="track"><span class="lbl">B Studio</span><div class="bars"><span class="bar b3" style="left:14%;width:40%;--i:2">API + Access → Kumo SPA</span></div></div>
+    <div class="track"><span class="lbl">C Fleet</span><div class="bars"><span class="bar b4" style="left:40%;width:44%;--i:3">registry · enroll · federate</span></div></div>
+    <div class="track"><span class="lbl">D Customers</span><div class="bars"><span class="bar b5" style="left:78%;width:22%;--i:4">cross-account</span></div></div>
+  </div>
+
+  <h2>Phases</h2>
+  <ol class="timeline">
+    <li class="active reveal"><div class="head"><h3>P0. Pick and stabilise the base</h3><span class="chip info">prerequisite</span></div>
+      <p class="muted">The NATH-7…19 PRs are drafts awaiting staging verification. Run staging OIDC verification for the stack and merge it, or cut all new branches from the integrated tip. A pilot app on a non-staging issuer would break the AGENTS.md release policy.</p></li>
+
+    <li class="reveal"><div class="head"><h3>A. Dogfood: Nathan as upstream OIDC</h3><span class="chip todo">Todo</span></div>
+      <ul>
+        <li><strong>Template:</strong> make <code>nathan</code> an optional <code>genericOAuth</code> entry built from <code>discoveryUrl</code>, with PKCE and <code>openid email profile</code> scopes. Config: <code>NATHAN_ISSUER / CLIENT_ID / CLIENT_SECRET</code>. Add a <code>emulate</code>-style local stub, matching how GitHub and Google are tested today.</li>
+        <li><strong>Account linking:</strong> on the first Nathan login, link to an existing app user only when Nathan asserts <code>email_verified</code> and <code>nathan</code> is in <code>trustedProviders</code>. Every later login keys on the stored issuer-qualified <code>sub</code>, never the email.</li>
+        <li><strong>Admission:</strong> Nathan defaults to invitation-only (NATH-16). A script exports each pilot app's verified user emails as Nathan invitations, so existing users can get in.</li>
+        <li><strong>Registration:</strong> each app is a disabled-by-default OIDC client with exact redirect URIs, covering web and the Expo scheme. Previews keep working through the existing <code>oAuthProxy</code>.</li>
+        <li><strong>Rollout:</strong> pilot one app. Then sync the template to the nine repos (fg-rollout). Then the bespoke Better Auth apps one by one. Retire direct GitHub/Google per app after a soak.</li>
+      </ul>
+      <details><summary>Tasks</summary><div class="table-scroll"><table>
+        <thead><tr><th>Task</th><th>Files</th><th>Verification</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>Optional <code>nathan</code> provider + linking rules</td><td><code>create-gmacko-app/packages/auth/src/index.ts</code>, <code>client.ts</code></td><td>Unit: unverified email never links; sub-keyed relink; emulated Nathan sign-in</td><td><span class="chip todo">Todo</span></td></tr>
+          <tr><td>Expo redirect through Nathan</td><td>template <code>apps/expo</code></td><td>Sign in on the simulator and on device pairing</td><td><span class="chip todo">Todo</span></td></tr>
+          <tr><td>Invitation export script</td><td><code>nathan/scripts/</code></td><td>Dry-run diff; single-use invitations created</td><td><span class="chip todo">Todo</span></td></tr>
+          <tr><td>Pilot app on staging, then production</td><td>pilot repo</td><td>Existing user links; new uninvited user is refused; logout works</td><td><span class="chip todo">Todo</span></td></tr>
+          <tr><td>Fleet sync to the nine template repos</td><td>per repo</td><td>Per-app staging sign-in evidence in ForgeGraph</td><td><span class="chip todo">Todo</span></td></tr>
+        </tbody></table></div></details></li>
+
+    <li class="reveal"><div class="head"><h3>B. Studio: JSON management API, Access admin mode, Kumo SPA</h3><span class="chip todo">Todo</span></div>
+      <ul>
+        <li><strong>B1 API:</strong> move every Studio action out of the <code>*-ui.ts</code> HTML handlers into one typed JSON API under <code>/studio/api/v1</code>, with zod schemas shared with the SPA. Behaviour stays the same; audit stays the same. Phase C's fleet uses this API too.</li>
+        <li><strong>B2 admin-auth modes:</strong> the wizard asks for <code>access</code> or <code>nathan</code>.
+          <code>access</code> verifies <code>Cf-Access-Jwt-Assertion</code> on every request: RS256 against <code>&lt;team&gt;.cloudflareaccess.com/cdn-cgi/access/certs</code>, exact <code>aud</code> (the Access app's AUD tag), <code>iss</code> and <code>exp</code>. The email must be on Nathan's explicit admin allowlist.
+          A missing or invalid assertion gets a 403 on every hostname, so <code>workers.dev</code>, previews and the login host can't serve the admin API.
+          <code>nathan</code> keeps today's verified admin session with passkey step-up. Children use it, with the parent as the upstream IdP.</li>
+        <li><strong>B3 hostname split:</strong> Studio is served only on <code>admin.login.&lt;apex&gt;</code>, an exact Custom Domain covered by the Access app. The installer creates or validates the Access app and its policy. It does not overwrite an existing app.</li>
+        <li><strong>B4 Kumo SPA:</strong> Vite + React + Kumo in <code>src/studio/</code>, served from Workers static assets on the same auth Worker. Users come first: search, invite, disable/enable, revoke sessions, reset MFA, role grants and linked accounts. Then apps/clients, providers, SAML/SCIM, admission, tokens, audit and security posture. The old HTML Studio stays until it reaches parity, then goes.</li>
+      </ul>
+      <details><summary>Tasks</summary><div class="table-scroll"><table>
+        <thead><tr><th>Task</th><th>Files</th><th>Verification</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>Typed Studio API v1 (extract, no behaviour change)</td><td><code>src/auth/studio-api/*</code>, <code>worker.ts</code></td><td>Existing Studio tests pass through the API; audit parity</td><td><span class="chip todo">Todo</span></td></tr>
+          <tr><td>Access JWT verifier + admin-mode switch</td><td><code>src/auth/access.ts</code>, <code>env.ts</code>, wizard</td><td>Tests: forged, expired, wrong-aud and wrong-team tokens; missing header on workers.dev; email not on allowlist</td><td><span class="chip todo">Todo</span></td></tr>
+          <tr><td>Installer: Access app + exact-host route</td><td><code>src/installer/cloudflare.ts</code>, <code>deploy.ts</code></td><td>Never overwrites an existing app; Worker deployed privately before route attach</td><td><span class="chip todo">Todo</span></td></tr>
+          <tr><td>Kumo SPA shell + Users</td><td><code>src/studio/</code>, <code>wrangler.auth.jsonc</code> assets</td><td>Playwright against staging; CSP without inline script</td><td><span class="chip todo">Todo</span></td></tr>
+          <tr><td>Remaining Studio areas, delete HTML Studio</td><td><code>src/auth/*-ui.ts</code></td><td>Parity checklist; bundle in release hash</td><td><span class="chip todo">Todo</span></td></tr>
+        </tbody></table></div></details></li>
+
+    <li class="reveal"><div class="head"><h3>C. Fleet: parent manages and federates children</h3><span class="chip todo">Todo</span></div>
+      <ol class="flow">
+        <li><span class="n">1</span><span><strong>Register:</strong> a parent admin creates an instance record and gets a single-use, expiring enrollment code bound to the child's issuer.</span></li>
+        <li><span class="n">2</span><span><strong>Child consents:</strong> a child admin pastes the code into the child Studio and sees exactly what the parent gets: federation, read scopes, admin scopes. Each one is toggled separately.</span></li>
+        <li><span class="n">3</span><span><strong>Federation:</strong> the child adds the parent as an enterprise OIDC upstream with an exact issuer, pinned through JWKS discovery. Subjects are issuer-qualified. Child admission policy still applies. Auto-admitting parent users is a per-child switch.</span></li>
+        <li><span class="n">4</span><span><strong>Management credential:</strong> the child registers the parent as a <code>client_credentials</code> client using <code>private_key_jwt</code>. The parent's key stays on the parent. Scopes are <code>fleet:read</code> and <code>fleet:admin.users</code>, <code>.apps</code>, <code>.roles</code>. Tokens are audience-bound to the child's management API and last 900 s or less (NATH-15 token profile).</span></li>
+        <li><span class="n">5</span><span><strong>Operate:</strong> the parent Studio's fleet pages show health, version and counts, and proxy admin actions to the child API. Every write is audited on both sides with the acting parent admin's identity. The child can revoke at any time, and revocation takes effect immediately.</span></li>
+        <li><span class="n">6</span><span><strong>Child admins:</strong> a parent identity becomes a child admin only through an explicit grant on the child. Holding parent admin is never enough.</span></li>
+      </ol>
+      <p class="muted"><strong>What the parent can never reach:</strong> child signing keys, provider and client secrets, password hashes, session tokens, the MFA policy floor, and Cloudflare credentials for customer accounts. For own-domain children, the parent may also <em>deploy</em> a child through the existing installer, with the operator's own Cloudflare OAuth.</p></li>
+
+    <li class="reveal"><div class="head"><h3>D. Customer-account children</h3><span class="chip todo">Todo</span></div>
+      <p class="muted">Same protocol with stricter defaults. Federation and admin delegation are both off. The child Studio shows a persistent banner while a parent link exists. Revocation and key-rotation drills are part of staging acceptance. This phase gets its own independent security review before any customer enrollment.</p></li>
+  </ol>
+
+  <h2>Risks</h2>
+  <div class="risk" role="table" aria-label="Risks by likelihood and impact">
+    <div class="ax"></div><div class="ax">Low impact</div><div class="ax">Medium</div><div class="ax">High impact</div>
+    <div class="ax">Likely</div><div class="cell"></div><div class="cell m"><span class="tag">R4 Studio rewrite drift</span></div><div class="cell h"><span class="tag">R1 Admin-API bypass</span></div>
+    <div class="ax">Possible</div><div class="cell"></div><div class="cell m"><span class="tag">R5 Expo redirects</span></div><div class="cell h"><span class="tag">R2 Parent blast radius</span><span class="tag">R3 Email-link takeover</span></div>
+    <div class="ax">Unlikely</div><div class="cell"></div><div class="cell"><span class="tag">R6 Access lockout</span></div><div class="cell m"></div>
+  </div>
+  <details><summary>Mitigations</summary><ul>
+    <li><strong>R1</strong> Access protects a hostname, not the Worker. Verify the Access JWT inside the Worker on every <code>/studio/api</code> request, on any host. Tests cover <code>workers.dev</code>, preview and login-host requests.</li>
+    <li><strong>R2</strong> Federation means a compromised parent can sign in to every federated child. Mitigations: per-child opt-in, admin power only through child-side grants, scoped short-lived management tokens, two-sided audit, immediate revocation, and the parent admin host behind Access with hardware-key MFA.</li>
+    <li><strong>R3</strong> Link by email only on <code>email_verified</code> from a trusted provider, and only once. After that, key on <code>sub</code>. Check Nathan's social providers (X has a placeholder email) so they never assert verified email.</li>
+    <li><strong>R4</strong> Extract the API first (B1) with no behaviour change. Keep the HTML Studio until the parity checklist is complete.</li>
+    <li><strong>R5</strong> Register the exact Expo scheme redirects. Verify on the simulator before the fleet sync.</li>
+    <li><strong>R6</strong> The Access IdP must not be Nathan itself; use GitHub or one-time PIN. Cloudflare-owner-bound recovery stays as break-glass.</li>
+  </ul></details>
+
+  <h2>Decisions to confirm</h2>
+  <div class="decisions">
+    <div class="callout warn"><strong>1. Changes to the security invariants.</strong> Access mode replaces Nathan's verified admin session and passkey step-up for the dashboard. The admin identity then comes from Access's IdP, which still needs a verified email and an explicit allowlist. Nathan can't see whether MFA was used. Unless Access verification shows a reliable <code>amr</code> claim, MFA rests on the Access policy, checked by the installer when it creates the app.
+      <strong>Proposal:</strong> amend AGENTS.md and <code>docs/security.md</code> for Access mode, and treat it as an item for the independent security review.</div>
+    <div class="callout"><strong>2. Which instance is the parent, and does it serve app users?</strong>
+      <strong>Proposal:</strong> one parent for the gmacko apex that is also the dogfood issuer for every gmacko app. OIDC doesn't need the app and the issuer on the same apex. Per-apex children come later, only where a separate realm is needed.</div>
+    <div class="callout"><strong>3. Pilot app for track A.</strong> <strong>Proposal:</strong> kanbanger. It's on the template, used every day, and the cost of a bad rollout is low.</div>
+    <div class="callout"><strong>4. Base strategy.</strong> <strong>Proposal:</strong> finish staging verification and merge NATH-7…19 first (P0), rather than stacking more drafts on drafts.</div>
+  </div>
+
+  <h2>Issues to create on approval</h2>
+  <div class="table-scroll"><table>
+    <thead><tr><th>Issue</th><th>Repo</th><th>Depends on</th></tr></thead>
+    <tbody>
+      <tr><td>Epic: dogfood, Kumo Studio, fleet</td><td>nathan</td><td>—</td></tr>
+      <tr><td>A1 Nathan upstream OIDC provider in the template</td><td>create-gmacko-app (+ Nathan cross-ref)</td><td>P0 staging issuer</td></tr>
+      <tr><td>A2 Pilot cut-over + invitation export</td><td>pilot repo, nathan</td><td>A1</td></tr>
+      <tr><td>A3 Fleet rollout to template repos, then bespoke apps</td><td>per repo</td><td>A2</td></tr>
+      <tr><td>B1 Typed Studio API v1</td><td>nathan</td><td>P0</td></tr>
+      <tr><td>B2/B3 Access admin mode + installer Access app</td><td>nathan</td><td>B1</td></tr>
+      <tr><td>B4 Kumo Studio SPA (Users first, then parity)</td><td>nathan</td><td>B1</td></tr>
+      <tr><td>C1 Fleet registry + enrollment + management credential</td><td>nathan</td><td>B1, NATH-15</td></tr>
+      <tr><td>C2 Parent federation + child admin grants</td><td>nathan</td><td>C1</td></tr>
+      <tr><td>D Customer-account children + security review</td><td>nathan</td><td>C2</td></tr>
+    </tbody></table></div>
+</main>
+</body>
+</html>

@@ -27,21 +27,29 @@
     "deploy:installer": "node scripts/setup-installer.mjs",
     "wizard": "node scripts/nathan.mjs wizard",
     "setup:installer": "node scripts/setup-installer.mjs",
-    "verify:release": "node scripts/verify-release.mjs"
+    "verify:release": "node scripts/verify-release.mjs",
+    "build:test-upstream": "node tests/runtime/fixtures/build-upstream.mjs",
+    "build:test-mcp": "node tests/runtime/fixtures/build-mcp.mjs",
+    "test:runtime": "npm run build:auth && npm run build:gateway && npm run build:installer && npm run build:test-upstream && npm run build:test-mcp && node --test --test-concurrency=1 tests/runtime/*.test.mjs"
   },
   "dependencies": {
-    "better-auth": "1.7.14",
     "@better-auth/oauth-provider": "1.7.14",
     "@better-auth/passkey": "1.7.14",
     "@better-auth/sso": "1.7.14",
-    "jose": "^6.1.0"
+    "@xmldom/xmldom": "^0.9.12",
+    "better-auth": "1.7.14",
+    "jose": "^6.1.0",
+    "uqr": "0.1.3",
+    "xml-crypto": "^6.4.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261001.1",
-    "typescript": "^5.9.3",
-    "wrangler": "^4.165.0",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@types/node": "^22.0.0",
     "auth": "1.7.14",
-    "@types/node": "^22.0.0"
+    "miniflare": "5.20261118.0-beta",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.165.0"
   },
   "overrides": {
     "@better-auth/core": "1.7.14",

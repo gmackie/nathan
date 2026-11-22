@@ -49,6 +49,8 @@ jobs:
         run: npm run build:auth
       - name: Gateway Worker bundle (no deployment)
         run: npm run build:gateway
+      - name: Workers runtime tests (built bundles in workerd)
+        run: npm run test:runtime
       - name: Pack pinned IdP release into hosted installer
         run: npm run pack:release
       - name: Verify release manifest and every package hash

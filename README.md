@@ -28,7 +28,7 @@ flowchart TB
   GW --> GatewayDB[("D1: opaque app sessions")]
   GW -->|"Private Worker service binding"| Protected["Protected Worker"]
   GW <-->|"OIDC code + PKCE"| IdP
-  IdP <-->|"Social OAuth / enterprise federation"| Upstream["Google, GitHub, Entra, Okta"]
+  IdP <-->|"Social OAuth / enterprise federation"| Upstream["Google, GitHub, Apple, Discord, Twitch, X, Entra, Okta"]
   External["Non-Worker applications"] <-->|"Standard OIDC"| IdP
 ```
 
@@ -83,7 +83,7 @@ See the [domain-wide SSO guide](docs/domain-wide-sso.md).
 The initial administrator is tied to the signed-in Cloudflare installer's verified email, **not the first visitor to the new login page**. The wizard verifies that same Better Auth identity and requires authenticator enrollment before unlocking Identity Studio.
 
 After installation, \`https://login.example.com/studio\` uses the same configuration database for:
-- Google/GitHub OAuth client-secret management (encrypted, add/rotate/enable/disable without redeploy).
+- Guided social login for Google, GitHub, Apple, Discord, Twitch and X (encrypted credentials, add/rotate/enable/disable and test sign-in without redeploy; see [docs/providers.md](docs/providers.md)).
 - Enterprise OIDC registration with TXT domain-verification challenges.
 - SCIM 2.0 directory connections and bearer-token rotation. Current SCIM mode stages directory users/groups but **does not automatically provision or deprovision Better Auth accounts**.
 - Additional verified administrators, revocation, and session termination.
@@ -140,7 +140,7 @@ CLOUDFLARE_API_TOKEN=... npm run plan
 # Interactive setup (local manifest, no infrastructure changes)
 npm run init
 
-# Display exact Google OAuth instructions and callback URL
+# Display exact provider instructions and callback URL (google, github, apple, discord, twitch, twitter)
 node scripts/nathan.mjs providers guide google
 
 # Identity Worker rollout: staging only until security gates pass
@@ -164,9 +164,11 @@ The intended stable command will eventually be `npx nathan init` with a browser 
 - [Deploy and DNS setup](docs/deploy.md)
 - [Hosted installer and Cloudflare OAuth](docs/installer.md)
 - [Admin MCP setup and tool contracts](docs/mcp.md)
+- [Protect a remote MCP server on Workers with per-scope consent](docs/remote-mcp.md)
 - [Threat model and operational assumptions](docs/threat-model.md)
 - [Backups, rotation, and incident response](docs/operations.md)
 - [Initial admin, OAuth, SCIM and MFA lifecycle](docs/setup-lifecycle.md)
+- [Account admission and invitations](docs/admission.md)
 - [Domain-wide SSO for root and approved subdomains](docs/domain-wide-sso.md)
 - [OAuth/OIDC client integration](docs/oidc.md)
 - [Plugin architecture and tiers](docs/plugins.md)

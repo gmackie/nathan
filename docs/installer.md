@@ -35,12 +35,12 @@ Once hosted, visitors:
 1. Sign in to Cloudflare through OAuth + PKCE.
 2. Select an account and Cloudflare-managed active DNS zone.
 3. Choose the IdP Worker and `login.<domain>` hostname; enable domain-wide SSO for the root and approved subdomains. The wizard verifies the managed Cloudflare zone and previews candidate HTTP DNS records and Worker Custom Domains. Enter the Cloudflare identity email for first admin bootstrap.
-4. Follow Google/GitHub OAuth setup instructions. The wizard generates the exact callback URL.
+4. Choose the first administrator's login provider (Google, GitHub, Apple, Discord, Twitch or X) and follow its guided steps. The wizard generates the exact callback URL from the shared provider registry and validates the credentials (and, for Apple, the `.p8` key) before upload.
 5. Enter provider client ID and masked secret; optionally enable enterprise SSO.
 6. Choose MFA options; **enforced MFA modes are blocked until full assurance validation**.
 7. Review the Cloudflare resource diff.
 8. Explicitly consent to deployment.
-9. Follow resumable steps to create D1, apply hash-verified migrations, upload the IdP Worker **inactive** with secrets, disable workers.dev/preview ingress, attach a custom domain, activate, verify OIDC discovery and JWKS.
+9. Follow resumable steps to create D1, apply hash-verified migrations, upload the IdP Worker **inactive** with secrets, disable workers.dev/preview ingress, attach a custom domain, activate, verify OIDC discovery (at the issuer path `/api/auth/.well-known/openid-configuration`) and the JWKS it advertises. Each step runs under a per-request lease bound to the stage it read, and every Cloudflare write first proves and extends that lease, so a duplicate, stale or expired request cannot repeat, rewind or interleave a step. If Cloudflare created the D1 database but the response was lost, a retry adopts it only when this job started the create, Cloudflare created that database afterwards, and it holds no schema objects; a definite rejection clears the marker, and anything else stops for manual inspection.
 10. Sign into Nathan with the selected provider and complete verified admin bootstrap. Then use \`/studio\`, \`/security\`, and \`/mcp\`.
 
 The installer saves an opaque job ID in browser session storage but **never stores Cloudflare or provider tokens there**. Cloudflare OAuth tokens are encrypted in the installer's D1 database for a short-lived session. Provider secrets are sent in the installation step and supplied directly as Cloudflare Worker \`secret_text\` bindings; they are not stored in installer job records.
@@ -73,7 +73,7 @@ On failures, do not delete D1 databases automatically. Inspect the provisioned i
 
 ## Production gates
 
-Staging must verify Cloudflare OAuth permissions, D1 API migration transactions, Worker multipart uploads, \`keep_bindings\` preservation, private staging, custom domain TLS, IdP OIDC discovery, Google/GitHub callbacks, SSO/MFA enrollment, session revocation, audit logs and recovery. Passing a build does **not** establish IAM assurance. Follow [roadmap](roadmap.md) and [security requirements](security.md).
+Staging must verify Cloudflare OAuth permissions, D1 API migration transactions, Worker multipart uploads, \`keep_bindings\` preservation, private staging, custom domain TLS, IdP OIDC discovery, social provider callbacks (all six, with real test accounts), SSO/MFA enrollment, session revocation, audit logs and recovery. Passing a build does **not** establish IAM assurance. Follow [roadmap](roadmap.md) and [security requirements](security.md).
 
 ## Domain-wide identity rather than wildcard proxy
 

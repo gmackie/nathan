@@ -31,9 +31,18 @@ export class CloudflareClient {
     if (!this.accountId) throw Error("Account ID required");
     return this.request("/accounts/" + this.accountId + "/workers/scripts");
   }
-  async databases() {
+  /** Exact-name D1 lookup; the list API pages at 100 and its name filter matches substrings. */
+  async databaseNamed(name) {
     if (!this.accountId) throw Error("Account ID required");
-    return this.request("/accounts/" + this.accountId + "/d1/database");
+    for (let page = 1; page <= 100; page++) {
+      const rows = await this.request("/accounts/" + this.accountId + "/d1/database?name=" +
+        encodeURIComponent(name) + "&per_page=100&page=" + page);
+      if (!Array.isArray(rows)) throw Error("Unable to list D1 databases");
+      const match = rows.find(d => d.name === name);
+      if (match) return match;
+      if (rows.length < 100) return null;
+    }
+    throw Error("D1 inventory exceeds the safe discovery limit");
   }
   async workerDomains() {
     if(!this.accountId)throw Error("Account ID required");
@@ -100,6 +109,13 @@ export class CloudflareClient {
       throw Error("Cloudflare D1 query failed");
     return result.flatMap(r => Array.isArray(r.results) ? r.results : []);
   }
+  /** Names (never values) of the secrets bound to a Worker script. */
+  async workerSecretNames(workerName) {
+    if (!/^[a-z0-9-]{1,63}$/.test(workerName)) throw Error("Invalid Worker name");
+    const rows = await this.request("/accounts/" + this.accountId + "/workers/scripts/" + workerName + "/secrets");
+    if (!Array.isArray(rows)) throw Error("Unexpected Worker secret inventory");
+    return rows.map(r => r.name);
+  }
   async createDatabase(name) {
     if (!this.accountId) throw Error("Account ID required");
     return this.request("/accounts/" + this.accountId + "/d1/database", { method: "POST", body: { name } });
@@ -109,17 +125,49 @@ export function zoneForHostname(zones, hostname) {
   return zones.filter(z => hostname === z.name || hostname.endsWith("." + z.name))
     .sort((a,b)=> b.name.length - a.name.length)[0] || null;
 }
+/** Secrets the identity Worker needs before any public route may point at it. */
+export const REQUIRED_IDP_SECRETS = ["BETTER_AUTH_SECRET", "NATHAN_CONFIG_KEY"];
+export function missingIdpSecrets(names) {
+  return REQUIRED_IDP_SECRETS.filter(name => !names.includes(name));
+}
+/**
+ * Installs each missing identity Worker secret (never replacing an existing one), then
+ * re-reads the Worker's secret names and throws unless all are present. Callers publish
+ * the public route only after this returns.
+ * @param {{ workerSecretNames(name: string): Promise<string[]> }} client
+ * @param {string} workerName
+ * @param {(name: string) => Promise<void>} putSecret
+ */
+export async function ensureIdpSecrets(client, workerName, putSecret) {
+  for (const name of missingIdpSecrets(await client.workerSecretNames(workerName))) await putSecret(name);
+  const stillMissing = missingIdpSecrets(await client.workerSecretNames(workerName));
+  if (stillMissing.length)
+    throw Error("Refusing to publish the identity hostname: missing Worker secrets " + stillMissing.join(", "));
+}
+/**
+ * DNS records at the identity hostname conflict unless they are the record Cloudflare
+ * manages for this installation's own Worker custom domain (a re-run or upgrade).
+ */
+export function hostnameConflicts(records, domains, hostname, workerName) {
+  const ownsHostname = domains.some(d => d.hostname === hostname && d.service === workerName);
+  return ownsHostname ? [] : records;
+}
 export async function inspectDeployment(client, cfg) {
-  const [zones, workers, databases] = await Promise.all([
-    client.zones(), client.workers(), client.databases()
+  const [zones, workers, existingDatabase] = await Promise.all([
+    client.zones(), client.workers(), client.databaseNamed(cfg.database.name)
   ]);
   const zone = zoneForHostname(zones, cfg.hostname);
-  const conflicts = zone ? await client.dnsRecords(zone.id, cfg.hostname) : [];
+  const records = zone ? await client.dnsRecords(zone.id, cfg.hostname) : [];
+  // Custom-domain inventory is read only when there is something to explain, so a
+  // first install does not need Workers custom-domain read permission.
+  const conflicts = records.length
+    ? hostnameConflicts(records, await client.workerDomains(), cfg.hostname, cfg.name + "-auth")
+    : [];
   return {
     accountId: client.accountId,
     zone: zone ? { id: zone.id, name: zone.name, status: zone.status } : null,
     existingAuthWorker: Array.isArray(workers) && workers.some(w => w.id === cfg.name + "-auth"),
-    existingDatabase: Array.isArray(databases) ? databases.find(d => d.name === cfg.database.name) || null : null,
+    existingDatabase,
     dnsConflicts: conflicts.map(x => ({ type: x.type, name: x.name, id: x.id })),
     warning: !zone ? "No active Cloudflare zone for requested hostname" : null
   };

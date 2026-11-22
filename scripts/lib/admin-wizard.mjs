@@ -19,8 +19,7 @@ export async function adminCommand(args, file, apply) {
   if (!cfg.accountId) throw Error("accountId required");
   const email = validateAdminPromotion(await ask("Verified administrator email"), cfg);
   const api = new CloudflareClient(process.env.CLOUDFLARE_API_TOKEN, cfg.accountId);
-  const databases = await api.databases();
-  const database = databases.find(d => d.name === cfg.database.name);
+  const database = await api.databaseNamed(cfg.database.name);
   if (!database) throw Error("Nathan D1 database not found");
   const dbId = database.uuid || database.id;
   const rows = await api.queryDatabase(dbId,
