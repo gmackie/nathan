@@ -6,6 +6,7 @@ import { ADMISSION_STUDIO_HTML, ADMISSION_STUDIO_SCRIPT } from "./admission-ui.t
 import { displayName } from "../shared/providers.mjs";
 import { providerStudioSection, providerStudioScript } from "./provider-ui.mjs";
 import { samlStudioSection, samlStudioScript } from "./saml-ui.mjs";
+import { samlIdpStudioSection, samlIdpStudioScript } from "./saml-idp-ui.mjs";
 const htmlEscape = (s: string) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 
 function page(title: string, body: string, script = ""): Response {
@@ -215,6 +216,7 @@ export function studioPage(userEmail: string): Response {
   <p id="sso-status" role="status"></p><pre id="sso-verification"></pre>
   <button class="secondary" id="sso-list">List enterprise providers</button><pre id="sso-results"></pre>
   ${samlStudioSection}
+  ${samlIdpStudioSection}
   <h2>MCP administration</h2><p>OAuth-protected stateless MCP endpoint. Register an MCP OIDC client for resource-bound access.</p>
   <pre id="mcp-help"></pre></div>`, `
     document.getElementById('refresh').onclick=async()=>{
@@ -460,6 +462,7 @@ ${providerStudioScript}
       'Endpoint: '+location.origin+'/mcp\\nResource metadata: '+location.origin+'/.well-known/oauth-protected-resource\\n' +
       'Scopes: nathan:read / nathan:admin\\nProtocol: 2026-07-28';
     ${samlStudioScript}
+    ${samlIdpStudioScript}
     const root=document.getElementById('studio-root');
     const headings=Array.from(root.children).filter(el=>el.tagName==='H2');
     const tabs=document.getElementById('studio-tabs');
