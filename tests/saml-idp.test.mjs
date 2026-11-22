@@ -282,3 +282,84 @@ test("bounded body reads count bytes, not characters, and stop at the limit with
   assert.equal(await readBoundedText(declared, 1000), null, "a declared length over the limit is refused before reading");
   assert.equal(await readBoundedText(new Request("https://login.example.com/x"), 10), "", "no body reads as empty");
 });
+
+test("signature wrapping against an independent SP library: only the signed Assertion counts, moved or stripped signatures fail", async () => {
+  // samlify's XSD schema validation is stubbed with a well-formedness check (top of this file), so
+  // these results come from samlify's signature, wrapping, recipient and InResponseTo checks only.
+  const k = await signingKey();
+  const idp = idpFor([k.certificate]);
+  const xml = Buffer.from((await response()).response, "base64").toString();
+  const parse = x => serviceProvider().parseLoginResponse(idp, "post", { body: { SAMLResponse: Buffer.from(x).toString("base64") } });
+  const assertion = /<saml:Assertion[^]*<\/saml:Assertion>/.exec(xml)[0];
+  const signature = /<ds:Signature[^]*<\/ds:Signature>/.exec(assertion)[0];
+  const evil = assertion.replace(signature, "").replace("opaque-123", "victim").replace("jane@example.com", "mallory@example.com").replace(/ ID="[^"]+"/, ' ID="_evil"');
+  // A second, unsigned Assertion before or after the signed one: samlify reads the signed one only.
+  for (const forged of [xml.replace(assertion, evil + assertion), xml.replace(assertion, assertion + evil)]) {
+    const { extract } = await parse(forged);
+    assert.equal(extract.nameID, "opaque-123", "the unsigned Assertion's subject is never used");
+    assert.equal(extract.attributes.email, "jane@example.com");
+  }
+  await assert.rejects(parse(xml.replace(signature, "")), /FAILED_TO_VERIFY_SIGNATURE/, "stripped signature");
+  await assert.rejects(parse(xml.replace(signature, "").replace("<samlp:Status>", signature + "<samlp:Status>")), /ERR_POTENTIAL_WRAPPING_ATTACK/, "signature moved to the Response");
+  await assert.rejects(parse(xml.replace(assertion, evil.replace("</saml:Issuer>", "</saml:Issuer>" + signature) + assertion.replace(signature, ""))),
+    /ERR_POTENTIAL_WRAPPING_ATTACK/, "signature moved into the forged Assertion");
+  await assert.rejects(parse(xml.replace(assertion, evil.replace("</saml:Assertion>", "<saml:Advice>" + assertion + "</saml:Advice></saml:Assertion>"))),
+    /FAILED_TO_VERIFY_SIGNATURE/, "signed Assertion wrapped inside the forged one");
+  // Edited attributes of the unsigned Response element.
+  const responseAttr = (name, value) => xml.replace(new RegExp("(<samlp:Response[^>]* " + name + '=")[^"]+'), "$1" + value);
+  await assert.rejects(parse(responseAttr("Destination", "https://evil.example.com/acs")), /ERR_RECIPIENT_MISMATCH/);
+  await assert.rejects(parse(responseAttr("InResponseTo", "_other")), /ERR_INRESPONSETO_MISMATCH/);
+  await assert.rejects(parse(xml.replace("status:Success", "status:Requester")), /ERR_FAILED_STATUS/);
+  // The unsigned Response's Issuer and IssueInstant are not covered by the Assertion signature:
+  // samlify accepts the edit but reports the signed Assertion's issuer. Sign the Response too
+  // ("Also sign the Response") for SPs that read Response-level values.
+  const issuerEdited = xml.replace(/(<samlp:Response[^>]*>)<saml:Issuer>[^<]+/, "$1<saml:Issuer>https://evil.example.com");
+  assert.equal((await parse(issuerEdited)).extract.issuer, IDP);
+  const both = Buffer.from((await response({ signResponse: true })).response, "base64").toString();
+  await assert.rejects(parse(both.replace(/(<samlp:Response[^>]*>)<saml:Issuer>[^<]+/, "$1<saml:Issuer>https://evil.example.com")), /FAILED_TO_VERIFY_SIGNATURE/);
+  await assert.rejects(parse(both.replace(/(<samlp:Response[^>]* IssueInstant=")[^"]+/, "$12020-01-01T00:00:00Z")), /FAILED_TO_VERIFY_SIGNATURE/);
+});
+
+test("3072- and 4096-bit IdP keys: valid certificates whose responses an SP accepts", async () => {
+  for (const bits of [3072, 4096]) {
+    const k = await generateSigningKey({ bits, subject: "Nathan SAML IdP " + bits });
+    assert.equal(k.bits, bits);
+    const x509 = new X509Certificate(Buffer.from(k.certificate, "base64"));
+    assert.equal(x509.publicKey.asymmetricKeyDetails.modulusLength, bits);
+    assert.ok(x509.verify(x509.publicKey));
+    assert.deepEqual(createPublicKey({ key: Buffer.from(certificateSpki(k.certificate)), format: "der", type: "spki" }).export({ format: "jwk" }),
+      x509.publicKey.export({ format: "jwk" }));
+    const { response: SAMLResponse } = await response({ key: await importSigningKey(k.pkcs8), certificate: k.certificate });
+    assert.equal((await serviceProvider().parseLoginResponse(idpFor([k.certificate]), "post", { body: { SAMLResponse } })).extract.nameID, "opaque-123");
+  }
+});
+
+test("certificate DER reading: one-, two- and three-byte long-form lengths; longer, indefinite, truncated or trailing input refused", async () => {
+  const k = await signingKey();
+  const spki = certificateSpki(k.certificate);
+  const tlv = (tag, body) => {
+    const n = body.length;
+    const head = n < 0x80 ? [n] : n < 0x100 ? [0x81, n] : n < 0x10000 ? [0x82, n >> 8, n & 0xff] : [0x83, n >> 16, (n >> 8) & 0xff, n & 0xff];
+    return Buffer.concat([Buffer.from([tag, ...head]), Buffer.from(body)]);
+  };
+  const seq = (...parts) => tlv(0x30, Buffer.concat(parts));
+  const name = cn => seq(tlv(0x31, seq(tlv(0x06, Buffer.from([0x55, 0x04, 0x03])), tlv(0x0c, Buffer.from(cn)))));
+  const alg = seq(tlv(0x06, Buffer.from([0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b])), Buffer.from([0x05, 0x00]));
+  const tbs = seq(tlv(0xa0, tlv(0x02, Buffer.from([2]))), tlv(0x02, Buffer.from([1])), alg,
+    name("x".repeat(200)),                                         // 0x81 length
+    seq(tlv(0x17, Buffer.from("260101000000Z")), tlv(0x17, Buffer.from("290101000000Z"))),
+    name("y".repeat(300)),                                         // 0x82 length
+    Buffer.from(spki),
+    tlv(0xa3, tlv(0x04, Buffer.alloc(70_000, 1))));                // 0x83 length (and so are the TBS and the certificate)
+  const der = seq(tbs, alg, tlv(0x03, Buffer.alloc(257)));
+  assert.deepEqual([der[0], der[1]], [0x30, 0x83]);
+  assert.ok(der.includes(Buffer.from([0x0c, 0x81, 200])) && der.includes(Buffer.from([0x0c, 0x82, 0x01, 0x2c])));
+  assert.deepEqual(Buffer.from(certificateSpki(der.toString("base64"))), Buffer.from(spki), "the key is found behind every length form");
+  const outerLength = der.subarray(2, 5);
+  const refuse = (bytes, pattern) => assert.throws(() => certificateSpki(Buffer.from(bytes).toString("base64")), pattern);
+  refuse(Buffer.concat([Buffer.from([0x30, 0x84, 0x00]), outerLength, der.subarray(5)]), /Unsupported certificate length/);
+  refuse(Buffer.concat([Buffer.from([0x30, 0x80]), der.subarray(5)]), /Unsupported certificate length/);
+  refuse(der.subarray(0, der.length - 1), /Truncated certificate/);
+  refuse(Buffer.concat([der, Buffer.from([0])]), /Not a certificate/);
+  refuse(Buffer.from([0x30, 0x82, 0x01]), /Truncated|Unsupported/);
+});

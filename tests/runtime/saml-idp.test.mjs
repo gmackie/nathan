@@ -624,3 +624,207 @@ test("no confirmation after a sign-in made for this request, or for a validly si
   const noDestination = await continueWith(await redirectLogin(SSO + "?" + signedQuery + "&Signature=" + encodeURIComponent(signature), user), user, { confirm: false });
   assert.ok(confirmationToken(await noDestination.text()), "signed without Destination: still confirmed by the user");
 });
+
+test("a real body on GET is refused before parsing (raw socket), and RelayState may appear only once in a POST", async () => {
+  const s = await freshSp();
+  const target = new URL(s.sp.createLoginRequest(s.idp, "redirect").context);
+  const r = await rawHttp(mf, HOST, { method: "GET", path: target.pathname + target.search, body: "SAMLRequest=x&RelayState=y",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Cookie: user, "cf-connecting-ip": "10.66.0.1" } });
+  assert.equal(r.status, 400, r.text.slice(0, 300));
+  assert.match(r.text, /\(saml_body_not_allowed\)/);
+  assert.doesNotMatch(r.text, /SAMLResponse|__Host-nathan-saml-idp=[A-Za-z0-9]/, "no assertion, no pending request");
+  assert.ok((await auditRows("saml_idp_request_rejected", "unknown:saml_body_not_allowed")).length >= 1);
+  const { context } = s.sp.createLoginRequest(s.idp, "post");
+  const twice = await dispatch(SSO, { method: "POST", redirect: "manual", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: "SAMLRequest=" + encodeURIComponent(context) + "&RelayState=a&RelayState=b" });
+  await refused(twice, "RelayState twice", "saml_duplicate_parameter");
+});
+
+test("the resume handle: missing, tampered, wrong length, expired, forged on the return redirect or replayed, each with its reason", async () => {
+  const s = await freshSp();
+  const pending = async () => resumeCookie(await redirectLogin(manual(s.entity)));
+  const at = (cookie, session = user) => dispatch(ORIGIN + "/saml/idp/continue", { redirect: "manual", headers: { Cookie: [cookie, session].filter(Boolean).join("; ") } });
+  const swap = (value, i) => value.slice(0, i) + (value[i] === "A" ? "B" : "A") + value.slice(i + 1);
+  const resume = await pending();
+  const value = resume.slice(resume.indexOf("=") + 1);
+  assert.equal(value.length, 86, "43-character handle followed by its 43-character HMAC");
+  await refused(await at(null), "no cookie", "saml_resume_missing");
+  await refused(await at("__Host-nathan-saml-idp=" + swap(value, 60)), "HMAC half changed", "saml_resume_invalid");
+  await refused(await at("__Host-nathan-saml-idp=" + swap(value, 10)), "handle half changed", "saml_resume_invalid");
+  await refused(await at("__Host-nathan-saml-idp=" + value.slice(0, 85)), "too short", "saml_resume_invalid");
+  await refused(await at("__Host-nathan-saml-idp=" + value + "A"), "too long", "saml_resume_invalid");
+  await refused(await at("__Host-nathan-saml-idp=" + value.slice(0, 85) + "*"), "outside the alphabet", "saml_resume_invalid");
+  // After a sign-in, "/" resumes only a handle Nathan signed.
+  const home = cookie => dispatch(ORIGIN + "/", { redirect: "manual", headers: { Cookie: cookie + "; " + user } });
+  assert.equal((await home(resume)).headers.get("location"), ORIGIN + "/saml/idp/continue");
+  assert.notEqual((await home("__Host-nathan-saml-idp=" + swap(value, 60))).headers.get("location"), ORIGIN + "/saml/idp/continue", "a forged handle is not resumed");
+  // Expiry: the pending request is older than its 10 minutes.
+  const expiring = await pending();
+  await run("UPDATE nathan_saml_idp_pending SET expires_at=unixepoch()-1 WHERE sp_id=? AND used=0", s.id);
+  await refused(await at(expiring), "expired", "saml_resume_expired");
+  // Replay: a used handle stays refused, and after cleanup removes the row it reads as expired.
+  const used = await pending();
+  await form(await at(used).then(async page => {
+    const token = confirmationToken(await page.text());
+    return confirmPost(used, user, token);
+  }));
+  await refused(await at(used), "replayed", "saml_resume_used");
+  await run("UPDATE nathan_saml_idp_pending SET expires_at=unixepoch()-7200 WHERE sp_id=?", s.id);
+  await refused(await at(used), "replayed after the window", "saml_resume_used");
+  await run("DELETE FROM nathan_saml_idp_pending WHERE sp_id=? AND expires_at < unixepoch() - 3600", s.id);
+  await refused(await at(used), "replayed after cleanup", "saml_resume_expired");
+});
+
+test("IdP-initiated sign-in: no Origin, cross-site Sec-Fetch-Site or no session refuse the POST; the GET page issues nothing", async () => {
+  const s = await freshSp({ allowIdpInitiated: true });
+  const start = ORIGIN + "/saml/idp/start/" + s.id;
+  const page = await dispatch(start, { headers: { Cookie: user } });
+  const html = await page.text();
+  assert.equal(page.status, 200);
+  assert.doesNotMatch(html, /SAMLResponse|<script/, "the confirmation page issues nothing and does not submit itself");
+  assert.match(page.headers.get("content-security-policy"), /form-action 'self'.*frame-ancestors 'none'/);
+  await refused(await dispatch(start, { method: "POST", headers: { Cookie: user } }), "no Origin", "saml_cross_site_request");
+  await refused(await dispatch(start, { method: "POST", headers: { Cookie: user, Origin: ORIGIN, "Sec-Fetch-Site": "cross-site" } }), "Origin right, Sec-Fetch-Site cross-site", "saml_cross_site_request");
+  await refused(await dispatch(start, { method: "POST", headers: { Origin: ORIGIN, "Sec-Fetch-Site": "same-origin" } }), "no session", "saml_sign_in_required");
+  await refused(await dispatch(start), "GET without a session", "saml_sign_in_required");
+  await refused(await dispatch(start, { method: "PUT", headers: { Cookie: user, Origin: ORIGIN } }), "PUT", "saml_method_not_allowed");
+  assert.equal((await auditRows("saml_idp_assertion", s.id)).length, 0, "no assertion issued or attempted");
+});
+
+test("request signatures: SigAlg without Signature, SHA-1 on Redirect, a POST signature over another ID or Issuer, no Destination, an XML signature inside a Redirect", async () => {
+  const spKey = makeCertificate({ cn: "Strict SP" });
+  const s = await freshSp({ wantRequestsSigned: true, certificates: [spKey.certPem] });
+  // A second SP pinning the same certificate (one SP key for two entity IDs).
+  const twin = await freshSp({ wantRequestsSigned: true, certificates: [spKey.certPem] });
+  const signingIdp = samlify.IdentityProvider({ metadata: (await idpFromMetadata()).metadata.replace('WantAuthnRequestsSigned="false"', 'WantAuthnRequestsSigned="true"') });
+  const signer = serviceProvider(s.entity, s.acs, { authnRequestsSigned: true, privateKey: spKey.privateKey, signingCert: spKey.certPem,
+    requestSignatureAlgorithm: "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256" });
+  const redirect = () => signer.createLoginRequest(signingIdp, "redirect").context;
+  await refused(await redirectLogin(redirect().replace(/&Signature=[^&]+/, "")), "SigAlg without Signature", "saml_bad_signature");
+  await refused(await redirectLogin(redirect().replace(/SigAlg=[^&]+/, "SigAlg=" + encodeURIComponent("http://www.w3.org/2000/09/xmldsig#rsa-sha1"))), "SHA-1 SigAlg", "saml_weak_algorithm");
+  const postXml = () => Buffer.from(signer.createLoginRequest(signingIdp, "post").context, "base64").toString();
+  const post = xml => postLogin({ SAMLRequest: Buffer.from(xml).toString("base64") });
+  const idOf = xml => / ID="([^"]+)"/.exec(xml)[1];
+  let xml = postXml();
+  assert.match(await refused(await post(xml.replace(' ID="' + idOf(xml) + '"', ' ID="_other' + idOf(xml).slice(1) + '"')), "root ID changed", "saml_bad_signature"), /cover the whole request/);
+  xml = postXml();
+  assert.match(await refused(await post(xml.replaceAll(idOf(xml), "_other" + idOf(xml).slice(1))), "ID and Reference changed", "saml_bad_signature"), /signature is invalid/);
+  xml = postXml();
+  await refused(await post(xml.replace(">" + s.entity + "<", ">" + twin.entity + "<")), "Issuer changed to another SP with the same key", "saml_bad_signature");
+  // Hand-signed HTTP-Redirect requests (the SP's key) for shapes samlify does not produce.
+  const { createSign } = await import("node:crypto");
+  const signedRedirect = inner => {
+    const query = "SAMLRequest=" + encodeURIComponent(deflateRawSync(inner).toString("base64")) + "&SigAlg=" + encodeURIComponent("http://www.w3.org/2001/04/xmldsig-more#rsa-sha256");
+    return SSO + "?" + query + "&Signature=" + encodeURIComponent(createSign("RSA-SHA256").update(query).sign(spKey.privateKey, "base64"));
+  };
+  const bare = `<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_h${randomKey().replace(/-/g, "")}" Version="2.0" IssueInstant="${new Date().toISOString()}"><saml:Issuer>${s.entity}</saml:Issuer></samlp:AuthnRequest>`;
+  await refused(await redirectLogin(signedRedirect(bare)), "signed without Destination", "saml_destination_mismatch");
+  assert.match(await refused(await redirectLogin(signedRedirect(postXml())), "XML signature inside a Redirect", "saml_invalid_request"), /signed in the query/);
+  // The same well-formed request with Destination is accepted, so each refusal above is its own.
+  const withDestination = bare.replace(' Version="2.0"', ' Destination="' + SSO + '" Version="2.0"');
+  assert.equal((await form(await continueWith(await redirectLogin(signedRedirect(withDestination)), user, { confirm: false }))).action, s.acs);
+});
+
+test("hostile display name, email and RelayState are escaped end to end; two SPs get different persistent NameIDs", async () => {
+  const name = '</saml:AttributeValue><saml:Attribute Name="role"><saml:AttributeValue>admin</saml:AttributeValue>"\'&<script>alert(1)</script>';
+  const email = 'x"><img src=x onerror=alert(1)>@example.test';
+  const relayState = '"><script>alert(2)</script>&amp;<!--';
+  const cookie = await seedUser("hostile", { name, email });
+  const s = await freshSp({ name: "<img src=x onerror=alert(3)>", nameIdFormat: "email" }, { grantJane: false });
+  await grant(s.id, "hostile", "viewer");
+  const url = new URL(s.sp.createLoginRequest(s.idp, "redirect").context);
+  url.searchParams.set("RelayState", relayState);
+  const sso = await redirectLogin(url.href, cookie);
+  const resume = resumeCookie(sso);
+  const confirmPage = await continueWith(sso, cookie, { confirm: false });
+  const confirmHtml = await confirmPage.text();
+  for (const raw of ["<img src=x", "<script>alert", 'x"><img']) assert.ok(!confirmHtml.includes(raw), "confirmation page escapes " + raw);
+  assert.ok(confirmHtml.includes("&lt;img src=x onerror=alert(3)&gt;") && confirmHtml.includes("x&quot;&gt;&lt;img src=x onerror=alert(1)&gt;@example.test"));
+  const page = await confirmPost(resume, cookie, confirmationToken(confirmHtml));
+  const posted = await form(page);
+  for (const raw of ["<img src=x", "<script>alert", "<!--"]) assert.ok(!posted.html.includes(raw), "auto-POST page escapes " + raw);
+  assert.equal((posted.html.match(/<script/g) ?? []).length, 1, "only Nathan's nonce'd submit script");
+  assert.equal(posted.RelayState, relayState, "RelayState is returned exactly");
+  const { extract } = await s.sp.parseLoginResponse(s.idp, "post", { body: { SAMLResponse: posted.SAMLResponse, RelayState: posted.RelayState } });
+  assert.equal(extract.nameID, email);
+  assert.equal(extract.attributes.email, email);
+  assert.equal(extract.attributes.displayName, name, "the name arrives as text, not markup");
+  assert.equal(extract.attributes.role, "viewer", "no injected role attribute");
+  assert.equal((xmlOf(posted.SAMLResponse).match(/<saml:Attribute Name="role"/g) ?? []).length, 1);
+  // Persistent NameIDs are pairwise: the same user, two SPs, two unrelated identifiers.
+  const a = await freshSp(), b = await freshSp();
+  const nameId = async sp => (await sp.sp.parseLoginResponse(sp.idp, "post", { body: { SAMLResponse: (await form(await continueWith(await redirectLogin(sp.sp.createLoginRequest(sp.idp, "redirect").context), user))).SAMLResponse } })).extract.nameID;
+  const [first, second] = [await nameId(a), await nameId(b)];
+  assert.match(first, /^[A-Za-z0-9_-]{32}$/);
+  assert.match(second, /^[A-Za-z0-9_-]{32}$/);
+  assert.notEqual(first, second);
+  assert.equal(await nameId(a), first, "stable per SP");
+});
+
+test("rate limit (429) and size limits (413, 414) at runtime", async () => {
+  // 120 SSO requests per client IP and minute. Start early in a minute so the window does not roll over mid-test.
+  const ms = Date.now() % 60_000;
+  if (ms > 45_000) await new Promise(r => setTimeout(r, 60_000 - ms + 50));
+  const ip = "10.250.0." + Math.floor(Math.random() * 250);
+  for (let i = 0; i < 120; i++) {
+    const r = await dispatch(SSO + "?RelayState=x", { headers: { "cf-connecting-ip": ip } });
+    assert.equal(r.status, 400, "request " + i + " is answered, not limited");
+  }
+  await refused(await dispatch(SSO + "?RelayState=x", { headers: { "cf-connecting-ip": ip } }), "121st request", "saml_rate_limited");
+  const limited = await dispatch(SSO + "?RelayState=x", { headers: { "cf-connecting-ip": ip } });
+  assert.equal(limited.status, 429);
+  assert.equal((await dispatch(SSO + "?RelayState=x", { headers: { "cf-connecting-ip": ip + "1" } })).status, 400, "other clients are not affected");
+  const s = await freshSp();
+  const long = await redirectLogin(manual(s.entity, "", undefined, "&RelayState=" + "a".repeat(17_000)));
+  await refused(long, "query over 16 KiB", "saml_unreadable");
+  assert.equal(long.status, 414);
+  const big = await dispatch(SSO, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "SAMLRequest=" + "a".repeat(200_001) });
+  await refused(big, "form over 200 KB", "saml_unreadable");
+  assert.equal(big.status, 413);
+});
+
+test("rotation gates: one next key, retire a next key, the exact 24 h boundary, previous retired first, no active key, 3072/4096-bit keys", { timeout: 120_000 }, async () => {
+  await resetKeys();
+  const keys = async () => (await ok(await dispatch(ORIGIN + "/studio/api/saml-idp", { headers: { Cookie: admin } }))).keys;
+  const activate = sha256 => studio({ op: "key.activate", sha256, confirm: "CONFIRM ACTIVATE SAML IDP KEY" });
+  const retire = sha256 => studio({ op: "key.retire", sha256, confirm: "CONFIRM RETIRE SAML IDP KEY" });
+  const refusedWith = async (response, pattern) => { assert.equal(response.status, 409); assert.match((await response.json()).error, pattern); };
+  const first = (await keys()).find(k => k.status === "active");
+  const next = await ok(await studio({ ...GENERATE, bits: 3072 }));
+  assert.deepEqual([next.status, next.bits], ["next", 3072]);
+  await refusedWith(await studio(GENERATE), /next key is already published/);
+  // A next key can be retired (rotation cancelled): it leaves the metadata and loses its private key.
+  assert.equal((await ok(await retire(next.sha256))).status, "retired");
+  assert.equal((await idpFromMetadata()).certificates, 1);
+  assert.equal((await db.prepare("SELECT private_key FROM nathan_saml_idp_keys WHERE id=?").bind(next.id).first()).private_key, null);
+  // The overlap boundary: 86399 s is too early, 86400 s is enough (start early in a second so it does not tick over).
+  const big = await ok(await studio({ ...GENERATE, bits: 4096 }));
+  assert.deepEqual([big.status, big.bits], ["next", 4096]);
+  if (Date.now() % 1000 > 300) await new Promise(r => setTimeout(r, 1050 - Date.now() % 1000));
+  await run("UPDATE nathan_saml_idp_keys SET created_at=? WHERE id=?", Math.floor(Date.now() / 1000) - 86399, big.id);
+  await refusedWith(await activate(big.sha256), /24 hours/);
+  await run("UPDATE nathan_saml_idp_keys SET created_at=? WHERE id=?", Math.floor(Date.now() / 1000) - 86400, big.id);
+  assert.equal((await ok(await activate(big.sha256))).status, "active");
+  assert.equal((await keys()).find(k => k.status === "previous").sha256, first.sha256);
+  // The 4096-bit key signs responses the SP accepts.
+  const s = await freshSp();
+  const signed = await form(await continueWith(await redirectLogin(s.sp.createLoginRequest(s.idp, "redirect").context), user));
+  await s.sp.parseLoginResponse(s.idp, "post", { body: { SAMLResponse: signed.SAMLResponse } });
+  // The next activation waits until the previous key is retired.
+  const third = await ok(await studio(GENERATE));
+  await run("UPDATE nathan_saml_idp_keys SET created_at=created_at-90000 WHERE id=?", third.id);
+  await refusedWith(await activate(third.sha256), /Retire the previous key first/);
+  await ok(await retire(first.sha256));
+  assert.equal((await ok(await activate(third.sha256))).status, "active");
+  // No active key (for example after a manual repair): the overlap gate still applies to a fresh next
+  // key; once it has passed, activation makes it the only key and creates no previous key.
+  await ok(await retire(big.sha256));
+  const lone = await ok(await studio(GENERATE));
+  await run("UPDATE nathan_saml_idp_keys SET status='retired', private_key=NULL WHERE id=?", third.id);
+  assert.equal((await dispatch(ORIGIN + "/saml/idp/metadata")).status, 404, "without an active key no metadata is served");
+  await refusedWith(await activate(lone.sha256), /24 hours/);
+  await run("UPDATE nathan_saml_idp_keys SET created_at=created_at-90000 WHERE id=?", lone.id);
+  assert.equal((await ok(await activate(lone.sha256))).status, "active");
+  assert.deepEqual((await keys()).filter(k => k.status !== "retired").map(k => k.status), ["active"]);
+  assert.equal((await idpFromMetadata()).certificates, 1);
+});
