@@ -1,4 +1,5 @@
 import { serveUiAsset } from "../ui/assets.ts";
+import { renderGatewayError } from "../ui/pages/gateway/GatewayErrorPage.tsx";
 import { parseCookie, makeCookie, safeReturnPath, constantTimeEqual, validateIssuer, isAllowedUnsafeRequest, redirectWithCookies } from "../shared/security.mjs";
 import { randomId, seal, unseal, sha256 } from "./crypto";
 import { discover, authorizeUrl, exchangeCode, verifyIdToken } from "./oidc";
@@ -19,7 +20,23 @@ function origin(env: GatewayEnv) {
   if (!env.OIDC_CLIENT_ID || !env.OIDC_CLIENT_SECRET || !env.SESSION_ENCRYPTION_KEY) throw Error("Missing gateway secret or OAuth client credentials");
   return u.origin;
 }
-function errorResponse(status: number, message: string): Response {
+/** A top-level browser navigation, which gets the Kumo error page rather than plain text. */
+function wantsHtml(request?: Request): boolean {
+  return !!request && (request.method === "GET" || request.method === "HEAD") && (request.headers.get("Accept") || "").includes("text/html");
+}
+/** Same-origin "Try again" target that restarts login and comes back to `returnTo`. */
+function loginRetry(returnTo = "/"): string {
+  return "/__nathan/login?returnTo=" + encodeURIComponent(safeReturnPath(returnTo));
+}
+/**
+ * NATH-40: browser navigations get a Kumo page (src/ui/pages/gateway/), built only from the
+ * gateway's own /__nathan/ui/ assets; every other client gets exactly the plain-text body as before.
+ * If the page cannot be rendered, the plain-text response is still returned (fail closed, same status).
+ */
+function errorResponse(status: number, message: string, request?: Request, retry?: string): Response {
+  if (wantsHtml(request)) {
+    try { return renderGatewayError({ status, message, retry }); } catch { /* plain text below */ }
+  }
   return new Response(message, {
     status,
     headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" }
@@ -52,10 +69,10 @@ async function completeLogin(url: URL, request: Request, env: GatewayEnv): Promi
   const flow = encrypted && await unseal<Flow>(encrypted, env.SESSION_ENCRYPTION_KEY);
   if (!flow || !Number.isSafeInteger(flow.expiresAt) || flow.expiresAt < Date.now()
       || !constantTimeEqual(url.searchParams.get("state") || "", flow.state))
-    return cleared(errorResponse(400, "Login state invalid or expired. Please try again."));
-  if (url.searchParams.has("error")) return cleared(errorResponse(401, "Identity provider rejected login"));
+    return cleared(errorResponse(400, "Login state invalid or expired. Please try again.", request, loginRetry()));
+  if (url.searchParams.has("error")) return cleared(errorResponse(401, "Identity provider rejected login", request, loginRetry(flow.returnTo)));
   const code = url.searchParams.get("code");
-  if (!code || code.length > 4096) return cleared(errorResponse(400, "Missing authorization code"));
+  if (!code || code.length > 4096) return cleared(errorResponse(400, "Missing authorization code", request, loginRetry(flow.returnTo)));
   try {
     const meta = await discover(env);
     const token = await exchangeCode(env, meta, code, flow.verifier);
@@ -74,7 +91,7 @@ async function completeLogin(url: URL, request: Request, env: GatewayEnv): Promi
     const response = redirectWithCookies(origin(env) + flow.returnTo, 303, [makeCookie(SESSION_COOKIE, handle, { maxAge: ttl })]);
     return cleared(response);
   } catch {
-    return cleared(errorResponse(401, "Login validation failed. Please retry or contact your administrator."));
+    return cleared(errorResponse(401, "Login validation failed. Please retry or contact your administrator.", request, loginRetry(flow.returnTo)));
   }
 }
 async function currentSession(request: Request, env: GatewayEnv): Promise<StoredSession | null> {
@@ -138,7 +155,7 @@ async function upstream(request: Request, env: GatewayEnv, session: StoredSessio
   if (!env.NATHAN_PRINCIPAL_KEY) throw Error("NATHAN_PRINCIPAL_KEY missing");
   principalKey(env.NATHAN_PRINCIPAL_KEY);
   const access = await resolveAccess(env, session);
-  if (!access.allowed) return errorResponse(403, "Access denied. Ask an administrator for a role in this application.");
+  if (!access.allowed) return errorResponse(403, "Access denied. Ask an administrator for a role in this application.", request);
   const principal = await signPrincipal({
     sub: session.subject, email: session.email, app: env.APPLICATION_ID, roles: access.roles, permissions: access.permissions
   }, { key: env.NATHAN_PRINCIPAL_KEY, issuer: origin(env) });
@@ -176,7 +193,7 @@ export default {
       if (url.pathname === "/__nathan/callback" && request.method === "GET") return completeLogin(url, request, env);
       if (url.pathname === "/__nathan/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/__nathan/backchannel" && request.method === "POST") return handleBackchannelLogout(request, env);
-      if (url.pathname.startsWith("/__nathan/")) return errorResponse(404, "Not found");
+      if (url.pathname.startsWith("/__nathan/")) return errorResponse(404, "Not found", request);
       if (!isAllowedUnsafeRequest(request.method,request.headers.get("Origin"),expected,request.headers.get("Sec-Fetch-Site")))
         return errorResponse(403, "Cross-origin state-changing request denied");
       const session = await currentSession(request, env);
@@ -185,12 +202,14 @@ export default {
         return errorResponse(401, "Authentication required");
       }
       if (env.REQUIRE_AAL2 === "true" && !(env.ACCEPTED_ACRS || "").split(",").includes(session.acr || "")) {
-        return errorResponse(403, "Insufficient authentication assurance");
+        return errorResponse(403, "Insufficient authentication assurance", request, loginRetry(url.pathname + url.search));
       }
       // Awaited so that any failure (RPC, signing, upstream) fails closed with the 503 below.
       return await upstream(request, env, session);
     } catch {
-      return errorResponse(503, "Access verification temporarily unavailable");
+      const { pathname, search } = new URL(request.url);
+      return errorResponse(503, "Access verification temporarily unavailable", request,
+        pathname.startsWith("/__nathan/") ? undefined : pathname + search);
     }
   },
   async scheduled(_event: ScheduledEvent, env: GatewayEnv): Promise<void> {

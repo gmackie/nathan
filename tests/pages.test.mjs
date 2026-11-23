@@ -1,15 +1,27 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Script } from "node:vm";
+import { readFileSync } from "node:fs";
 import { signInPage, consentPage, studioPage } from "../src/auth/ui.ts";
 import { securityPage } from "../src/auth/security-ui.ts";
-import { installerPage } from "../src/installer/ui.ts";
+import { mkdir } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+import { build } from "esbuild";
 
-/** Every inline script must at least parse, or no button on the page works. */
+// NATH-40: the installer page is TSX (renderPage); node can't import TSX, so bundle it first.
+await mkdir(".nathan/test-ui", { recursive: true });
+await build({
+  entryPoints: ["src/installer/ui.ts"], outfile: ".nathan/test-ui/installer-ui.mjs", bundle: true, platform: "node", format: "esm",
+  jsx: "automatic", packages: "external", logLevel: "error", logOverride: { "module-level-directive": "silent" }
+});
+const { installerPage } = await import(pathToFileURL(".nathan/test-ui/installer-ui.mjs").href + "?" + Date.now());
+
+/** Every inline script must at least parse, or no button on the page works. Import maps must be JSON. */
 function assertScriptsParse(name, html) {
-  const scripts = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(m => m[1]);
-  for (const [i, source] of scripts.entries()) {
-    assert.doesNotThrow(() => new Script(source, { filename: name + "#script" + i }), name + " script " + i + " must parse");
+  const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)].map(m => ({ attrs: m[1], source: m[2] }));
+  for (const [i, { attrs, source }] of scripts.entries()) {
+    if (/\btype="importmap"/.test(attrs)) assert.doesNotThrow(() => JSON.parse(source), name + " import map " + i + " must be JSON");
+    else assert.doesNotThrow(() => new Script(source, { filename: name + "#script" + i }), name + " script " + i + " must parse");
   }
   return scripts.length;
 }
@@ -20,7 +32,7 @@ test("Identity Studio, sign-in, consent, security and installer scripts parse", 
     signIn: await signInPage(["google", "github"], true, true).text(),
     consent: await consentPage(true, "Example app", "openid profile email").text(),
     security: await securityPage("admin@example.com").text(),
-    installer: installerPage("bm9uY2U=")
+    installer: await installerPage().text()
   };
   let total = 0;
   for (const [name, html] of Object.entries(pages)) total += assertScriptsParse(name, html);
@@ -36,6 +48,7 @@ test("Identity Studio, sign-in, consent, security and installer scripts parse", 
  */
 test("interactive pages keep the same-origin Origin header (no no-referrer)", async () => {
   const pages = {
+    installer: installerPage(),
     studio: studioPage("admin@example.com"),
     signIn: signInPage(["google"], true, true),
     consent: consentPage(true, "Example app", "openid"),
@@ -43,4 +56,23 @@ test("interactive pages keep the same-origin Origin header (no no-referrer)", as
   };
   for (const [name, response] of Object.entries(pages))
     assert.equal(response.headers.get("Referrer-Policy"), "same-origin", name);
+});
+
+/** NATH-40: the installer page has no inline code; its wizard is the SRI-pinned installer-wizard island. */
+test("installer page loads its wizard only as the hashed island, with no inline script", async () => {
+  const response = installerPage();
+  const html = await response.text();
+  const manifest = JSON.parse(readFileSync("src/ui/generated/ui-manifest.json", "utf8"));
+  const island = manifest.islands["installer-wizard"];
+  assert.ok(island, "installer-wizard is a built island");
+  const nonce = /'nonce-([^']+)'/.exec(response.headers.get("content-security-policy"))[1];
+  assert.ok(html.includes("<script type=\"module\" src=\"" + island.src + "\" integrity=\"" + island.integrity + "\" nonce=\"" + nonce + "\"></script>"));
+  for (const m of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)) {
+    if (/type="importmap"/.test(m[1])) continue;
+    assert.match(m[1], /\ssrc="\/__nathan\/ui\/[^"]+" integrity="sha384-/, "every script is a hashed same-origin module with SRI");
+    assert.equal(m[2], "", "no inline code");
+  }
+  assert.doesNotMatch(html, /\sstyle=|\son[a-z]+=/i, "no style or event-handler attributes");
+  assert.doesNotMatch(html, /__NONCE__|providerRegistry=/, "the old inline registry script is gone");
+  assert.match(html, /href="\/api\/login"/, "Connect Cloudflare works as a plain link");
 });
