@@ -27,9 +27,12 @@ test("authenticatorLink refuses other schemes, HOTP, markup and oversized input"
 
 test("the security page offers an app link and a copy button for same-device enrolment", async () => {
   const html = await securityPage("owner@example.com").text();
-  assert.match(html, /<a id="totp-open" hidden>Open in authenticator app<\/a>/);
+  assert.match(html, /<a id="totp-open" hidden>Add to built-in authenticator<\/a>/);
   assert.match(html, /<button id="totp-copy" type="button">Copy key<\/button>/);
   assert.ok(html.includes(authenticatorLink.toString()), "the guard is inlined into the page");
+  // iOS routes otpauth: links to Apple Passwords, so the page must say so and offer Copy key first.
+  assert.match(html, /On iPhone this always opens Apple Passwords/);
+  assert.ok(html.indexOf('id="totp-copy"') < html.indexOf('id="totp-open"'), "Copy key comes before the built-in link");
   // The link starts without an href; only the guard's result is ever assigned to it.
   assert.doesNotMatch(html, /id="totp-open"[^>]*href=/);
 });

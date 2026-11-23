@@ -23,11 +23,15 @@ export function securityPage(userEmail:string):Response {
   <label>Password (if this account uses password login)<input type="password" id="password" autocomplete="current-password"></label>
   <button id="totp-start">Start TOTP enrollment</button>
   <div id="totp-enroll" hidden>
-  <p><strong>On this phone?</strong> <a id="totp-open" hidden>Open in authenticator app</a> (Google Authenticator, Microsoft Authenticator, 1Password, Yubico Authenticator), then come back here and enter the code it shows.</p>
+  <p><strong>Setting up on this phone?</strong></p>
+  <ul><li><strong>Google Authenticator, Microsoft Authenticator or 1Password:</strong> <button id="totp-copy" type="button">Copy key</button>
+  then in the app tap <em>+</em>, choose <em>Enter a setup key</em>, paste the key and keep <em>Time based</em>.</li>
+  <li><strong>Your phone's built-in code app:</strong> <a id="totp-open" hidden>Add to built-in authenticator</a>.
+  On iPhone this always opens Apple Passwords (iOS sends these links there, not to Google Authenticator); on Android it opens the app that handles authenticator links.</li></ul>
+  <p>Then come back to this page and enter the 6-digit code the app shows.</p>
   <p><strong>On a computer?</strong> Scan this code with your phone's authenticator app (or Yubico Authenticator for a YubiKey):</p>
   <div id="totp-qr" role="img" aria-label="TOTP enrollment QR code"></div>
-  <p>Can't scan or open the app? Add the account manually with this key (time-based, 6 digits): <code id="totp-secret"></code>
-  <button id="totp-copy" type="button">Copy key</button></p></div><pre id="totp-setup"></pre>
+  <p>Setup key (time-based, 6 digits): <code id="totp-secret"></code></p></div><pre id="totp-setup"></pre>
   <label>Six-digit code<input id="totp-code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}"></label>
   <button id="totp-verify">Verify TOTP</button><p id="totp-status" role="status"></p>
   </section>
