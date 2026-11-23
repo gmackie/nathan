@@ -36,14 +36,8 @@ async function connected(request:Request,env:InstallerEnv){
 }
 async function dashboard(request:Request,env:InstallerEnv){
   const url=new URL(request.url),path=url.pathname;
-  if(path==="/"&&request.method==="GET"){
-    const nonce=btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(16))));
-    const body=installerPage(nonce);
-    return new Response(body,{headers:{
-      "Content-Type":"text/html; charset=utf-8",
-      "Content-Security-Policy":"default-src 'none'; script-src 'nonce-"+nonce+"'; style-src 'nonce-"+nonce+"'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
-    }});
-  }
+  // NATH-40: Kumo page from renderPage (CSP with nonce, script-src only the SRI-pinned island).
+  if(path==="/"&&request.method==="GET")return installerPage();
   if(path==="/api/login"&&request.method==="GET"){
     const verifier=randomId();
     const state=await beginOAuthState(env,verifier);
