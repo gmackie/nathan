@@ -1,5 +1,5 @@
 import { betterAuth } from "better-auth";
-import { passkeyRpName } from "./passkey-config.mjs";
+import { passkeyRpName, instanceName } from "./passkey-config.mjs";
 import {createAuthMiddleware} from "better-auth/api";
 import { admin, jwt, organization, twoFactor } from "better-auth/plugins";
 import { passkey } from "@better-auth/passkey";
@@ -37,6 +37,8 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
   });
 
   return betterAuth({
+    // NATH-43: the name users see (TOTP issuer fallback, emails); "gmacko" at id.gmac.io.
+    appName: instanceName(env),
     baseURL: issuer.origin,
     basePath: "/api/auth",
     secret: env.BETTER_AUTH_SECRET,
@@ -111,7 +113,8 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
     plugins: [
       admin(),
       organization(),
-      twoFactor({ allowPasswordless: true }),
+      // NATH-43: authenticator apps label the TOTP entry with this issuer (Better Auth's default is "Better Auth").
+      twoFactor({ allowPasswordless: true, issuer: instanceName(env) }),
       passkey({ rpID: issuer.hostname, rpName: passkeyRpName(env) }),
       jwt({disableSettingJwtHeader:true,jwks:{rotationInterval:30*24*60*60,gracePeriod:30*24*60*60}}),
       oauthProvider({
