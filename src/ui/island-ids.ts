@@ -4,8 +4,9 @@
  *
  * - passkey-button: example React island that hydrates a Kumo Button (no WebAuthn yet).
  * - auto-post: plain script, no React; submits the SAML auto-POST form (AutoPostPage).
+ * - security: /security account security panel (admin onboarding, TOTP enrolment, passkeys; NATH-38).
  */
-export const ISLAND_IDS = ["passkey-button", "auto-post"] as const;
+export const ISLAND_IDS = ["passkey-button", "auto-post", "security"] as const;
 export type IslandId = (typeof ISLAND_IDS)[number];
 
 export function isIslandId(id: string): id is IslandId {

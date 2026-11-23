@@ -5,6 +5,7 @@
  */
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { authWorker, randomKey, insertSession } from "./helpers.mjs";
 
 const HOST = "login.example.test", ORIGIN = "https://" + HOST, SECRET = randomKey() + randomKey();
@@ -49,6 +50,48 @@ test("the security page offers a QR area, the secret for manual entry and a secu
   assert.match(html, /id="totp-qr"/);
   assert.match(html, /id="totp-secret"/);
   assert.match(html, /id="security-key-add"/);
-  assert.match(html, /authenticatorAttachment=/);
-  assert.match(html, /addPasskey\('cross-platform'/);
+  // NATH-38: the passkey code lives in the hashed `security` island the Worker serves.
+  const src = /<script type="module" src="(\/__nathan\/ui\/security-[A-Za-z0-9_-]+\.js)"/.exec(html)?.[1];
+  assert.ok(src, "the page loads the security island");
+  const island = await (await mf.dispatchFetch(ORIGIN + src)).text();
+  assert.match(island, /authenticatorAttachment=/);
+  assert.match(island, /"cross-platform"/, "the YubiKey button asks for a cross-platform authenticator");
+  assert.match(island, /\/security\/api\/totp-qr/);
+});
+
+test("GET /security is a renderPage page: nonce'd SRI island script, no inline style or script, same-origin referrer", async () => {
+  const response = await mf.dispatchFetch(ORIGIN + "/security", { headers: { Cookie: member.cookie } });
+  assert.equal(response.status, 200);
+  const html = await response.text();
+  const csp = response.headers.get("content-security-policy");
+  const nonce = /'nonce-([^']+)'/.exec(csp)[1];
+  assert.equal(csp,
+    "default-src 'none'; connect-src 'self'; img-src 'none'; style-src 'self' 'nonce-" + nonce + "'; script-src 'self' 'nonce-" + nonce + "'; " +
+    "form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
+  for (const [name, value] of [["cache-control", "no-store"], ["referrer-policy", "same-origin"], ["x-content-type-options", "nosniff"],
+    ["x-frame-options", "DENY"], ["cross-origin-opener-policy", "same-origin"], ["strict-transport-security", "max-age=31536000"]])
+    assert.equal(response.headers.get(name), value, name);
+  assert.doesNotMatch(html, /\sstyle=/, "no style attributes");
+  assert.doesNotMatch(html, /<img\b/i, "no img; the QR is inline SVG");
+  assert.match(html, /data-nathan-island="security"/);
+  const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)];
+  assert.ok(scripts.length >= 2);
+  for (const [, attrs, body] of scripts) {
+    assert.ok(attrs.includes(' nonce="' + nonce + '"'), "every script carries the nonce: " + attrs);
+    if (/type="importmap"/.test(attrs)) continue;
+    assert.equal(body, "", "no inline script code");
+    const src = / src="([^"]+)"/.exec(attrs)[1], integrity = / integrity="(sha384-[^"]+)"/.exec(attrs)?.[1];
+    assert.ok(integrity, "the island script carries SRI");
+    const bytes = Buffer.from(await (await mf.dispatchFetch(ORIGIN + src)).arrayBuffer());
+    assert.equal("sha384-" + createHash("sha384").update(bytes).digest("base64"), integrity, src + " matches its SRI");
+  }
+  const codeInput = /<input [^>]*id="totp-code"[^>]*>/.exec(html)?.[0] ?? "";
+  assert.match(codeInput, /\sinputmode="numeric"/i);
+  assert.match(codeInput, /\sautocomplete="one-time-code"/i);
+  // The signed-in email is escaped page text.
+  assert.match(html, /Signed in as <strong>user@example\.test<\/strong>/);
+  // Without a session, /security still redirects to sign-in.
+  const anonymous = await mf.dispatchFetch(ORIGIN + "/security", { redirect: "manual" });
+  assert.equal(anonymous.status, 302);
+  assert.equal(anonymous.headers.get("location"), ORIGIN + "/sign-in");
 });
