@@ -45,9 +45,8 @@ test("Identity Studio, sign-in, consent and installer scripts parse", async () =
     security: await securityPage("admin@example.com").text(),
     installer: await installerPage().text()
   };
-  let total = 0;
-  for (const [name, html] of Object.entries(pages)) total += assertScriptsParse(name, html);
-  assert.ok(total >= 3, "expected inline scripts on the interactive pages");
+  // Kumo pages carry no inline code (asserted per page below); only not-yet-converted pages do.
+  for (const [name, html] of Object.entries(pages)) assertScriptsParse(name, html);
 });
 
 test("security page scripts parse: only its import map and the SRI-pinned security island, no inline code", async () => {

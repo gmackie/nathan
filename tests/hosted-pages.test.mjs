@@ -257,3 +257,29 @@ test("form-action accepts a loopback http callback origin (RFC 8252) and nothing
   for (const bad of ["http://app.example", "http://127.0.0.1:1/cb", "http://127.0.0.2", "javascript:alert(1)", "http://localhost.evil.example"])
     assert.throws(() => formActionSource(bad), /form-action/, bad);
 });
+
+// ---- Independent review 2026-11-23 ---------------------------------------------------------------
+
+test("form-action: https needs an exact DNS host, http only exact loopback origins", async () => {
+  const { formActionSource } = await import("../src/ui/headers.ts");
+  for (const ok of ["https://sp.example.com", "https://sp.example.com:8443", "http://127.0.0.1:33418", "http://localhost:8080", "http://[::1]:5000"])
+    assert.equal(formActionSource(ok), ok, ok);
+  for (const bad of ["https://*", "https://*.evil.com", "http://evil.com", "http://127.0.0.2:1", "http://localhost.evil.com", "http://127.0.0.1:1/cb", "https://a_b.example"])
+    assert.throws(() => formActionSource(bad), /form-action/, bad);
+});
+
+test("MCP dynamic registration refuses format characters in client_name", async () => {
+  const { parseRegistration } = await import("../src/shared/mcp-scopes.mjs");
+  assert.throws(() => parseRegistration({ client_name: "Notes\u202Etxe.exe", redirect_uris: ["https://c.example.com/cb"] }), /client_name/);
+  assert.throws(() => parseRegistration({ client_name: "Na\u200Bthan", redirect_uris: ["https://c.example.com/cb"] }), /client_name/);
+  assert.equal(parseRegistration({ client_name: "Notes desktop", redirect_uris: ["https://c.example.com/cb"] }).client_name, "Notes desktop");
+});
+
+test("MCP consent: fixed heading; the route line is the callback host, never the client-chosen name", async () => {
+  const html = await ui.mcpConsentPage(mcpView({ clientName: "id.example.com", redirectOrigin: "https://app.example", issuer: "login.example.test" })).text();
+  assert.match(html, /<h1[^>]*>Connect an MCP client<\/h1>/);
+  assert.ok(html.includes("app.example → login.example.test"), "route line from the validated callback host");
+  assert.ok(!html.includes("id.example.com → "), "the client name is not the route line");
+  assert.ok(html.includes("“id.example.com”"), "the client name is quoted in the body");
+  assert.match(html, /not verified by Nathan/);
+});

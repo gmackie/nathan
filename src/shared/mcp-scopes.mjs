@@ -289,7 +289,10 @@ export function parseRegistration(body, knownScopes) {
   if (body.response_types !== undefined && (!Array.isArray(body.response_types) || body.response_types.join(" ") !== "code"))
     throw meta("Only the code response type is supported");
   let name;
-  try { name = text(body.client_name, MAX_CLIENT_NAME, "client name") || "MCP client"; } catch { throw meta("Invalid client_name (at most " + MAX_CLIENT_NAME + " characters)"); }
+  // Format characters (bidi overrides, zero-width joiners) could make a client name read as something
+  // else on the consent page; refuse them (independent review 2026-11-23).
+  try { if (typeof body.client_name === "string" && /\p{Cf}/u.test(body.client_name)) throw Error("format characters");
+    name = text(body.client_name, MAX_CLIENT_NAME, "client name") || "MCP client"; } catch { throw meta("Invalid client_name (at most " + MAX_CLIENT_NAME + " characters)"); }
   const out = { client_name: name, redirect_uris: [...uris] };
   if (body.scope !== undefined) {
     if (typeof body.scope !== "string" || body.scope.length > MAX_REGISTRATION_SCOPE) throw meta("Invalid scope");

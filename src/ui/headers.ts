@@ -5,7 +5,7 @@
  */
 
 /** The only extra headers a page may add (Refresh, Link and the like would bypass page policy). */
-export const EXTRA_HEADERS = ["set-cookie", "vary", "location", "x-robots-tag"] as const;
+export const EXTRA_HEADERS = ["set-cookie", "vary", "location", "x-robots-tag", "pragma"] as const;
 
 /** Headers renderPage owns. Page-specific extras may not set or override any of them. */
 export const RESERVED_HEADERS = [

@@ -85,11 +85,14 @@ export interface McpPageOptions {
 
 export function consentPage(v: ConsentView, status = 200, opts: McpPageOptions = {}): Response {
   return renderPage(
-    <AuthLayout title={v.clientName + " wants to use " + v.resourceName + " as you"} issuer={v.issuer} route={v.clientName}
+    // Independent review 2026-11-23: the client picks its own name at dynamic registration, so it is
+    // never the heading or the trusted route line (it could read "id.example.com" or "Nathan Identity
+    // Studio"). The heading is fixed and the route line is the validated callback host.
+    <AuthLayout title="Connect an MCP client" issuer={v.issuer} route={new URL(v.redirectOrigin).host}
       appearance={opts.appearance}>
       <p className="nathan-text">
-        <strong>{v.clientName}</strong>{" "}
-        <span className="nathan-muted">(name chosen by the client; client id <Code>{v.clientId}</Code>)</span>
+        {"A client calling itself "}<strong>{"\u201c" + v.clientName + "\u201d"}</strong>{" "}
+        <span className="nathan-muted">(name chosen by the client, not verified by Nathan; client id <Code>{v.clientId}</Code>)</span>
         {" wants to use the MCP server "}<strong>{v.resourceName}</strong> <Code>{v.resource}</Code>
         {" as "}<strong>{v.email}</strong>{". After you answer, your browser returns to "}<Code>{v.redirectOrigin}</Code>.
       </p>
