@@ -7,8 +7,9 @@
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "nathan-prod-auth",
   "main": "../../src/auth/worker.ts",
-  // NATH-32: build the hashed Kumo UI assets the Worker bundles (src/ui/assets.ts).
-  "build": { "command": "node scripts/build-ui.mjs", "cwd": "../.." },
+  // NATH-32: build the hashed Kumo UI assets the Worker bundles (src/ui/assets.ts). Wrangler runs
+  // this from the directory it is invoked in (the repository root), not this config's directory.
+  "build": { "command": "node scripts/build-ui.mjs" },
   "compatibility_date": "2026-10-27",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
