@@ -36,7 +36,7 @@ import {
   MCP_ACCESS_TOKEN_SECONDS, MCP_GRANT_SECONDS, MCP_CODE_SECONDS, MCP_TICKET_SECONDS, MCP_CLIENT_SECONDS,
   MCP_UNUSED_CLIENT_SECONDS, MCP_UNUSED_CLIENT_LIMIT, MCP_DAILY_REGISTRATIONS_PER_ADDRESS
 } from "../shared/mcp-scopes.mjs";
-import { consentPage, connectionsPage, mcpErrorPage } from "./mcp-ui";
+import { consentPage, connectionsPage, mcpErrorPage } from "./mcp-pages.tsx";
 
 export const MCP_AS_PATH = "/mcp-oauth";
 const METADATA_PATH = "/.well-known/oauth-authorization-server" + MCP_AS_PATH;
@@ -412,7 +412,8 @@ async function consentView(env: AuthEnv, ticket: string, data: Ticket, email: st
       ticket, clientName: data.clientName, clientId: data.clientId, redirectOrigin: new URL(data.redirectUri).origin,
       resourceName: resource.name, resource: resource.identifier, email, entries: catalog.entries, byScope: catalog.byScope,
       full: catalog.full, offered, checked: new Set([...checked].filter(s => offered.has(s) || s === catalog.full)),
-      unavailable: [...requested].filter(s => !offered.has(s) && s !== catalog.full), error
+      unavailable: [...requested].filter(s => !offered.has(s) && s !== catalog.full), error,
+      issuer: new URL(env.NATHAN_ISSUER).host
     }, catalog, offered
   };
 }
