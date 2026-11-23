@@ -162,7 +162,7 @@ async function provision(forceApply=false) {
   // Bootstrap without an ingress route. Only expose the hostname after its secrets are installed.
   // A previous run may have stopped between the private deploy and its secrets, so always
   // reconcile secrets by name. Existing secrets are never replaced (that would end sessions).
-  // NATH-37: the identity Worker serves its hashed UI assets from .nathan/ui-assets; build them now.
+  // NATH-32: the identity Worker bundles its hashed UI assets (src/ui/assets.ts); build them now.
   await runCli(process.execPath, ["scripts/build-ui.mjs"]);
   const stagingPath = ".nathan/generated/" + liveConfig.name + ".staging.json";
   const stagingConfig = { ...liveConfig, routes:[], workers_dev:false, preview_urls:false };

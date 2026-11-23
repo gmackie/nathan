@@ -1,3 +1,4 @@
+import { serveUiAsset } from "../ui/assets.ts";
 import { randomId, sha256 } from "../gateway/crypto";
 import { parseCookie, makeCookie, constantTimeEqual, redirectWithCookies } from "../shared/security.mjs";
 import { validateAccountId, validateHostname, validateInstallPlan, isAllowedOrigin } from "./validation.mjs";
@@ -205,6 +206,9 @@ export default {
     try {
       const origin=expectedOrigin(env),url=new URL(request.url);
       if(url.origin!==origin)return responseSecurity(error(421,"Misdirected request"));
+      // NATH-32: hashed Kumo CSS and island modules bundled into this Worker (src/ui/assets.ts).
+      const uiAsset=serveUiAsset(request);
+      if(uiAsset)return uiAsset;
       return responseSecurity(await dashboard(request,env));
     } catch {
       return responseSecurity(error(503,"Installer operation unavailable; retry or reconnect"));

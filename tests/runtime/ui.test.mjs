@@ -1,7 +1,7 @@
 /**
  * NATH-37 in workerd: renderPage() pages from a test-only Worker (react-dom/server's workerd
- * build), and the hashed UI assets from the built identity Worker's static assets, with immutable
- * caching, nosniff and SRI-matching bytes. Assets must never shadow a Worker route.
+ * build), and the hashed UI assets served by the built identity Worker itself (src/ui/assets.ts,
+ * NATH-32), with immutable caching, nosniff and SRI-matching bytes. Assets never shadow a route.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -10,16 +10,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { authWorker, bundle, start } from "./helpers.mjs";
 
 const HOST = "auth.example.test";
-// As wrangler deploys it: a Worker with `main` plus assets (has_user_worker), per wrangler.auth.jsonc.
-const ASSETS = { directory: ".nathan/ui-assets", routerConfig: { has_user_worker: true },
-  assetConfig: { html_handling: "none", not_found_handling: "none" } };
 const manifest = JSON.parse(readFileSync("src/ui/generated/ui-manifest.json", "utf8"));
 const sri = bytes => "sha384-" + createHash("sha384").update(bytes).digest("base64");
 
 function fixture() {
   const path = ".nathan/build-ui-fixture/ui-worker.js";
   if (!existsSync(path)) throw Error("Missing " + path + ": run `npm run test:runtime`, which builds it first");
-  return start({ name: "nathan-test-ui", scriptPath: path, assets: ASSETS });
+  return start({ name: "nathan-test-ui", scriptPath: path });
 }
 
 test("workerd renders K0 pages CSP-safe, with today's headers, and islands with SRI", async () => {
@@ -59,9 +56,9 @@ test("workerd renders K0 pages CSP-safe, with today's headers, and islands with 
   } finally { await mf.dispose(); }
 });
 
-test("the identity Worker serves UI assets from /__nathan/ui/ immutably, and assets never shadow its routes", async () => {
-  assert.match(readFileSync("wrangler.auth.jsonc", "utf8"), /"directory": "\.nathan\/ui-assets"/);
-  const mf = await authWorker(HOST, {}, { name: "nathan-auth", assets: ASSETS });
+test("the identity Worker serves its bundled UI assets from /__nathan/ui/ immutably, and assets never shadow its routes", async () => {
+  assert.doesNotMatch(readFileSync("wrangler.auth.jsonc", "utf8"), /"assets":/, "no static-assets binding");
+  const mf = await authWorker(HOST, {}, { name: "nathan-auth" });
   try {
     const files = [manifest.css, ...Object.values(manifest.islands).flatMap(i => [i, ...i.imports])];
     for (const asset of files) {
@@ -71,14 +68,20 @@ test("the identity Worker serves UI assets from /__nathan/ui/ immutably, and ass
       assert.equal(response.headers.get("cache-control"), "public, max-age=31536000, immutable", asset.src);
       assert.equal(response.headers.get("x-content-type-options"), "nosniff");
       assert.equal(response.headers.get("cross-origin-resource-policy"), "same-origin");
-      assert.match(response.headers.get("content-type"), asset.src.endsWith(".css") ? /^text\/css/ : /javascript/);
+      assert.match(response.headers.get("content-type"), asset.src.endsWith(".css") ? /^text\/css/ : /^text\/javascript/);
     }
-    // The _headers file itself is configuration, not an asset.
-    assert.notEqual((await mf.dispatchFetch("https://" + HOST + "/_headers")).headers.get("cache-control"), "public, max-age=31536000, immutable");
-    // Unknown files under the prefix and every other path still reach the Worker.
-    const missing = await mf.dispatchFetch("https://" + HOST + "/__nathan/ui/nope.js");
-    assert.notEqual(missing.headers.get("cache-control"), "public, max-age=31536000, immutable");
-    assert.notEqual(missing.status, 200);
+    const head = await mf.dispatchFetch("https://" + HOST + manifest.css.src, { method: "HEAD" });
+    assert.equal(head.status, 200);
+    const post = await mf.dispatchFetch("https://" + HOST + manifest.css.src, { method: "POST" });
+    assert.equal(post.status, 405);
+    // Unknown files under the prefix are an uncached 404; every other path still reaches the routes.
+    for (const path of ["/__nathan/ui/nope.js", "/__nathan/ui/../healthz", "/__nathan/ui/"]) {
+      const missing = await mf.dispatchFetch("https://" + HOST + path);
+      if (new URL("https://" + HOST + path).pathname.startsWith("/__nathan/ui/")) {
+        assert.equal(missing.status, 404, path);
+        assert.equal(missing.headers.get("cache-control"), "no-store", path);
+      }
+    }
     const discovery = await mf.dispatchFetch("https://" + HOST + "/api/auth/.well-known/openid-configuration");
     assert.equal(discovery.status, 200, "OIDC discovery is still the Worker's");
     const signIn = await mf.dispatchFetch("https://" + HOST + "/sign-in");

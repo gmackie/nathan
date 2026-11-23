@@ -45,14 +45,9 @@
       }
     ]
   },
-  // NATH-37: hashed UI assets (scripts/build-ui.mjs). Every file sits under /__nathan/ui/, so no
-  // asset can shadow a Worker route; requests for anything else still reach the Worker.
-  // _headers sets immutable caching, nosniff and CORP same-origin on them.
-  "assets": {
-    "directory": ".nathan/ui-assets",
-    "html_handling": "none",
-    "not_found_handling": "none"
-  },
+  // NATH-32: build the hashed Kumo UI assets before bundling; src/ui/assets.ts serves them from
+  // the Worker module itself (no static-assets binding, so every deploy path carries them).
+  "build": { "command": "node scripts/build-ui.mjs" },
   "migrations": [
     {
       "tag": "nathan-scim-v1",

@@ -1,3 +1,4 @@
+import { serveUiAsset } from "../ui/assets.ts";
 import { parseCookie, makeCookie, safeReturnPath, constantTimeEqual, validateIssuer, isAllowedUnsafeRequest, redirectWithCookies } from "../shared/security.mjs";
 import { randomId, seal, unseal, sha256 } from "./crypto";
 import { discover, authorizeUrl, exchangeCode, verifyIdToken } from "./oidc";
@@ -168,6 +169,9 @@ export default {
       const url = new URL(request.url);
       if (url.origin !== expected) return errorResponse(421, "Misdirected request");
       if (url.pathname === "/__nathan/health") return Response.json({ ok: true });
+      // NATH-32: the gateway's own Kumo pages load their hashed assets from here, never the upstream.
+      const uiAsset = serveUiAsset(request);
+      if (uiAsset) return uiAsset;
       if (url.pathname === "/__nathan/login" && request.method === "GET") return beginLogin(url, env);
       if (url.pathname === "/__nathan/callback" && request.method === "GET") return completeLogin(url, request, env);
       if (url.pathname === "/__nathan/logout" && request.method === "POST") return logout(request, env);

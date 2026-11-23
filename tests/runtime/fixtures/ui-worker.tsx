@@ -2,10 +2,13 @@
  * NATH-37 test-only Worker: renders the K0 fixture pages with react-dom/server's workerd build,
  * exactly as the identity Worker will once K1 swaps its pages over. Never deployed.
  */
+import { serveUiAsset } from "../../../src/ui/assets.ts";
 import { autoPostPage, formPage, islandPage, refusalPage } from "../../fixtures/ui-pages.tsx";
 
 export default {
   async fetch(request: Request): Promise<Response> {
+    const asset = serveUiAsset(request);
+    if (asset) return asset;
     const { pathname } = new URL(request.url);
     if (pathname === "/form") return formPage();
     if (pathname === "/island") return islandPage();

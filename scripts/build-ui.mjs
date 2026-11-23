@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 /**
- * NATH-37: builds Nathan's UI static assets for the Workers static assets binding.
+ * NATH-37: builds Nathan's UI static assets (served by the Worker itself, see src/ui/assets.ts).
  *
  *   .nathan/ui-assets/__nathan/ui/nathan-<hash>.css   Kumo standalone CSS + system mode + theme + layout
  *   .nathan/ui-assets/__nathan/ui/<island>-<hash>.js  one ESM entry per src/ui/islands/*.{ts,tsx}
  *   .nathan/ui-assets/__nathan/ui/chunk-<hash>.js     shared code (React, react-dom, Kumo) in one vendor chunk
- *   .nathan/ui-assets/_headers                        immutable caching, nosniff, CORP same-origin
  *   src/ui/generated/ui-manifest.json                 file names and SRI hashes, bundled into the Worker
+ *   src/ui/generated/ui-assets.json                   the same files' contents, bundled into the Worker and
+ *                                                     served by src/ui/assets.ts (no static-assets binding, so
+ *                                                     CLI, ForgeGraph and hosted-installer deploys all carry them)
  *
  * Every file lives under /__nathan/ui/ (the gateway already reserves /__nathan/), so an asset
  * can never shadow a Worker route. Names carry content hashes, so caching them forever is safe.
@@ -116,15 +118,7 @@ for (const id of ISLAND_IDS) if (!islands[id]) throw Error("Island " + id + " wa
 for (const [path, output] of Object.entries(outputs))
   if (output.entryPoint?.endsWith("client/vendor.ts")) await rm(resolve(root, path));
 
-// ---- Headers, manifest -----------------------------------------------------------------------
-await writeFile(join(assetsRoot, "_headers"), [
-  "/" + PREFIX + "/*",
-  "  Cache-Control: public, max-age=31536000, immutable",
-  "  X-Content-Type-Options: nosniff",
-  "  Cross-Origin-Resource-Policy: same-origin",
-  ""
-].join("\n"));
-
+// ---- Manifest and bundled asset contents ---------------------------------------------------
 const manifest = {
   version: 1,
   base: "/" + PREFIX + "/",
@@ -133,6 +127,16 @@ const manifest = {
 };
 await mkdir(dirname(manifestPath), { recursive: true });
 await writeFile(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
+const TYPES = { css: "text/css; charset=utf-8", js: "text/javascript; charset=utf-8" };
+const bundled = {};
+for (const name of (await readdir(outDir)).sort()) {
+  const bytes = await readFile(join(outDir, name));
+  const text = bytes.toString("utf8");
+  // The Worker re-encodes the string as UTF-8; the bytes must round-trip exactly or SRI fails.
+  if (!Buffer.from(text, "utf8").equals(bytes)) throw Error(name + " is not valid UTF-8");
+  bundled["/" + PREFIX + "/" + name] = { type: TYPES[extname(name).slice(1)], body: text };
+}
+await writeFile(join(dirname(manifestPath), "ui-assets.json"), JSON.stringify(bundled) + "\n");
 
 const sizes = [];
 for (const name of (await readdir(outDir)).sort()) {

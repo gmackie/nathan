@@ -4,3 +4,7 @@ declare module "*/generated/ui-manifest.json" {
   const manifest: unknown;
   export default manifest;
 }
+declare module "*/generated/ui-assets.json" {
+  const assets: unknown;
+  export default assets;
+}

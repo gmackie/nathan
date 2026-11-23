@@ -175,8 +175,10 @@ test("built assets match their SRI hashes and stay under /__nathan/ui/", () => {
     const bytes = readFileSync(".nathan/ui-assets" + asset.src);
     assert.equal("sha384-" + createHash("sha384").update(bytes).digest("base64"), asset.integrity, asset.src);
   }
-  const headers = readFileSync(".nathan/ui-assets/_headers", "utf8");
-  assert.match(headers, /^\/__nathan\/ui\/\*\n {2}Cache-Control: public, max-age=31536000, immutable\n {2}X-Content-Type-Options: nosniff/);
+  // The Worker serves the bundled copies (src/ui/assets.ts): same bytes, so SRI still holds.
+  const bundled = JSON.parse(readFileSync("src/ui/generated/ui-assets.json", "utf8"));
+  for (const asset of files)
+    assert.equal("sha384-" + createHash("sha384").update(Buffer.from(bundled[asset.src].body, "utf8")).digest("base64"), asset.integrity, "bundled " + asset.src);
   assert.deepEqual(m.islands["auto-post"].imports, [], "auto-post is plain script, no React");
   for (const asset of files) {
     const text = readFileSync(".nathan/ui-assets" + asset.src, "utf8");
@@ -267,12 +269,22 @@ test("theme: Nathan's default is stock Kumo; appearance may set only real Kumo t
   assert.ok(contrast("#ffffff", "#056DFF") >= 4.5, "Kumo's own primary keeps its white text");
 });
 
-test("CLI-generated identity Worker configs point at the UI assets by absolute path", async () => {
+test("CLI-generated identity Worker configs build the UI assets from the repository root", async () => {
   const { createGeneratedConfig } = await import("../scripts/lib/wrangler.mjs");
   const path = await createGeneratedConfig({ name: "nath37", accountId: "a".repeat(32), hostname: "login.example.com",
     securityProfile: "business", database: { name: "nath37-auth" } }, "00000000-0000-0000-0000-000000000000");
   const generated = JSON.parse(readFileSync(path, "utf8"));
-  assert.equal(generated.assets.directory, process.cwd() + "/.nathan/ui-assets");
-  assert.equal(generated.assets.html_handling, "none");
-  assert.equal(generated.assets.run_worker_first, undefined, "assets are served only where a file exists");
+  assert.equal(generated.assets, undefined, "no static-assets binding: the Worker serves its own UI assets");
+  assert.deepEqual(generated.build, { command: "node scripts/build-ui.mjs", cwd: process.cwd() });
+});
+
+test("every Worker config builds the UI assets first, from the repository root", () => {
+  for (const [path, cwd] of [["wrangler.auth.jsonc"], ["wrangler.gateway.jsonc"], ["wrangler.installer.jsonc"],
+    ["deploy/staging/wrangler.auth.jsonc", "../.."], ["deploy/production/wrangler.auth.jsonc", "../.."]]) {
+    const text = readFileSync(path, "utf8");
+    assert.ok(text.includes('"build": { "command": "node scripts/build-ui.mjs"' + (cwd ? ', "cwd": "' + cwd + '"' : "") + " }"), path);
+    // The installer keeps its own static-assets binding, but only for sealed release files.
+    if (path === "wrangler.installer.jsonc") assert.match(text, /"directory": "\.\/installer\/public"|"directory": "installer\/public"|installer\/public/, path);
+    else assert.doesNotMatch(text, /"assets":/, path + " has no static-assets binding");
+  }
 });
