@@ -39,6 +39,12 @@ Grant the roles to users or groups. A user without a role on the app gets no acc
 
 Set **Full access marker** to `notes:full` if you want a Full access checkbox. Registering creates an NATH-15 token audience bound to the app, is audited, and returns the protected-resource metadata the Worker will serve.
 
+Without a Studio session, an operator holding a Cloudflare API token with D1 edit on the Nathan account can do steps 1 and 2 from the CLI ([account-token administration](#account-token-administration-cli)):
+
+```sh
+node scripts/nathan.mjs mcp register https://notes.example.com/mcp --app notes --name Notes --scopes @notes-scopes.json --full notes:full --apply
+```
+
 **3. Write the Worker.**
 
 ```js
@@ -155,6 +161,19 @@ These clients exist only for the MCP authorization server. They are not Better A
 - `resource.status` `{identifier, enabled, confirm: "CONFIRM ENABLE MCP <id>" | "CONFIRM DISABLE MCP <id>"}`. A disabled server gets no tokens and its tokens fail the grant check.
 - `resource.remove` `{identifier, confirm: "CONFIRM REMOVE MCP <id>"}` removes the audience, the server and every grant.
 - `grant.revoke` `{grantId, confirm: "CONFIRM REVOKE <grantId>"}`.
+
+## Account-token administration (CLI)
+
+`resource.register` and `resource.status` are also available to an operator holding a Cloudflare API token with D1 edit on the Nathan account, without an administrator session or passkey step-up:
+
+```sh
+export CLOUDFLARE_API_TOKEN=...   # from your secret manager; never a flag
+node scripts/nathan.mjs mcp register <identifier> --app <app> --name <name> [--scopes <json|@file>] [--full <scope>] [--aliases <json|@file>]   # plan
+node scripts/nathan.mjs mcp register <identifier> --app <app> --name <name> [...] --apply                                                  # apply
+node scripts/nathan.mjs mcp status <identifier> --enable|--disable --apply
+```
+
+The CLI runs the Studio operations' own code (`src/shared/admin-ops.mjs`): the same audience rules, the same refusal of Nathan's `/mcp`, `/directory` and `/api/auth` and of identifiers that are already a Better Auth or Nathan token audience, the same catalog validation against the app's permissions, and the same statements. It plans by default. `--apply` shows the change and asks for confirmation; `status` asks you to type Studio's `CONFIRM ENABLE MCP <id>` / `CONFIRM DISABLE MCP <id>`. The change, and Studio's `succeeded` audit row with actor `cli:<accountId>`, are one D1 batch through the Cloudflare REST API, preceded by an `attempted` row; a failed batch is audited `failed`. A new registration is enabled, as in Studio. `resource.remove` and `grant.revoke` stay in Studio. Why this path exists and what it does not change: [security.md](security.md#account-token-administration).
 
 ## Design decisions
 

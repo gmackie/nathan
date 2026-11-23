@@ -1,4 +1,5 @@
 import type { AuthEnv } from "./env";
+import { planAppStatus, appStatusConfirmation, committedStatements } from "../shared/admin-ops.mjs";
 
 export type AdminActor = { id:string; email:string; role:"admin"; emailVerified:true };
 export function isAdminUser(user: unknown, env:AuthEnv): user is AdminActor {
@@ -54,14 +55,12 @@ export async function upsertApplication(env:AuthEnv,input:any,actor:string){
   return {...app,enabled:false,note:"Existing enabled status and access mode are retained; new records are disabled and deny everyone until roles are granted"};
 }
 export async function setApplicationEnabled(env:AuthEnv,id:string,enabled:boolean,actor:string){
-  if(!/^[a-z][a-z0-9-]{0,62}$/.test(id))throw Error("Invalid application id");
-  const result=await env.DB.prepare("UPDATE nathan_applications SET enabled=?,updated_at=unixepoch() WHERE id=?").bind(enabled?1:0,id).run();
-  if(!result.meta?.changes)throw Error("Unknown application");
-  // NATH-13 change feed: an enable/disable changes every principal's effective access to the app.
-  await env.DB.prepare("INSERT INTO nathan_rbac_changes(kind,app_id,detail,actor) VALUES (?,?,?,?)")
-    .bind(enabled?"app.enabled":"app.disabled",id,"{}",actor).run();
-  await audit(env,actor,enabled?"application_enable":"application_disable",id,"succeeded");
-  return {id,enabled};
+  // Shared with the account-token CLI (`nathan app enable|disable`): one validation, one atomic batch
+  // (the update, its NATH-13 change-feed row and the audit).
+  const reader={all:async(sql:string,params:unknown[])=>((await env.DB.prepare(sql).bind(...params).all()).results??[]) as any[]};
+  const plan=await planAppStatus(reader,{id,enabled,confirm:appStatusConfirmation(id,enabled)});
+  await env.DB.batch(committedStatements(plan,actor).map(s=>env.DB.prepare(s.sql).bind(...s.params)));
+  return plan.result as {id:string;enabled:boolean};
 }
 export async function createOAuthClient(auth:any,env:AuthEnv,headers:Headers,input:any,actor:string){
   if(typeof input?.name!=="string" || !input.name.trim() || input.name.length>100)throw Error("Invalid client name");

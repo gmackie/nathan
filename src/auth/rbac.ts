@@ -10,6 +10,7 @@ import { accessQueries, decideFromRows, directoryQueries, directoryView, changeQ
   changeStatement, auditStatement, pruneChangeStatements, parseQualifiedSubject } from "../shared/rbac-store.mjs";
 import { validateManifest, currentStateQueries, currentState, planSync, syncStatements, permissionUpsert,
   permissionDelete, roleUpsert, roleDelete, accessModeUpdate, isDescription, MAX_APP_PERMISSIONS, MAX_APP_ROLES } from "../shared/rbac-manifest.mjs";
+import * as adminOps from "../shared/admin-ops.mjs";
 
 type Statement = { sql: string; params: unknown[] };
 export type AccessResult = { allowed: boolean; reason: string; roles: string[]; permissions: string[]; email: string | null; observedAt: string };
@@ -106,52 +107,25 @@ async function commit(env: AuthEnv, actor: string, action: string, target: strin
     throw error;
   }
 }
-async function requireApp(env: AuthEnv, appId: unknown): Promise<string> {
-  if (!isAppId(appId)) throw Error("Invalid application id");
-  const row = await env.DB.prepare("SELECT id FROM nathan_applications WHERE id=?").bind(appId).first();
-  if (!row) throw Error("Unknown application");
-  return appId as string;
-}
+/** The shared admin operations (src/shared/admin-ops.mjs) read through the D1 binding. */
+export const d1Reader = (env: AuthEnv) => ({
+  all: async (sql: string, params: unknown[]) => ((await env.DB.prepare(sql).bind(...params).all()).results ?? []) as any[]
+});
+const requireApp = (env: AuthEnv, appId: unknown) => adminOps.requireApp(d1Reader(env), appId);
 async function count(env: AuthEnv, sql: string, ...params: unknown[]) {
   return Number((await env.DB.prepare(sql).bind(...params).first<{ n: number }>())?.n ?? 0);
 }
-async function userByEmail(env: AuthEnv, email: unknown): Promise<string> {
-  const value = String(email ?? "").trim().toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) || value.length > 254) throw Error("Select an existing user by exact email");
-  const users = await env.DB.prepare('SELECT "id" AS id FROM "user" WHERE lower("email")=? LIMIT 2').bind(value).all<{ id: string }>();
-  if (users.results.length !== 1) throw Error("User not found");
-  return users.results[0].id;
-}
-async function requireGroup(env: AuthEnv, groupId: unknown, { editable = false } = {}) {
-  if (!isGroupId(groupId)) throw Error("Invalid group id");
-  const group = await env.DB.prepare("SELECT id, source FROM nathan_groups WHERE id=?").bind(groupId).first<{ id: string; source: string }>();
-  if (!group) throw Error("Unknown group");
-  // Extension point (NATH-11): SCIM-mapped groups are maintained by the directory, not by hand.
-  if (editable && group.source === "scim") throw Error("Membership of SCIM-mapped groups is managed by the directory");
-  return group.id;
-}
+const userByEmail = (env: AuthEnv, email: unknown) => adminOps.userByEmail(d1Reader(env), email);
+const requireGroup = (env: AuthEnv, groupId: unknown, options: { editable?: boolean } = {}) => adminOps.requireGroup(d1Reader(env), groupId, options);
 const description = (value: unknown) => {
   const text = value ?? "";
   if (!isDescription(text)) throw Error("Description must be text up to 200 characters");
   return text as string;
 };
 
-export const RBAC_OPERATIONS = ["access_mode", "permission.upsert", "permission.delete", "role.upsert", "role.delete",
-  "group.upsert", "group.delete", "member.add", "member.remove", "grant.create", "grant.revoke", "sync"] as const;
-
-/** Audit action of an operation, e.g. grant.create -> rbac_grant_create. */
-function auditAction(op: unknown) {
-  if (op === "sync") return "rbac_manifest_sync";
-  return RBAC_OPERATIONS.includes(op as any) ? "rbac_" + String(op).replace(".", "_") : "rbac_unknown";
-}
-/** Best-effort, bounded description of what an administrator tried to change (for the audit log). */
-function attemptTarget(body: any) {
-  const parts = RBAC_OPERATIONS.includes(body?.op)
-    ? [body.app ?? body.group, body.key ?? body.role ?? body.accessMode ?? body.id ?? body.email]
-    : [body?.op];
-  const text = parts.filter(p => typeof p === "string" && p).join(":");
-  return text.replace(/[\x00-\x1f\x7f]/g, "").slice(0, 200) || "-";
-}
+export const RBAC_OPERATIONS = adminOps.RBAC_OPERATIONS;
+const auditAction = adminOps.rbacAuditAction;
+const attemptTarget = adminOps.rbacAttemptTarget;
 
 /**
  * Applies one administrator RBAC operation. The caller must already have verified an enrolled,
@@ -262,32 +236,11 @@ async function applyOperation(env: AuthEnv, body: any, actor: string): Promise<R
     }], { kind: "member.removed", principalType: "user", principalId: userId, detail: { group } });
     return { group, userId, removed: true };
   }
-  if (op === "grant.create") {
-    const app = await requireApp(env, body.app);
-    if (!isRoleKey(body.role) || !await count(env, "SELECT count(*) AS n FROM nathan_rbac_roles WHERE app_id=? AND key=?", app, body.role))
-      throw Error("Unknown role");
-    let principalType: "user" | "group", principalId: string;
-    if (body.principalType === "user") { principalType = "user"; principalId = await userByEmail(env, body.email); }
-    else if (body.principalType === "group") { principalType = "group"; principalId = await requireGroup(env, body.group); }
-    else throw Error("Grant a role to a user or a group");
-    if (await count(env, "SELECT count(*) AS n FROM nathan_rbac_grants WHERE app_id=? AND role_key=? AND principal_type=? AND principal_id=?",
-      app, body.role, principalType, principalId)) return { app, role: body.role, principalType, principalId, created: false, note: "Already granted" };
-    const id = crypto.randomUUID();
-    await commit(env, actor, "rbac_grant_create", app + ":" + body.role + ":" + principalType + ":" + principalId, [{
-      sql: "INSERT INTO nathan_rbac_grants(id,app_id,role_key,principal_type,principal_id,created_by) VALUES (?,?,?,?,?,?)",
-      params: [id, app, body.role, principalType, principalId, actor]
-    }], { kind: "grant.created", appId: app, principalType, principalId, detail: { role: body.role } });
-    return { id, app, role: body.role, principalType, principalId, created: true };
-  }
-  if (op === "grant.revoke") {
-    if (typeof body.id !== "string" || body.id.length > 200) throw Error("Invalid grant id");
-    const grant = await env.DB.prepare("SELECT id, app_id AS app, role_key AS role, principal_type AS principalType, principal_id AS principalId FROM nathan_rbac_grants WHERE id=?")
-      .bind(body.id).first<{ id: string; app: string; role: string; principalType: "user" | "group"; principalId: string }>();
-    if (!grant) throw Error("Unknown grant");
-    await commit(env, actor, "rbac_grant_revoke", grant.app + ":" + grant.role + ":" + grant.principalType + ":" + grant.principalId, [{
-      sql: "DELETE FROM nathan_rbac_grants WHERE id=?", params: [grant.id]
-    }], { kind: "grant.revoked", appId: grant.app, principalType: grant.principalType, principalId: grant.principalId, detail: { role: grant.role } });
-    return { ...grant, revoked: true, note: "Nathan gateways stop honoring the grant within their access cache window (at most 60 s)" };
+  if (op === "grant.create" || op === "grant.revoke") {
+    // Shared with the account-token CLI (`nathan rbac grant|revoke`): one validation, one statement set.
+    const plan = op === "grant.create" ? await adminOps.planGrantCreate(d1Reader(env), body, actor) : await adminOps.planGrantRevoke(d1Reader(env), body);
+    if (plan.statements) await commit(env, actor, plan.action, plan.target, plan.statements, plan.change as Omit<Change, "actor">);
+    return plan.result;
   }
   // sync: the same plan the CLI uses, applied atomically through the D1 binding.
   const app = await requireApp(env, body.app);

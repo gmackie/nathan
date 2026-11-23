@@ -8,6 +8,7 @@ import { CloudflareClient } from "./cloudflare.mjs";
 import { ask, yesNo } from "./prompts.mjs";
 import { validateManifest, currentStateQueries, currentState, planSync, syncStatements } from "../../src/shared/rbac-manifest.mjs";
 import { auditStatement, changeStatement } from "../../src/shared/rbac-store.mjs";
+import { grantCommand } from "./admin-cli.mjs";
 
 /**
  * Plans (and with apply, applies) one application's manifest through a D1 query API.
@@ -59,9 +60,12 @@ export async function syncApplicationRbac({ api, databaseId, app, actor, apply, 
 
 export async function rbacCommand(args, file, apply) {
   const [sub, appId] = args;
+  if ((sub === "grant" || sub === "revoke") && appId && args[2]) return grantCommand(args, file, apply);
   if (!["plan", "sync"].includes(sub) || !appId) {
     console.log("Usage: nathan rbac plan <app>\n       nathan rbac sync <app> --apply [--prune]\n" +
-      "Syncs applications[].rbac (permissions and roles) from nathan.config.json. Grants are managed in Identity Studio.");
+      "       nathan rbac grant|revoke <app> <role> --user <user id or email> | --group <group> [--apply]\n" +
+      "Syncs applications[].rbac (permissions and roles) from nathan.config.json. Grants are made with `rbac grant`\n" +
+      "(account-token path, audited as cli:<accountId>) or in Identity Studio.");
     return;
   }
   const cfg = await loadConfig(file);

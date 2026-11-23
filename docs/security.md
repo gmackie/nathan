@@ -13,6 +13,19 @@
 - Make plugin trust explicit: verified, community, and custom; untrusted extension code must not execute inside privileged core without review.
 - Rate limiting, anti-enumeration, anti-stuffing, phishing-resistant MFA options, hardened recovery, threat modeling and incident handling.
 
+## Account-token administration
+
+Approved by the owner on 2026-11-23. An operator holding a Cloudflare API token with D1 edit on the Nathan account can, from `scripts/nathan.mjs`, enable or disable an application (`app enable|disable`), grant or revoke an application role (`rbac grant|revoke`), register an MCP server or change its status (`mcp register|status`), and look up a user id by email (`user find`, read-only). In Identity Studio each of these needs a verified, allowlisted administrator with enrolled authenticators and a recent passkey step-up. **The CLI path needs none of that: any holder of such a token skips the step-up.**
+
+The trade-off: a holder of that token can already write these D1 tables directly (for example with `wrangler d1 execute`), so these commands do not add a capability. They make the path validated and audited instead of ad hoc SQL:
+
+- One implementation: the CLI runs the Studio operations' own validation and statements (`src/shared/admin-ops.mjs`), so it cannot accept an identifier, audience, catalog, app, role or principal that Studio would refuse.
+- Plan by default; `--apply` plus an interactive confirmation (the typed Studio confirmation strings for enabling or disabling apps and MCP servers). No secret is accepted as a flag; the token comes from `CLOUDFLARE_API_TOKEN`.
+- Audit as `cli:<accountId>`: an `attempted` row, then the change, its change-feed row and Studio's `succeeded` row in one D1 batch, or `failed`; RBAC grant refusals are audited `rejected`, like Studio.
+- Not covered: Nathan administrator grants, OAuth client creation, MCP server removal and MCP grant revocation remain Studio-only.
+
+Treat a Cloudflare token with D1 edit on the Nathan account as an administrator credential: scope it to that account, keep it in a secret manager, and review `cli:` rows in `nathan_security_audit`. Audit rows are written by the same token holder and are not tamper-evident (threat model T18).
+
 ## Security profiles
 
 Profiles adjust authentication friction and assurance (consumer, business, high assurance) but never disable protocol validation or default-deny authorization. Compliance overlays are deployment obligations, not certifications.

@@ -6,6 +6,7 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { authWorker, randomKey } from "./helpers.mjs";
+import { grantRole, revokeRole, setAppStatus } from "../../scripts/lib/admin-cli.mjs";
 
 const HOST = "login.example.test";
 const ORIGIN = "https://" + HOST;
@@ -118,6 +119,46 @@ test("an enrolled administrator manages permissions, roles, groups and grants; e
   assert.equal((await rbac({ op: "access_mode", app: "billing", accessMode: "approved" })).status, 200);
   assert.equal(await count("SELECT count(*) AS n FROM nathan_rbac_changes"), 9);
   await rbac({ op: "grant.create", app: "billing", role: "editor", principalType: "group", group: "finance" });
+});
+
+test("the account-token CLI grants, revokes and enables with Studio's validation and audit rows", async () => {
+  // A stand-in for the Cloudflare D1 REST API over this Worker's own D1.
+  const api = {
+    queryDatabase: async (_id, statement, params = []) => (await db.prepare(statement).bind(...params).all()).results ?? [],
+    batchDatabase: async (_id, statements) => (await db.batch(statements.map(x => db.prepare(x.sql).bind(...x.params)))).map(r => r.results ?? [])
+  };
+  const cli = { api, databaseId: "db", actor: "cli:acct", apply: true, confirm: async () => true };
+  assert.equal((await post("/studio/api/apps", { id: "ledger", hostname: "ledger.example.test" })).status, 200);
+  assert.equal((await rbac({ op: "permission.upsert", app: "ledger", key: "ledger:read" })).status, 200);
+  assert.equal((await rbac({ op: "role.upsert", app: "ledger", key: "reader", permissions: ["ledger:read"] })).status, 200);
+  for (const [body, cliInput] of [
+    [{ app: "nope", role: "reader", email: "alice@example.test" }, { app: "nope", role: "reader", user: "alice@example.test" }],
+    [{ app: "ledger", role: "admin", email: "alice@example.test" }, { app: "ledger", role: "admin", user: "alice@example.test" }],
+    [{ app: "ledger", role: "reader", email: "ghost@example.test" }, { app: "ledger", role: "reader", user: "ghost@example.test" }],
+    [{ app: "Bad!", role: "reader", email: "alice@example.test" }, { app: "Bad!", role: "reader", user: "alice@example.test" }]
+  ]) {
+    const studioRefusal = await rbac({ op: "grant.create", principalType: "user", ...body });
+    assert.equal(studioRefusal.status, 409, JSON.stringify(body));
+    const { error } = await studioRefusal.json();
+    await assert.rejects(() => grantRole({ ...cli, ...cliInput }), e => e.message === error, "CLI refuses like Studio: " + error);
+    const [studioAudit, cliAudit] = await Promise.all(["admin-1", "cli:acct"].map(actor =>
+      db.prepare("SELECT action, target, outcome FROM nathan_security_audit WHERE actor=? ORDER BY rowid DESC LIMIT 1").bind(actor).first()));
+    assert.deepEqual(cliAudit, studioAudit, "both refusals are audited the same way");
+  }
+  assert.equal(await count("SELECT count(*) AS n FROM nathan_rbac_grants WHERE app_id='ledger'"), 0);
+
+  // A user id works as well as an email; the grant, its change-feed row and Studio's audit row carry the CLI actor.
+  const granted = await grantRole({ ...cli, app: "ledger", role: "reader", user: "u-alice" });
+  assert.equal(granted.applied, true);
+  assert.equal(await count("SELECT count(*) AS n FROM nathan_rbac_grants WHERE app_id='ledger' AND principal_id='u-alice' AND created_by='cli:acct'"), 1);
+  assert.equal(await count("SELECT count(*) AS n FROM nathan_rbac_changes WHERE kind='grant.created' AND app_id='ledger' AND actor='cli:acct'"), 1);
+  assert.equal(await count("SELECT count(*) AS n FROM nathan_security_audit WHERE actor='cli:acct' AND action='rbac_grant_create' AND target='ledger:reader:user:u-alice' AND outcome='succeeded'"), 1);
+  await setAppStatus({ ...cli, id: "ledger", enabled: true, confirmation: "CONFIRM ENABLE ledger" });
+  const access = await (await get("/studio/api/rbac?app=ledger")).json();
+  assert.equal(access.app.enabled, true);
+  assert.deepEqual(access.grants.map(g => [g.role, g.principalId, g.createdBy]), [["reader", "u-alice", "cli:acct"]], "Studio sees the CLI's grant");
+  await revokeRole({ ...cli, app: "ledger", role: "reader", user: "alice@example.test" });
+  assert.equal(await count("SELECT count(*) AS n FROM nathan_rbac_grants WHERE app_id='ledger'"), 0);
 });
 
 test("permissions-as-code sync from Studio uses the shared plan and asks before pruning", async () => {

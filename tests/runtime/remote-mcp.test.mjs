@@ -15,6 +15,7 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { bundle, migrate, randomKey, base64url, start, COMPAT } from "./helpers.mjs";
 import { providerEntryFromDocs, gatekeeper, invalidCredentials } from "./gatekeeper-verifier.mjs";
+import { registerMcp, setMcpStatus } from "../../scripts/lib/admin-cli.mjs";
 
 const PROVIDER = providerEntryFromDocs();
 const HOST = new URL(PROVIDER.issuer).host;
@@ -191,6 +192,54 @@ before(async () => {
   await sql("INSERT INTO nathan_rbac_grants(id,app_id,role_key,principal_type,principal_id,created_by) VALUES ('g4','notes','editor','user','u-dave','test')");
 });
 
+/**
+ * The account-token CLI (`nathan mcp register|status`) against this Worker's own D1, through a
+ * stand-in for the Cloudflare D1 REST API: every input Studio refuses, the CLI refuses with the same
+ * message, and neither writes anything.
+ */
+async function assertCliParity(plainAudience) {
+  const api = {
+    queryDatabase: async (_id, statement, params = []) => (await db.prepare(statement).bind(...params).all()).results ?? [],
+    batchDatabase: async (_id, statements) => (await db.batch(statements.map(x => db.prepare(x.sql).bind(...x.params)))).map(r => r.results ?? [])
+  };
+  const cli = { api, databaseId: "db", actor: "cli:acct", issuerOrigin: ORIGIN, apply: true, confirm: async () => true };
+  const before = await count("SELECT count(*) AS n FROM nathan_security_audit");
+  for (const body of [
+    { identifier: ORIGIN + "/mcp", app: "notes", ...CATALOG },
+    { identifier: ORIGIN + "/directory", app: "notes", ...CATALOG },
+    { identifier: ORIGIN + "/api/auth/oauth2/token", app: "notes", ...CATALOG },
+    { identifier: "http://other.example.com/mcp", app: "notes", ...CATALOG },
+    { identifier: "https://other.example.com/mcp?x=1", app: "notes", ...CATALOG },
+    { identifier: "https://other.example.com/m%63p", app: "notes", ...CATALOG },
+    { identifier: plainAudience, app: "notes", ...CATALOG },
+    { identifier: "https://other.example.com/mcp", app: "nope", ...CATALOG },
+    { identifier: "https://other.example.com/mcp", app: "notes", ...CATALOG, name: "" },
+    { identifier: "https://other.example.com/mcp", app: "notes", ...CATALOG, full: "notes:read" },
+    { identifier: "https://other.example.com/mcp", app: "notes", ...CATALOG, aliases: { "notes:all": ["notes:read", "notes:export"] } },
+    { identifier: "https://other.example.com/mcp", app: "notes", ...CATALOG, scopes: { "nathan:admin": { label: "x" } } }
+  ]) {
+    const studioRefusal = await studio({ op: "resource.register", ...body }, admin);
+    assert.equal(studioRefusal.status, 409, JSON.stringify(body));
+    const { error } = await studioRefusal.json();
+    await assert.rejects(() => registerMcp({ ...cli, body }), e => e.message === error, "CLI refuses like Studio: " + error);
+  }
+  for (const [identifier, enabled, confirm] of [
+    ["https://other.example.com/mcp", false, "CONFIRM DISABLE MCP https://other.example.com/mcp"],
+    [RESOURCE, false, "CONFIRM DISABLE MCP"],
+    [ORIGIN + "/mcp", false, "CONFIRM DISABLE MCP " + ORIGIN + "/mcp"]
+  ]) {
+    const studioRefusal = await studio({ op: "resource.status", identifier, enabled, confirm }, admin);
+    assert.equal(studioRefusal.status, 409, identifier);
+    const { error } = await studioRefusal.json();
+    await assert.rejects(() => setMcpStatus({ ...cli, identifier, enabled, confirmation: confirm }), e => e.message === error, "CLI refuses like Studio: " + error);
+  }
+  assert.equal(await count("SELECT count(*) AS n FROM nathan_security_audit"), before, "refusals write nothing on either path");
+  assert.equal(await count("SELECT count(*) AS n FROM nathan_mcp_resources WHERE identifier<>?", RESOURCE), 0);
+  // And an accepted change writes Studio's rows, as the CLI actor.
+  await setMcpStatus({ ...cli, identifier: RESOURCE, enabled: true, confirmation: "CONFIRM ENABLE MCP " + RESOURCE });
+  assert.equal(await count("SELECT count(*) AS n FROM nathan_security_audit WHERE actor='cli:acct' AND action='mcp_resource_status' AND target=? AND outcome='succeeded'", RESOURCE + " enabled=true"), 1);
+}
+
 test("only an enrolled administrator registers an MCP server, and its catalog cannot imply sensitive scopes", async () => {
   assert.equal((await studio({ op: "resource.register", identifier: RESOURCE, app: "notes", ...CATALOG }, alice)).status, 403);
   const crossOrigin = await auth.fetch(ORIGIN + "/studio/api/mcp", { method: "POST", body: "{}",
@@ -231,6 +280,7 @@ test("only an enrolled administrator registers an MCP server, and its catalog ca
   const crossed = await studio({ op: "resource.register", identifier: plain, app: "notes", ...CATALOG }, admin);
   assert.equal(crossed.status, 409);
   assert.match((await crossed.json()).error, /already a Better Auth token audience/);
+  await assertCliParity(plain);
   const overview = await (await auth.fetch(ORIGIN + "/studio/api/mcp", { headers: { Cookie: admin.cookie } })).json();
   assert.deepEqual(overview.resources[0].scopes.map(s => s.scope), SCOPES, "nathan:* permissions are never scopes");
   assert.equal(overview.resources[0].scopes.find(s => s.scope === "notes:export").sensitive, true);

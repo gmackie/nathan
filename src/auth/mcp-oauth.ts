@@ -29,10 +29,11 @@ import type { AuthEnv } from "./env";
 import { audit, isAdminPrincipal } from "./admin-service";
 import { resolveAccess } from "./rbac";
 import { rolesClaim, validateAudience } from "../shared/token-claims.mjs";
+import { planMcpRegister, planMcpStatus, committedStatements } from "../shared/admin-ops.mjs";
 import { makeCookie, parseCookie, safeReturnPath, constantTimeEqual, redirectWithCookies } from "../shared/security.mjs";
 import {
   buildCatalog, parseRequestedScopes, concreteScopes, parseGrant, offeredScopes, selectScopes, effectiveScopes,
-  scopeString, narrowScopes, parseRegistration, validateResourceConfig, ScopeError,
+  scopeString, narrowScopes, parseRegistration, ScopeError,
   MCP_ACCESS_TOKEN_SECONDS, MCP_GRANT_SECONDS, MCP_CODE_SECONDS, MCP_TICKET_SECONDS, MCP_CLIENT_SECONDS,
   MCP_UNUSED_CLIENT_SECONDS, MCP_UNUSED_CLIENT_LIMIT, MCP_DAILY_REGISTRATIONS_PER_ADDRESS
 } from "../shared/mcp-scopes.mjs";
@@ -735,53 +736,24 @@ export async function applyMcpOperation(env: AuthEnv, body: any, actor: string) 
     if (!await dropGrant(env, body.grantId, actor, "admin_revocation")) throw Error("Unknown grant");
     return { grantId: body.grantId, revoked: true };
   }
-  const identifier = validateAudience(body.identifier, origin);
-  if (op === "resource.status" || op === "resource.remove") {
-    const existing = await loadResource(env, identifier);
-    if (!existing) throw Error("Unknown MCP resource");
-    if (op === "resource.remove") {
-      if (body.confirm !== "CONFIRM REMOVE MCP " + identifier) throw Error("Explicit confirmation required");
-      // Cascades to the MCP resource, its metadata and every grant (and so every token of it).
-      await env.DB.batch([
-        env.DB.prepare("DELETE FROM nathan_token_audiences WHERE identifier=?").bind(identifier),
-        env.DB.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) VALUES (?,?,?,?,?)")
-          .bind(crypto.randomUUID(), actor, "mcp_resource_remove", identifier, "succeeded")
-      ]);
-      return { identifier, removed: true };
-    }
-    if (typeof body.enabled !== "boolean" || body.confirm !== "CONFIRM " + (body.enabled ? "ENABLE" : "DISABLE") + " MCP " + identifier)
-      throw Error("Explicit confirmation required");
+  if (op === "resource.remove") {
+    const identifier = validateAudience(body.identifier, origin);
+    if (!await loadResource(env, identifier)) throw Error("Unknown MCP resource");
+    if (body.confirm !== "CONFIRM REMOVE MCP " + identifier) throw Error("Explicit confirmation required");
+    // Cascades to the MCP resource, its metadata and every grant (and so every token of it).
     await env.DB.batch([
-      env.DB.prepare("UPDATE nathan_mcp_resources SET enabled=?, updated_at=unixepoch() WHERE identifier=?").bind(body.enabled ? 1 : 0, identifier),
+      env.DB.prepare("DELETE FROM nathan_token_audiences WHERE identifier=?").bind(identifier),
       env.DB.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) VALUES (?,?,?,?,?)")
-        .bind(crypto.randomUUID(), actor, "mcp_resource_status", identifier + " enabled=" + body.enabled, "succeeded")
+        .bind(crypto.randomUUID(), actor, "mcp_resource_remove", identifier, "succeeded")
     ]);
-    return { identifier, enabled: body.enabled };
+    return { identifier, removed: true };
   }
-  // resource.register: the app's permissions are the catalog; metadata is validated against them.
-  if (typeof body.app !== "string" || !/^[a-z][a-z0-9-]{0,62}$/.test(body.app)) throw Error("Invalid application id");
-  if (!await env.DB.prepare("SELECT id FROM nathan_applications WHERE id=? LIMIT 1").bind(body.app).first()) throw Error("Unknown application");
-  const betterAuthResource = await env.DB.prepare('SELECT "identifier" FROM "oauthResource" WHERE "identifier"=? LIMIT 1').bind(identifier).first();
-  if (betterAuthResource) throw Error("Invalid resource: it is already a Better Auth token audience; use another identifier");
-  const audience = await env.DB.prepare("SELECT app_id FROM nathan_token_audiences WHERE identifier=? LIMIT 1").bind(identifier).first<{ app_id: string | null }>();
-  const mcp = await loadResource(env, identifier);
-  if (audience && !mcp) throw Error("Invalid resource: it is already a token audience; use another identifier");
-  const permissionKeys = ((await env.DB.prepare("SELECT key FROM nathan_rbac_permissions WHERE app_id=? LIMIT 500").bind(body.app).all<{ key: string }>()).results ?? []).map(p => p.key);
-  const config = validateResourceConfig({ name: body.name, full: body.full, aliases: body.aliases, scopes: body.scopes }, permissionKeys);
-  await env.DB.batch([
-    env.DB.prepare("INSERT INTO nathan_token_audiences(identifier,app_id,created_by) VALUES (?,?,?) " +
-      "ON CONFLICT(identifier) DO UPDATE SET app_id=excluded.app_id, updated_at=unixepoch()").bind(identifier, body.app, actor),
-    env.DB.prepare("INSERT INTO nathan_mcp_resources(identifier,app_id,name,full_scope,aliases,created_by) VALUES (?,?,?,?,?,?) " +
-      "ON CONFLICT(identifier) DO UPDATE SET app_id=excluded.app_id, name=excluded.name, full_scope=excluded.full_scope, aliases=excluded.aliases, updated_at=unixepoch()")
-      .bind(identifier, body.app, config.name, config.full, JSON.stringify(config.aliases), actor),
-    // Moving a resource to another application ends its connections: they were consented for the old one.
-    env.DB.prepare("DELETE FROM nathan_mcp_grants WHERE resource=? AND ? IS NOT NULL AND ?<>?").bind(identifier, mcp?.app_id ?? null, mcp?.app_id ?? null, body.app),
-    env.DB.prepare("DELETE FROM nathan_mcp_scopes WHERE resource=?").bind(identifier),
-    ...config.scopes.map(s => env.DB.prepare("INSERT INTO nathan_mcp_scopes(resource,scope,label,description,group_key,requires,sensitive,admin_only) VALUES (?,?,?,?,?,?,?,?)")
-      .bind(identifier, s.scope, s.label, s.description, s.group, JSON.stringify(s.requires), s.sensitive ? 1 : 0, s.adminOnly ? 1 : 0)),
-    env.DB.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) VALUES (?,?,?,?,?)")
-      .bind(crypto.randomUUID(), actor, "mcp_resource_register", identifier + " app=" + body.app, "succeeded")
-  ]);
-  return { identifier, app: body.app, name: config.name, full: config.full, aliases: config.aliases, scopes: config.scopes,
-    protectedResourceMetadata: { resource: identifier, authorization_servers: [mcpIssuer(env)] } };
+  // resource.status and resource.register are shared with the account-token CLI (`nathan mcp status|register`):
+  // the same identifier and audience rules, catalog validation, statements and audit row (src/shared/admin-ops.mjs).
+  const reader = { all: async (sql: string, params: unknown[]) => ((await env.DB.prepare(sql).bind(...params).all()).results ?? []) as any[] };
+  const plan = op === "resource.status" ? await planMcpStatus(reader, body, origin) : await planMcpRegister(reader, body, origin, actor);
+  await env.DB.batch(committedStatements(plan, actor).map(s => env.DB.prepare(s.sql).bind(...s.params)));
+  if (op === "resource.status") return plan.result;
+  const { created: _created, ...registered } = plan.result as Record<string, unknown> & { identifier: string };
+  return { ...registered, protectedResourceMetadata: { resource: registered.identifier, authorization_servers: [mcpIssuer(env)] } };
 }
