@@ -10,12 +10,19 @@ export const RESERVED_HEADERS = [
   "x-frame-options", "cross-origin-opener-policy", "strict-transport-security"
 ] as const;
 
-/** One CSP form-action source: 'self', 'none' or a bare https origin. */
+/** RFC 8252 loopback hosts; the same set validateRedirectUri (src/shared/mcp-scopes.mjs) allows over http. */
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
+ * One CSP form-action source: 'self', 'none', a bare https origin, or (NATH-38, for native MCP
+ * clients' registered loopback callbacks) a bare http origin on a loopback host.
+ */
 export function formActionSource(source: string): string {
   if (source === "'self'" || source === "'none'") return source;
   let url: URL;
   try { url = new URL(source); } catch { throw Error("Invalid form-action origin"); }
-  if (url.protocol !== "https:" || url.origin !== source) throw Error("form-action must be 'self', 'none' or a bare https origin");
+  const allowed = url.protocol === "https:" || (url.protocol === "http:" && LOOPBACK.has(url.hostname));
+  if (!allowed || url.origin !== source) throw Error("form-action must be 'self', 'none', a bare https origin or a loopback http origin");
   return url.origin;
 }
 

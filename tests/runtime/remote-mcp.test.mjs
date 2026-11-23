@@ -95,6 +95,17 @@ function browserFormHeaders(page) {
   return { Origin: policy === "no-referrer" ? "null" : ORIGIN, "Sec-Fetch-Site": "same-origin" };
 }
 const formHeaders = new Map();
+/**
+ * The consent page's native `<input type="checkbox" name="scope" value=...>` for `scope`, whatever
+ * the attribute order (React 19 writes `checked` before `value`): { checked } or null when absent.
+ */
+function checkbox(html, scope) {
+  for (const [tag] of html.matchAll(/<input\b[^>]*>/g)) {
+    if (!/\btype="checkbox"/.test(tag) || !/\bname="scope"/.test(tag)) continue;
+    if (tag.includes(' value="' + scope + '"')) return { checked: /\schecked(=""|\s|\/|>)/.test(tag) };
+  }
+  return null;
+}
 async function consentPage(who, url) {
   const page = await auth.fetch(url, { redirect: "manual", headers: { Cookie: who.cookie } });
   const html = page.status === 200 ? await page.text() : "";
@@ -299,7 +310,7 @@ test("an MCP SDK client discovers, registers, gets narrowed consent and calls a 
   // no-referrer would make browsers send Origin: null with the form post, which Nathan refuses.
   assert.equal(page.headers.get("Referrer-Policy"), "same-origin");
   assert.doesNotMatch(html, /<script/);
-  for (const s of SCOPES) assert.match(html, new RegExp('value="' + s + '" checked'), s + " preselected from the request");
+  for (const s of SCOPES) assert.ok(checkbox(html, s)?.checked, s + " preselected from the request");
   const approved = await answer(alice, ticket, ["notes:read"]);
   assert.equal(approved.status, 303);
   const callback = new URL(approved.headers.get("Location"));
@@ -393,8 +404,8 @@ test("sensitive scopes are never granted through an alias or Full access, and ne
   const client = (await registerClient()).body;
   const verifier = base64url(crypto.getRandomValues(new Uint8Array(32)));
   const { html, ticket } = await consentPage(alice, authorizeUrl(client.client_id, { scope: "notes:full notes:basic", verifier }));
-  assert.match(html, /value="notes:full" checked/);
-  assert.match(html, /value="notes:export">/, "offered, but not preselected");
+  assert.ok(checkbox(html, "notes:full")?.checked);
+  assert.equal(checkbox(html, "notes:export")?.checked, false, "offered, but not preselected");
   const callback = new URL((await answer(alice, ticket, ["notes:full"])).headers.get("Location"));
   const exchanged = await token({ grant_type: "authorization_code", code: callback.searchParams.get("code"), redirect_uri: REDIRECT, code_verifier: verifier, client_id: client.client_id, resource: RESOURCE });
   assert.equal(exchanged.body.scope, "notes:read notes:share notes:write");

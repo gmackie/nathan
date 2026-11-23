@@ -13,7 +13,8 @@ import {handleScim} from "./scim/gateway";
 import {listScimConnections,createScimConnection,setScimConnectionEnabled,rotateScimToken} from "./scim/admin";
 import {samlProtocolGate,handleSamlRoutes} from "./saml-routes";
 export {NathanScimDirectory} from "./scim/directory";
-import { signInPage, consentPage, studioPage } from "./ui";
+import { studioPage } from "./ui";
+import { signInPage, consentPage } from "./hosted-pages.tsx";
 import { securityPage } from "./security-ui";
 import { loadVerifiedRealm, listRealmClients,registerRealmClient,registerRealmClientsBatch,updateRealmClientStatus } from "./domain-realm";
 import type { AuthEnv } from "./env";
@@ -88,12 +89,14 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
       if (session?.user?.id) return Response.redirect(issuer.origin + "/security", 302);
     }
     const providers = enabledProviderIds(socialProviders);
-    return signInPage(providers, env.ENABLE_PASSWORD === "true", env.ENTERPRISE_SSO === "true");
+    return signInPage(providers, env.ENABLE_PASSWORD === "true", env.ENTERPRISE_SSO === "true",
+      { issuer: issuer.host, error: url.searchParams.get("error") });
   }
   if (url.pathname === "/consent" && request.method === "GET") {
     const { secret } = await auth.$context;
     const verified = await verifyOAuthQueryParams(url.search.slice(1), secret);
-    return consentPage(Boolean(verified), url.searchParams.get("client_id") ?? "Application", url.searchParams.get("scope") ?? "");
+    return consentPage(Boolean(verified), url.searchParams.get("client_id") ?? "Application", url.searchParams.get("scope") ?? "",
+      { issuer: issuer.host });
   }
   if (url.pathname === "/security" && request.method === "GET") {
     const session=await auth.api.getSession({headers:request.headers});

@@ -8,7 +8,7 @@
   min-height: 100vh;
   background: var(--color-kumo-canvas);
   color: var(--text-color-kumo-default);
-  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--nathan-font, ui-sans-serif, system-ui, sans-serif);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -24,7 +24,7 @@
   width: min(440px, 100%);
   box-sizing: border-box;
   padding: 32px;
-  border-radius: 16px;
+  border-radius: var(--nathan-radius, 16px);
   background: var(--color-kumo-base);
   border: 1px solid var(--color-kumo-line);
   box-shadow: 0 1px 2px var(--color-kumo-shadow-drop);
@@ -33,7 +33,7 @@
 }
 
 @media (max-width: 480px) {
-  .nathan-auth-card { padding: 24px 20px; border-radius: 12px; }
+  .nathan-auth-card { padding: 24px 20px; border-radius: var(--nathan-radius, 12px); }
 }
 
 .nathan-mark {
@@ -78,4 +78,146 @@
   border-top: 1px solid var(--color-kumo-hairline);
   font-size: 14px;
   color: var(--text-color-kumo-subtle);
+}
+
+/*
+ * NATH-38: hosted end-user pages (sign-in, consent, MCP consent, SAML). Structure only, on Kumo
+ * tokens; an appearance (src/ui/appearance.ts) changes the tokens, never these rules.
+ */
+
+/* Fixed elements: the route line and the issuer footer. */
+.nathan-route {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  color: var(--text-color-kumo-subtle);
+  overflow-wrap: anywhere;
+}
+
+.nathan-issuer { margin: 0; overflow-wrap: anywhere; }
+.nathan-footer > * + * { margin-top: 6px; }
+
+.nathan-muted {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-color-kumo-subtle);
+  overflow-wrap: anywhere;
+}
+
+.nathan-subtitle {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-color-kumo-strong);
+}
+
+.nathan-section { display: grid; gap: 10px; margin: 0; }
+.nathan-form { display: grid; gap: 12px; margin: 0; }
+
+/* Phone first: provider buttons and primary actions are full width. */
+.nathan-providers { display: grid; gap: 8px; }
+.nathan-providers-icons { display: flex; flex-wrap: wrap; gap: 8px; }
+.nathan-block { width: 100%; justify-content: center; }
+
+.nathan-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text-color-kumo-subtle);
+}
+.nathan-divider::before, .nathan-divider::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--color-kumo-hairline);
+}
+
+.nathan-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+  overflow-wrap: anywhere;
+}
+
+.nathan-scope-list { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+
+/* MCP consent: native checkboxes, so the page works (and shows the true state) without script. */
+.nathan-scopes {
+  margin: 0;
+  padding: 4px 12px;
+  border: 1px solid var(--color-kumo-line);
+  border-radius: 10px;
+  min-width: 0;
+}
+.nathan-scopes > legend { padding: 0 6px; font-weight: 600; color: var(--text-color-kumo-strong); }
+.nathan-scope {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  padding: 10px 0;
+  border-top: 1px solid var(--color-kumo-hairline);
+  cursor: pointer;
+}
+.nathan-scopes > .nathan-scope:first-of-type { border-top: 0; }
+.nathan-scope-full { border: 1px solid var(--color-kumo-line); border-radius: 10px; padding: 10px 12px; }
+.nathan-scope > input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+  accent-color: var(--color-kumo-brand);
+}
+.nathan-scope-name { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-weight: 500; }
+.nathan-scope-description { grid-column: 2; font-size: 14px; color: var(--text-color-kumo-subtle); overflow-wrap: anywhere; }
+
+.nathan-connection {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--color-kumo-line);
+  border-radius: 12px;
+}
+
+/* Appearance plate (layout.platePlacement left|top). On phones it is always a band. */
+.nathan-hosted { min-height: 100vh; display: grid; }
+.nathan-hosted-left { grid-template-columns: 42% 1fr; }
+.nathan-hosted-top { grid-template-rows: minmax(120px, 28vh) 1fr; }
+.nathan-hosted > .nathan-auth { min-height: 0; }
+.nathan-plate {
+  position: relative;
+  overflow: hidden;
+  min-height: 112px;
+  background: var(--nathan-plate);
+  color: var(--nathan-on-plate);
+}
+.nathan-plate-accent {
+  position: absolute;
+  top: 14%;
+  right: 12%;
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  background: var(--nathan-plate-accent);
+}
+.nathan-wordmark {
+  position: absolute;
+  left: 24px;
+  bottom: -0.2em;
+  font-size: clamp(64px, 11vw, 160px);
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  white-space: nowrap;
+}
+@media (max-width: 720px) {
+  .nathan-hosted-left { grid-template-columns: 1fr; grid-template-rows: 112px 1fr; }
+  .nathan-hosted-top { grid-template-rows: 112px 1fr; }
+  .nathan-plate-accent { width: 56px; height: 56px; }
+  .nathan-wordmark { font-size: 72px; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .nathan-plate-accent { animation: nathan-accent-in 600ms ease-out both; }
+}
+@keyframes nathan-accent-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.9); }
+  to { opacity: 1; transform: none; }
 }
