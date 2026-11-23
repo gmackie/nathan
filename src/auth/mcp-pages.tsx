@@ -129,7 +129,9 @@ export function connectionsPage(email: string, csrf: string, connections: Connec
       ) : null}
       {connections.length ? connections.map(c => (
         <section className="nathan-connection" key={c.grantId}>
-          <h2 className="nathan-subtitle">{c.clientName} <span className="nathan-muted">{"→ " + c.resourceName}</span></h2>
+          {/* The client chose its own name: quote it and say so, as on the consent page (review 2026-11-23). */}
+          <h2 className="nathan-subtitle">{"\u201c" + c.clientName + "\u201d"} <span className="nathan-muted">{"→ " + c.resourceName}</span></h2>
+          <p className="nathan-muted">Name chosen by the client, not verified by Nathan.</p>
           <p className="nathan-muted">Client <Code>{c.clientId}</Code>, server <Code>{c.resource}</Code>{". Connected " + day(c.createdAt) + ", expires " + day(c.expiresAt) + "."}</p>
           <p className="nathan-muted">
             {c.effective.length ? <>Usable now: {codeList(c.effective, " ")}.</> : "Usable now: nothing (you no longer hold any of these permissions)."}

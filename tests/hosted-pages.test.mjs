@@ -283,3 +283,33 @@ test("MCP consent: fixed heading; the route line is the callback host, never the
   assert.ok(html.includes("“id.example.com”"), "the client name is quoted in the body");
   assert.match(html, /not verified by Nathan/);
 });
+
+test("every redirect URI MCP registration accepts yields a form-action the consent page can send", async () => {
+  const { validateRedirectUri, parseRegistration } = await import("../src/shared/mcp-scopes.mjs");
+  const { formActionSource } = await import("../src/ui/headers.ts");
+  const candidates = ["https://app.example.com/cb", "https://app.example.com:8443/cb?x=1", "http://127.0.0.1:33418/cb", "http://localhost/cb",
+    "http://[::1]:5000/cb", "https://[2001:db8::1]/cb", "https://a_b.example.com/cb", "https://example.com./cb", "https://a!b.example/cb",
+    "https://a$b.example/cb", "https://xn--bcher-kva.example/cb", "https://1.2.3.4/cb"];
+  for (const uri of candidates) {
+    if (validateRedirectUri(uri) === null) continue;
+    assert.doesNotThrow(() => formActionSource(new URL(uri).origin), uri);
+  }
+  for (const bad of ["https://[2001:db8::1]/cb", "https://a_b.example.com/cb", "https://example.com./cb"])
+    assert.equal(validateRedirectUri(bad), null, bad);
+  assert.throws(() => parseRegistration({ client_name: "x", redirect_uris: ["https://a_b.example.com/cb"] }, new Set()), /redirect/i);
+});
+
+test("client_name refuses invisible and separator characters, and is normalized", async () => {
+  const { parseRegistration } = await import("../src/shared/mcp-scopes.mjs");
+  const reg = name => parseRegistration({ client_name: name, redirect_uris: ["https://c.example.com/cb"] }, new Set());
+  for (const bad of ["a b", "a b", "a\u0085b", "́abc", "a͏b", "aㅤb", "a\uD800b", "ab"])
+    assert.throws(() => reg(bad), /invisible|control/, JSON.stringify(bad));
+  assert.equal(reg("Notes   desktop ").client_name, "Notes desktop");
+  assert.equal(reg("Café").client_name, "Café");
+});
+
+test("SAML ACS URLs need the same DNS host form-action accepts", async () => {
+  const { checkAcsUrl } = await import("../src/auth/saml-idp-protocol.mjs");
+  for (const bad of ["https://a_b.example.com/acs", "https://example.com./acs"]) assert.throws(() => checkAcsUrl(bad), /hostname|canonical/, bad);
+  assert.equal(checkAcsUrl("https://sp.example.com/acs"), "https://sp.example.com/acs");
+});

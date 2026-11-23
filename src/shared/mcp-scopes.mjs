@@ -255,6 +255,9 @@ export function narrowScopes(catalog, value, granted) {
 }
 
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
+/** The host test src/ui/headers.ts formActionSource applies to https origins: every https redirect we
+ *  accept must yield a form-action the consent page can send (independent review 2026-11-23). */
+export const DNS_HOST = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i;
 /** An exact redirect URI for a public client: https, or http on a loopback host. No fragment or credentials.
  * @param {unknown} value @returns {string|null} */
 export function validateRedirectUri(value) {
@@ -262,7 +265,7 @@ export function validateRedirectUri(value) {
   let url;
   try { url = new URL(value); } catch { return null; }
   if (url.username || url.password || url.hash) return null;
-  if (url.protocol === "https:" || (url.protocol === "http:" && LOOPBACK.has(url.hostname))) return value;
+  if ((url.protocol === "https:" && DNS_HOST.test(url.hostname)) || (url.protocol === "http:" && LOOPBACK.has(url.hostname))) return value;
   return null;
 }
 
@@ -289,10 +292,18 @@ export function parseRegistration(body, knownScopes) {
   if (body.response_types !== undefined && (!Array.isArray(body.response_types) || body.response_types.join(" ") !== "code"))
     throw meta("Only the code response type is supported");
   let name;
-  // Format characters (bidi overrides, zero-width joiners) could make a client name read as something
-  // else on the consent page; refuse them (independent review 2026-11-23).
-  try { if (typeof body.client_name === "string" && /\p{Cf}/u.test(body.client_name)) throw Error("format characters");
-    name = text(body.client_name, MAX_CLIENT_NAME, "client name") || "MCP client"; } catch { throw meta("Invalid client_name (at most " + MAX_CLIENT_NAME + " characters)"); }
+  // Invisible or direction-changing characters could make a client name read as something else on the
+  // consent and connections pages (independent review 2026-11-23): refuse control, format, private-use,
+  // unassigned and surrogate code points, line/paragraph separators, default-ignorables and a leading
+  // combining mark; normalize to NFC and collapse whitespace.
+  if (body.client_name !== undefined && body.client_name !== null) {
+    if (typeof body.client_name !== "string" || body.client_name.length > MAX_CLIENT_NAME)
+      throw meta("Invalid client_name (at most " + MAX_CLIENT_NAME + " characters)");
+    if (/[\p{C}\p{Zl}\p{Zp}\p{Default_Ignorable_Code_Point}]|^\p{M}/u.test(body.client_name))
+      throw meta("Invalid client_name (invisible, control or direction-changing characters are not allowed)");
+  }
+  name = typeof body.client_name === "string" ? body.client_name.normalize("NFC").replace(/\s+/gu, " ").trim() : "";
+  name = name || "MCP client";
   const out = { client_name: name, redirect_uris: [...uris] };
   if (body.scope !== undefined) {
     if (typeof body.scope !== "string" || body.scope.length > MAX_REGISTRATION_SCOPE) throw meta("Invalid scope");

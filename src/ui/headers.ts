@@ -24,8 +24,10 @@ export function formActionSource(source: string): string {
   if (source === "'self'" || source === "'none'") return source;
   let url: URL;
   try { url = new URL(source); } catch { throw Error("Invalid form-action origin"); }
-  // Independent review 2026-11-23: per scheme. https needs an exact DNS host (no "*"); http only for
-  // the loopback hosts MCP redirect validation allows (localhost, 127.0.0.1, [::1]) with a numeric port.
+  // Independent review 2026-11-23: per scheme. https needs an exact DNS host (no "*", "_" or trailing
+  // dot; IPv4 literals also match, as validateRedirectUri allows them); http only for the loopback
+  // hosts MCP redirect validation allows (localhost, 127.0.0.1, [::1]), with or without a port.
+  // validateRedirectUri and checkAcsUrl apply the same host test, so a stored URL never fails here.
   const dnsHost = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i;
   // (URL parsing already guarantees a numeric port; origin === source rules out paths, userinfo and ":443".)
   const allowed = url.origin === source && (

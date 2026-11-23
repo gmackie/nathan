@@ -431,7 +431,10 @@ export function checkAcsUrl(value) {
   // the canonical one without the root "/" before a query (Salesforce's https://x.my.salesforce.com?so=...).
   if (url.href !== value && !(url.pathname === "/" && url.search && value === url.origin + url.search))
     throw Error("ACS URL must be written in canonical form: " + url.href);
-  if (!url.hostname.includes(".") || /^(localhost|\d+\.\d+\.\d+\.\d+|\[.*\])$/i.test(url.hostname))
+  // The same DNS host test the auto-post page's form-action applies (src/ui/headers.ts), so a stored
+  // ACS URL can always be posted to: no "_", no trailing dot.
+  if (!url.hostname.includes(".") || /^(localhost|\d+\.\d+\.\d+\.\d+|\[.*\])$/i.test(url.hostname)
+    || !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i.test(url.hostname))
     throw Error("ACS URL must use a public DNS hostname");
   return value;
 }
