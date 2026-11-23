@@ -34,6 +34,8 @@ export async function createGeneratedConfig(cfg, databaseId, gateway = null) {
   wrangler.account_id = cfg.accountId;
   wrangler.main = resolve(wrangler.main);
   for (const database of wrangler.d1_databases || []) database.migrations_dir = resolve(database.migrations_dir);
+  // NATH-32: the config's build step runs from the repository root, not .nathan/generated/.
+  if (wrangler.build?.command) wrangler.build = { ...wrangler.build, cwd: resolve(wrangler.build.cwd ?? ".") };
   if (!gateway) {
     wrangler.name = cfg.name + "-auth";
     wrangler.routes = [{ pattern: cfg.hostname, custom_domain: true }];

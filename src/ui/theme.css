@@ -1,0 +1,16 @@
+/*
+ * NATH-37/NATH-34: Nathan's default look is stock Kumo on every surface, including the hosted
+ * pages. This file deliberately overrides no Kumo colour token.
+ *
+ * <html data-theme="nathan" data-mode="light|dark|system">. Kumo switches its own tokens on
+ * :root / :root[data-mode=dark]; build-ui.mjs adds the "system" mode (Kumo's dark tokens under
+ * prefers-color-scheme: dark).
+ *
+ * Hosted pages may be restyled by an instance or per-app appearance (src/ui/appearance.ts,
+ * DESIGN.md). renderPage emits appearanceCss() after this file; with no appearance it emits nothing.
+ * Primary buttons on a custom colorPrimary use the derived --nathan-on-brand text colour, because
+ * Kumo's primary Button forces white text.
+ */
+[data-theme="nathan"] [data-kumo-component].bg-\(--kumo-button-emphasis-bg\) {
+  color: var(--nathan-on-brand, #ffffff) !important;
+}

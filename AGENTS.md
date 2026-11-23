@@ -28,6 +28,10 @@ npm run build:installer
 
 Regenerate Better Auth schema only when plugin types/versions change; compare the generated SQL before committing. Do not edit the generated migration by hand without documenting why.
 
+## Design System
+
+Read `DESIGN.md` before visual or UI work. Nathan is stock Cloudflare Kumo (with Phosphor icons) on every surface: Studio, installer, gateway pages, and by default the hosted sign-in/consent/MFA/SAML/error pages. Do not add Nathan-specific colours or theme Studio. Hosted pages may be restyled only through the validated, Clerk-style `appearance` object (`src/ui/appearance.ts`: instance layer, then per-app layer); never accept free-form per-app CSS or remote assets on a credential page. gmacko's instance appearance is `docs/appearance/gmacko.json`.
+
 ## Security invariants
 
 - Validate redirect URIs exactly, prevent open redirects, require PKCE, verify JWKS signature, audience, issuer and nonce.

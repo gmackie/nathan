@@ -1,3 +1,4 @@
+import { serveUiAsset } from "../ui/assets.ts";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { verifyOAuthQueryParams } from "@better-auth/oauth-provider";
 import { createAuth } from "./instance";
@@ -46,6 +47,9 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
   if (url.origin !== issuer.origin || url.protocol !== "https:") return reject(421, "Misdirected request");
   // NATH-17: also reports unusable social providers (id and reason only); see ./health.ts.
   if (url.pathname === "/healthz") return healthResponse(env);
+  // NATH-32: hashed Kumo CSS and island modules, bundled into this Worker (src/ui/assets.ts).
+  const uiAsset = serveUiAsset(request);
+  if (uiAsset) return uiAsset;
   // The hosted installer uploads inactive code before it creates a public route.
   if (env.NATHAN_INSTALL_ACTIVE === "false") return reject(503, "Installation not active");
   if (url.pathname === "/.well-known/oauth-protected-resource" ||

@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nathan UI overhaul: Kumo + Phosphor</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; color: var(--foreground, #202124); font: 14px/1.5 var(--font-sans, system-ui, sans-serif); }
+  main { width: 100%; min-width: 0; }
+  h1 { font-size: 1.2rem; margin: 0 0 .25rem; }
+  h2 { font-size: 1rem; margin: 1.5rem 0 .5rem; }
+  h3 { font-size: .9rem; margin: 0 0 .25rem; }
+  p { max-width: 75ch; margin: .5rem 0; }
+  a { color: var(--accent-surface-foreground, #2458ac); }
+  .meta, .muted { color: var(--muted-foreground, #606773); }
+  code, pre { font-family: var(--font-mono, Menlo, Consolas, monospace); background: var(--code-background, #f1f3f5); color: var(--code-foreground, #202124); border-radius: 4px; }
+  code { padding: 0 .25rem; font-size: .85em; }
+  pre, .table-scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  th, td { text-align: left; vertical-align: top; padding: .45rem; border-bottom: 1px solid var(--border, #d8dce2); }
+  .badge, .chip { display: inline-block; border-radius: 999px; padding: .1rem .5rem; font-size: .72rem; font-weight: 600; white-space: nowrap; }
+  .badge { background: var(--accent-surface, #eaf0ff); color: var(--accent-surface-foreground, #2458ac); }
+  .chip.done { background: color-mix(in srgb, var(--success, #1e8e3e) 18%, transparent); color: var(--success, #1e8e3e); }
+  .chip.active { background: var(--accent-surface, #eaf0ff); color: var(--accent-surface-foreground, #2458ac); }
+  .chip.todo { background: var(--muted, #f1f3f5); color: var(--muted-foreground, #606773); }
+  .chip.risk { background: var(--warning-surface, #fff4d6); color: var(--warning-foreground, #7a5200); }
+  .chip.high { background: var(--destructive-surface, #fde8e8); color: var(--destructive, #b3261e); }
+  .callout { border-left: 3px solid var(--accent, #2458ac); background: var(--accent-surface, #eaf0ff); color: var(--accent-surface-foreground, #1a2b4d); border-radius: 0 var(--radius, .625rem) var(--radius, .625rem) 0; padding: .65rem .85rem; margin: .75rem 0; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: .75rem; }
+  .card { border: 1px solid var(--border, #d8dce2); border-radius: var(--radius, .625rem); background: var(--card, #f7f8fa); color: var(--card-foreground, #202124); padding: .75rem; }
+  .card ul { margin: .4rem 0 0; padding-left: 1.1rem; }
+  .goals li::marker { content: "✓  "; color: var(--success, #1e8e3e); }
+  .nongoals li::marker { content: "✕  "; color: var(--muted-foreground, #606773); }
+  .bars { display: grid; gap: .4rem; margin: .5rem 0; }
+  .bar { display: grid; grid-template-columns: minmax(120px, 34%) 1fr auto; gap: .5rem; align-items: center; font-size: .82rem; }
+  .bar .track { height: 10px; background: var(--muted, #e6e8eb); border-radius: 5px; overflow: hidden; }
+  .bar .fill { height: 100%; background: var(--chart-1, #2458ac); border-radius: 5px; width: var(--w); transform-origin: left; }
+  .flow { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center; margin: .5rem 0; font-size: .82rem; }
+  .flow .node { border: 1px solid var(--border, #d8dce2); background: var(--card, #f7f8fa); border-radius: 8px; padding: .35rem .55rem; }
+  .flow .node.key { border-color: var(--accent, #2458ac); box-shadow: 0 0 0 1px var(--accent, #2458ac); }
+  .flow .arrow { color: var(--muted-foreground, #606773); }
+  .timeline { list-style: none; margin: 0; padding: 0; position: relative; }
+  .timeline::before { content: ""; position: absolute; left: 7px; top: 6px; bottom: 6px; width: 2px; background: var(--border, #d8dce2); }
+  .timeline > li { position: relative; padding: 0 0 1rem 1.75rem; }
+  .timeline > li::before { content: ""; position: absolute; left: 0; top: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--background, #fff); border: 2px solid var(--border, #d8dce2); }
+  .timeline > li.active::before { background: var(--accent, #2458ac); border-color: var(--accent, #2458ac); }
+  .timeline .head { display: flex; gap: .5rem; align-items: baseline; flex-wrap: wrap; }
+  .progress { display: flex; gap: 3px; height: 8px; margin: .5rem 0 1rem; }
+  .progress span { flex: 1; border-radius: 3px; background: var(--muted, #e6e8eb); transform-origin: left; }
+  .progress span.active { background: var(--accent, #2458ac); }
+  .risks { display: grid; grid-template-columns: auto repeat(3, 1fr); gap: 4px; font-size: .75rem; }
+  .risks .cell { min-height: 54px; border-radius: 6px; padding: 4px; background: var(--muted, #f1f3f5); display: flex; flex-wrap: wrap; gap: 3px; align-content: flex-start; }
+  .risks .cell.hi { background: color-mix(in srgb, var(--destructive, #b3261e) 14%, transparent); }
+  .risks .cell.mid { background: color-mix(in srgb, var(--warning, #b07c00) 16%, transparent); }
+  .risks .lab { color: var(--muted-foreground, #606773); display: flex; align-items: center; justify-content: center; text-align: center; }
+  .risks .rc { background: var(--card, #fff); border: 1px solid var(--border, #d8dce2); border-radius: 999px; padding: 0 .4rem; }
+  details { border: 1px solid var(--border, #d8dce2); border-radius: var(--radius, .625rem); background: var(--card, #f7f8fa); padding: .6rem .75rem; margin: .6rem 0; }
+  summary { cursor: pointer; font-weight: 600; }
+  :focus-visible { outline: 2px solid var(--ring, #2458ac); outline-offset: 3px; }
+  @media (prefers-reduced-motion: no-preference) {
+    .reveal { animation: rise .45s cubic-bezier(.2,.7,.3,1) both; animation-delay: calc(var(--i, 0) * 60ms); }
+    .progress span, .bar .fill { animation: grow .55s ease-out both; animation-delay: calc(250ms + var(--i, 0) * 60ms); }
+    .timeline > li.active::before { animation: pulse 1.8s ease-in-out infinite; }
+    .flow > * { animation: rise .35s ease-out both; animation-delay: calc(var(--i, 0) * 80ms); }
+    @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+    @keyframes grow { from { transform: scaleX(0); } }
+    @keyframes pulse { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent, #2458ac) 25%, transparent); } }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1 class="reveal">Nathan UI overhaul: Kumo + Phosphor <span class="badge">Draft</span></h1>
+  <p class="meta reveal" style="--i:1">2026-11-22 · gmackie/nathan @ <code>feat/NATH-32-kumo-ui-overhaul</code> (from the NATH-8 stack, 8144829) · epic NATH-32 under NATH-20</p>
+
+  <div class="callout reveal" style="--i:2"><strong>Plan:</strong> Build one shared Kumo layer (K0) that renders React on the server without weakening Nathan's CSP. Then move every surface onto it, starting with the hosted end-user pages. Those don't touch NATH-24's Studio extraction, so they can proceed in parallel. Studio follows as a Kumo SPA on <code>/studio/api/v1</code>.</div>
+
+  <h2 class="reveal" style="--i:3">Owner decisions (2026-11-22)</h2>
+  <div class="grid2">
+    <section class="card reveal" style="--i:4"><h3>Scope: all product UI</h3><p class="muted">Studio, hosted pages, installer and gateway pages. The marketing site is out of scope. Absorbs NATH-26 and NATH-30 (a), (c) and (d).</p></section>
+    <section class="card reveal" style="--i:5"><h3>Server-rendered pages with small islands</h3><p class="muted">Hosted pages are rendered in the Worker. Forms post without JS. Only passkey (WebAuthn) and similar features hydrate as islands.</p></section>
+    <section class="card reveal" style="--i:6"><h3>Design first, foundation now</h3><p class="muted">The gmacko design pass (NATH-34, formerly NATH-30c) produces Kumo token-set variants and the owner picks one before any surface is built. K0 starts now, in parallel with NATH-21 and NATH-24.</p></section>
+  </div>
+
+  <h2>Spike findings (measured)</h2>
+  <p>Tested locally with <code>@cloudflare/kumo@2.19.0</code>, React 19, <code>@phosphor-icons/react</code> and esbuild 0.25.</p>
+  <ul>
+    <li><strong>Server rendering works.</strong> <code>renderToString</code> renders Button, Input, Banner, Checkbox and Badge. Phosphor icons come out as inline SVG, so <code>img-src 'none'</code> stays.</li>
+    <li><strong>Inline styles conflict with the CSP.</strong> Kumo writes <code>style=""</code> attributes, for example the Button emphasis custom properties and the visually-hidden checkbox input. Nathan's nonce-only <code>style-src</code> blocks those, so K0 needs a CSP-safe renderer (below).</li>
+    <li><strong>Kumo ships precompiled CSS</strong> (<code>kumo-standalone.css</code>, Tailwind 4.1 output), so no Tailwind build step is required to start.</li>
+  </ul>
+  <div class="bars" role="img" aria-label="Gzipped sizes: island bundle 144 KB, server bundle 146 KB, standalone CSS 23 KB">
+    <div class="bar"><span>Island (React + Kumo index)</span><span class="track"><span class="fill" style="--w:98%;--i:0"></span></span><span>144 KB gz</span></div>
+    <div class="bar"><span>Server-render bundle</span><span class="track"><span class="fill" style="--w:100%;--i:1"></span></span><span>146 KB gz</span></div>
+    <div class="bar"><span>Kumo standalone CSS</span><span class="track"><span class="fill" style="--w:16%;--i:2"></span></span><span>23 KB gz</span></div>
+  </div>
+  <p class="muted">The island figure imports from the Kumo index. K0 tries per-component entry points and a shared hashed vendor chunk to shrink it. Treat the 144 KB as an upper bound, not a target.</p>
+
+  <h2>How a hosted page renders</h2>
+  <div class="flow" aria-label="Request flow">
+    <span class="node" style="--i:0">Request</span><span class="arrow" style="--i:1">→</span>
+    <span class="node" style="--i:2">Route handler (existing checks unchanged)</span><span class="arrow" style="--i:3">→</span>
+    <span class="node key" style="--i:4"><code>renderPage(&lt;Page/&gt;)</code>: renderToString</span><span class="arrow" style="--i:5">→</span>
+    <span class="node key" style="--i:6">Move <code>style=""</code> into classes in a nonce'd <code>&lt;style&gt;</code></span><span class="arrow" style="--i:7">→</span>
+    <span class="node" style="--i:8">Same-origin hashed CSS and island JS, with SRI</span><span class="arrow" style="--i:9">→</span>
+    <span class="node" style="--i:10">The same security headers as today</span>
+  </div>
+  <details><summary>CSP details</summary>
+    <ul>
+      <li><code>style-src 'self' 'nonce-…'</code>. The rendered markup has no inline style attributes, because each unique declaration becomes a generated class in the nonce'd block. A test fails the build if any <code>style=</code> remains.</li>
+      <li><code>script-src 'self' 'nonce-…'</code>, used only for islands. Pages without islands keep sending no script at all, including the SAML confirmation page, which never has script.</li>
+      <li>After hydration, React updates styles through CSSOM, which CSP allows. Islands are kept small so they don't re-render whole pages.</li>
+      <li>Everything else is unchanged: <code>default-src 'none'</code>, <code>frame-ancestors 'none'</code>, <code>form-action 'self'</code>, <code>base-uri 'none'</code>, <code>Referrer-Policy: same-origin</code>, COOP and HSTS.</li>
+    </ul>
+  </details>
+
+  <h2>Goals and non-goals</h2>
+  <div class="grid2">
+    <section class="card"><h3>Goals</h3><ul class="goals">
+      <li>Every surface uses Kumo components, Kumo tokens and Phosphor icons.</li>
+      <li>One light and one dark theme. The NATH-30 per-app branding hook lives on Kumo tokens.</li>
+      <li>Accessibility at least matches today: labels, focus, keyboard, and the alert regions that carry reason codes.</li>
+      <li>Behavior, audit events, reason codes and headers are identical. Every existing test keeps passing.</li>
+    </ul></section>
+    <section class="card"><h3>Non-goals</h3><ul class="nongoals">
+      <li>No auth, policy or API behavior changes. Those stay in their own issues.</li>
+      <li>No relaxing the CSP (no <code>'unsafe-inline'</code>).</li>
+      <li>The marketing site. It keeps its own styling.</li>
+      <li>No new Studio features beyond parity and the branding editor.</li>
+    </ul></section>
+  </div>
+
+  <h2>Phases</h2>
+  <div class="progress" role="img" aria-label="K0 and the design pass in progress; K1, K2, K3 and K5 to do">
+    <span class="active" style="--i:0"></span><span class="active" style="--i:1"></span><span style="--i:2"></span><span style="--i:3"></span><span style="--i:4"></span><span style="--i:5"></span>
+  </div>
+  <ol class="timeline">
+    <li class="active reveal" style="--i:7"><div class="head"><h3>K0: Foundation (NATH-37)</h3><span class="chip active">In progress</span></div>
+      <p class="muted">The shared <code>src/ui</code> layer that every other phase builds on.</p>
+      <details><summary>Tasks</summary><div class="table-scroll"><table>
+        <thead><tr><th>Task</th><th>Files</th><th>Verification</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>Add exactly pinned dependencies: kumo, react, react-dom, @phosphor-icons/react, zod 4. Configure wrangler JSX.</td><td><code>package.json</code>, <code>tsconfig.json</code>, <code>wrangler.*.jsonc</code></td><td>All three builds succeed; Worker size is reported</td><td><span class="chip todo">Todo</span></td></tr>
+          <tr><td><code>renderPage()</code>: server render, move inline styles into classes, nonce, security headers</td><td><code>src/ui/render.tsx</code></td><td>Unit tests: no <code>style=</code> attributes; headers match today</td><td><span class="chip todo">Todo</span></td></tr>
+          <tr><td>Serve hashed CSS and island JS as same-origin static assets, with SRI</td><td><code>scripts/build-ui.mjs</code>, assets binding</td><td>Runtime test: assets served with hashes and immutable cache headers</td><td><span class="chip todo">Todo</span></td></tr>
+          <tr><td>Nathan theme on Kumo tokens (light and dark) plus a per-app branding hook</td><td><code>src/ui/theme.css</code></td><td>Contrast check, light and dark snapshots</td><td><span class="chip todo">Todo</span></td></tr>
+          <tr><td>Phosphor icon map: providers (Google, Apple, GitHub, Discord, Twitch, X), security, status</td><td><code>src/ui/icons.tsx</code></td><td>Every provider in the registry has an icon</td><td><span class="chip todo">Todo</span></td></tr>
+          <tr><td>Layouts: <code>AuthLayout</code>, <code>RefusalPage</code> (keeps reason codes), <code>AutoPostPage</code></td><td><code>src/ui/layouts/*</code></td><td>Server-render tests</td><td><span class="chip todo">Todo</span></td></tr>
+        </tbody></table></div></details></li>
+    <li class="reveal" style="--i:8"><div class="head"><h3>Design pass (NATH-34)</h3><span class="chip done">Decided</span></div>
+      <p class="muted">The owner decided on 2026-11-22. Nathan is stock Kumo everywhere, hosted pages included. Hosted pages can be restyled only through a Clerk-style <code>appearance</code> object, layered instance, then app, then Kumo (<code>src/ui/appearance.ts</code>, <code>DESIGN.md</code>). gmacko's instance appearance (a cobalt plate with an orange primary) is <code>docs/appearance/gmacko.json</code>.</p></li>
+    <li class="reveal" style="--i:8"><div class="head"><h3>K1: Hosted pages (NATH-38)</h3><span class="chip todo">Todo</span></div>
+      <p class="muted">Sign-in (providers, passkey island, enterprise SSO, password and TOTP), the security and MFA page, OAuth consent, MCP per-scope consent, SAML IdP confirmation, auto-post and refusal pages, admission and invitations, bootstrap, and errors. This work does not touch the Studio files NATH-24 is extracting.</p></li>
+    <li class="reveal" style="--i:9"><div class="head"><h3>K2: Identity Studio SPA (NATH-39, absorbs NATH-26)</h3><span class="chip todo">Todo</span></div>
+      <p class="muted">A Kumo app shell with Sidebar and CommandPalette. Users come first, then parity for apps and RBAC, tokens, MCP, providers, SAML (inbound and IdP), SCIM, admission, audit and branding. It is built on NATH-24's API; the panel shell can start before that API lands.</p></li>
+    <li class="reveal" style="--i:10"><div class="head"><h3>K3: Installer and gateway (NATH-40)</h3><span class="chip todo">Todo</span></div>
+      <p class="muted">The installer wizard and gateway pages move to the K0 renderer. The Origin checks and <code>Referrer-Policy: same-origin</code> stay, and the installer runtime tests keep passing.</p></li>
+    <li class="reveal" style="--i:12"><div class="head"><h3>K5: Cleanup and verification (NATH-42)</h3><span class="chip todo">Todo</span></div>
+      <p class="muted">Delete <code>page()</code> and the <code>*-ui.ts</code> HTML strings. On staging, check light, dark and phone layouts, and passkey sign-in in Safari and Chrome. An independent security review covers the renderer and CSP change.</p></li>
+  </ol>
+
+  <h2>Risks</h2>
+  <div class="risks" role="table" aria-label="Risks by likelihood (rows) and impact (columns)">
+    <span></span><span class="lab">Low impact</span><span class="lab">Medium</span><span class="lab">High impact</span>
+    <span class="lab">Likely</span><span class="cell mid"><span class="rc">Bundle size</span></span><span class="cell hi"><span class="rc">Merge conflicts with NATH-24</span></span><span class="cell hi"><span class="rc">Inline styles vs. CSP</span></span>
+    <span class="lab">Possible</span><span class="cell"><span class="rc">Kumo churn</span></span><span class="cell mid"><span class="rc">Server-rendered popovers and portals</span></span><span class="cell hi"><span class="rc">Passkey island regression</span></span>
+    <span class="lab">Unlikely</span><span class="cell"></span><span class="cell"><span class="rc">Worker size limit</span></span><span class="cell mid"><span class="rc">Supply chain</span></span>
+  </div>
+  <details><summary>Mitigations</summary><ul>
+    <li><strong>Inline styles vs. CSP:</strong> the K0 renderer moves them into classes, and a test fails on any <code>style=</code>. The CSP is never relaxed.</li>
+    <li><strong>Merge conflicts with NATH-24:</strong> K1 (hosted pages) goes first. K2 rebases onto NATH-24 once it merges, and Studio <code>*-ui.ts</code> files stay untouched until then.</li>
+    <li><strong>Passkey island regression:</strong> keep the existing WebAuthn calls verbatim inside the island, plus a runtime test and a manual Safari and Chrome check before merging.</li>
+    <li><strong>Server-rendered popovers and portals:</strong> base-ui dialogs and menus render client-side only. Hosted pages avoid them; Studio is an SPA.</li>
+    <li><strong>Bundle size:</strong> per-component imports and one cached vendor chunk. Pages without an island ship no JS.</li>
+    <li><strong>Kumo churn and supply chain:</strong> exact pins, a committed lockfile, <code>npm ci</code> in CI, and deliberate upgrades only.</li>
+    <li><strong>Worker size limit:</strong> report the bundle size in CI and keep echarts and shiki out of the Worker.</li>
+  </ul></details>
+
+  <h2>Verification</h2>
+  <ul>
+    <li>Every check passes on each phase: <code>npm test</code>, <code>npm run test:runtime</code>, <code>typecheck</code>, the three builds, <code>pack:release</code> and <code>verify:release</code>.</li>
+    <li>New tests: a no-inline-style test per page; a header and CSP comparison against today; a test that each refusal page keeps its reason code; island script integrity (SRI).</li>
+    <li>Staging: screenshots in light, dark and phone layouts; real sign-in through GitHub, passkey and TOTP; SAML confirmation with JS disabled.</li>
+  </ul>
+
+  <h2>Coordination</h2>
+  <ul>
+    <li>Agreed with the NATH-20 thread: NATH-26 becomes K2; NATH-30 (a), (c) and (d) move here. NATH-30 (b) publishes the validated per-client token-override schema on <code>/studio/api/v1</code>, and K0's theme module consumes it with matching token names.</li>
+    <li>The parallel Llavero overhaul (LLAV-4) uses the same stack, so renderer and theme lessons are worth sharing.</li>
+  </ul>
+
+  <h2>Open questions</h2>
+  <ul>
+    <li>Which design-pass variant becomes the gmacko theme (NATH-34). Until the owner picks, K0 ships a neutral Kumo theme with today's orange as the brand token.</li>
+  </ul>
+</main>
+</body>
+</html>

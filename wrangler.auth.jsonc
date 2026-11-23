@@ -45,6 +45,9 @@
       }
     ]
   },
+  // NATH-32: build the hashed Kumo UI assets before bundling; src/ui/assets.ts serves them from
+  // the Worker module itself (no static-assets binding, so every deploy path carries them).
+  "build": { "command": "node scripts/build-ui.mjs" },
   "migrations": [
     {
       "tag": "nathan-scim-v1",

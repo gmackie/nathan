@@ -1,0 +1,13 @@
+{
+  "variables": {
+    "colorPlate": { "light": "#2041D9", "dark": "#1F3FCC" },
+    "colorPlateAccent": "#FF7A1A",
+    "colorPrimary": "#FF7A1A",
+    "colorBackground": { "light": "#FAFAFC", "dark": "#0E1116" },
+    "colorSurface": { "light": "#FFFFFF", "dark": "#161A21" },
+    "borderRadius": 6,
+    "fontFamily": "Public Sans"
+  },
+  "layout": { "platePlacement": "left", "socialButtonsVariant": "blockButton", "primaryMethod": "passkey", "logoPlacement": "none" },
+  "wordmark": "gmacko"
+}
