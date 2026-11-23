@@ -46,7 +46,7 @@ const REPLAY_SECONDS = 900;
 /** A next key must be published this long before it may sign (SPs cache metadata). */
 export const ROTATION_OVERLAP_SECONDS = 86400;
 const noStore = { "Cache-Control": "no-store" };
-const STUDIO_MAX_BYTES = 160_000;
+export const STUDIO_MAX_BYTES = 160_000;
 
 type Attribute = { name: string; source: string };
 type Certificate = { der: string; sha256: string; notAfter: string };
@@ -574,7 +574,7 @@ export async function applySamlIdpOperation(env: AuthEnv, body: any, actor: stri
 }
 
 /** Admin-readable refusals only; never database internals. */
-function publicMessage(e: unknown) {
+export function publicMessage(e: unknown) {
   if (e instanceof AdminRefusal) return e.message;
   const m = e instanceof Error ? e.message : "";
   return m && m.length <= 300 && !/D1_|SQLITE|SQL|constraint|stack/i.test(m) ? m : "SAML application change rejected";

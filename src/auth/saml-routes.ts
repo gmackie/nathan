@@ -16,7 +16,7 @@ function reject(status:number,reason:string,code?:string){
   return Response.json(code?{error:reason,code}:{error:reason},{status,headers:noStore});
 }
 /** Admin-readable reason from Nathan's validators; never database internals. */
-function reason(e:unknown,fallback:string){
+export function reason(e:unknown,fallback:string){
   const m=e instanceof Error?e.message:"";
   return m&&m.length<=300&&!/D1_|SQLITE|SQL|stack/i.test(m)?m:fallback;
 }
@@ -103,6 +103,9 @@ const POSTS:Record<string,(auth:any,env:AuthEnv,headers:Headers,body:any,actor:s
   "/studio/api/saml/certificates/retire":(_a,env,_h,body,actor)=>retireSamlCertificate(env,body,actor)
 };
 
+/** Safe message for a refused SAML admin change (shared with the Studio API v1). */
+export const SAML_ADMIN_REFUSAL="SAML change rejected. Check the metadata, confirmation text and domain verification.";
+
 /** Nathan-owned SAML routes outside /api/auth. Returns null when not matched. */
 export async function handleSamlRoutes(request:Request,env:AuthEnv,auth:any,url:URL):Promise<Response|null>{
   const issuer=new URL(env.NATHAN_ISSUER);
@@ -141,7 +144,7 @@ export async function handleSamlRoutes(request:Request,env:AuthEnv,auth:any,url:
     try{
       return Response.json(await op(auth,env,request.headers,body,session.user.id),{headers:noStore});
     }catch(e){
-      return reject(409,reason(e,"SAML change rejected. Check the metadata, confirmation text and domain verification."));
+      return reject(409,reason(e,SAML_ADMIN_REFUSAL));
     }
   }
   return null;
