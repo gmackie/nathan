@@ -153,18 +153,22 @@ export const mcpStatusConfirmation = (identifier, enabled) => "CONFIRM " + (enab
  * whose catalog is the app's permissions. Refuses Nathan's own reserved paths and an identifier
  * that is already a Better Auth or a plain Nathan token audience.
  * @param {AdminReader} db @param {any} body `{ identifier, app, name, full?, aliases?, scopes? }`
- * @param {string} issuerOrigin e.g. https://login.example.com @param {string} actor @returns {Promise<AdminPlan>}
+ * @param {string} issuerOrigin e.g. https://login.example.com @param {string} actor
+ * @param {{ permissionKeys: string[] }} [assume] plan-only: validate against these permission keys of an app not
+ *   registered yet (an app manifest that registers it first). Never used to commit.
+ * @returns {Promise<AdminPlan>}
  */
-export async function planMcpRegister(db, body, issuerOrigin, actor) {
+export async function planMcpRegister(db, body, issuerOrigin, actor, assume) {
   const identifier = validateAudience(body.identifier, issuerOrigin);
   if (typeof body.app !== "string" || !isAppId(body.app)) throw Error("Invalid application id");
-  if (!await first(db, "SELECT id FROM nathan_applications WHERE id=? LIMIT 1", [body.app])) throw Error("Unknown application");
+  if (!assume && !await first(db, "SELECT id FROM nathan_applications WHERE id=? LIMIT 1", [body.app])) throw Error("Unknown application");
   if (await first(db, 'SELECT "identifier" FROM "oauthResource" WHERE "identifier"=? LIMIT 1', [identifier]))
     throw Error("Invalid resource: it is already a Better Auth token audience; use another identifier");
   const audience = await first(db, "SELECT app_id FROM nathan_token_audiences WHERE identifier=? LIMIT 1", [identifier]);
   const mcp = await first(db, MCP_RESOURCE, [identifier]);
   if (audience && !mcp) throw Error("Invalid resource: it is already a token audience; use another identifier");
-  const permissionKeys = (await db.all("SELECT key FROM nathan_rbac_permissions WHERE app_id=? LIMIT 500", [body.app])).map(p => p.key);
+  const permissionKeys = assume ? assume.permissionKeys
+    : (await db.all("SELECT key FROM nathan_rbac_permissions WHERE app_id=? LIMIT 500", [body.app])).map(p => p.key);
   const config = validateResourceConfig({ name: body.name, full: body.full, aliases: body.aliases, scopes: body.scopes }, permissionKeys);
   const previousApp = mcp?.app_id ?? null;
   return {

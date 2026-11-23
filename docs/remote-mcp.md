@@ -173,6 +173,8 @@ node scripts/nathan.mjs mcp register <identifier> --app <app> --name <name> [...
 node scripts/nathan.mjs mcp status <identifier> --enable|--disable --apply
 ```
 
+An application can also declare its MCP servers in its own manifest and apply everything at once with `nathan app apply` ([app manifests](quickstart-rbac.md#one-nathan-for-many-applications-app-manifests)).
+
 The CLI runs the Studio operations' own code (`src/shared/admin-ops.mjs`): the same audience rules, the same refusal of Nathan's `/mcp`, `/directory` and `/api/auth` and of identifiers that are already a Better Auth or Nathan token audience, the same catalog validation against the app's permissions, and the same statements. It plans by default. `--apply` shows the change and asks for confirmation; `status` asks you to type Studio's `CONFIRM ENABLE MCP <id>` / `CONFIRM DISABLE MCP <id>`. The change, and Studio's `succeeded` audit row with actor `cli:<accountId>`, are one D1 batch through the Cloudflare REST API, preceded by an `attempted` row; a failed batch is audited `failed`. A new registration is enabled, as in Studio. `resource.remove` and `grant.revoke` stay in Studio. Why this path exists and what it does not change: [security.md](security.md#account-token-administration).
 
 ## Design decisions

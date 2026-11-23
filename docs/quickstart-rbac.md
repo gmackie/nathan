@@ -94,6 +94,30 @@ Each command plans without `--apply`. With it, the CLI runs Studio's own validat
 
 Open `https://app.example.com`, sign in, and the Worker sees `user.can("invoices:write") === true`. Revoke the grant, and within `ACCESS_CACHE_TTL_SECONDS` (at most 60 s) the gateway answers 403.
 
+## One Nathan for many applications: app manifests
+
+When one Nathan is the identity provider for many applications, each application keeps its own manifest in its own repository instead of an entry in the IdP's `nathan.config.json`. The IdP's config then only names the deployment (account, D1 database, issuer hostname).
+
+```json
+{
+  "id": "dashboard",
+  "hostname": "app.example.com",
+  "enabled": true,
+  "rbac": {
+    "permissions": { "invoices:read": "Read invoices", "invoices:write": "Create and edit invoices" },
+    "roles": { "editor": { "description": "Edit invoices", "permissions": ["invoices:read", "invoices:write"] } }
+  },
+  "mcp": [{ "identifier": "https://app.example.com/mcp", "name": "Dashboard", "scopes": { "invoices:write": { "sensitive": true } } }]
+}
+```
+
+```sh
+node scripts/nathan.mjs app apply ./nathan.app.json --config ../idp/nathan.config.json            # plan
+node scripts/nathan.mjs app apply ./nathan.app.json --config ../idp/nathan.config.json --apply    # apply
+```
+
+`app apply` registers the application (disabled) if needed, syncs its permissions and roles, registers or updates its MCP servers, and finally sets `enabled`. Each step is the same operation as its single command (`rbac sync`, `mcp register`/`status`, `app enable`), with the same validation and audit rows, and the apply as a whole is audited `app_manifest_apply` (`attempted`, then `succeeded`, or `partial`/`failed` naming the step it stopped at). The plan already checks the MCP catalog against the manifest's permissions. Studio's typed confirmations are asked for enabling or disabling an app or an MCP server, any-signed-in access and `--prune`. A manifest never contains grants: grant roles per person with `rbac grant` or in Studio.
+
 ## Other ways in
 
 - **Any signed-in user.** Set the access mode to *Any signed-in user* (Studio asks for confirmation; the CLI asks you to type the app id). Everyone who can sign in gets in, with no roles unless granted.

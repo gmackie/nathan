@@ -140,7 +140,7 @@ async function jsonFlag(args, name) {
   try { return JSON.parse(text); } catch { throw Error(name + " must be a JSON object (inline or @file)"); }
 }
 
-async function openNathanDatabase(file) {
+export async function openNathanDatabase(file) {
   const cfg = await loadConfig(file);
   if (!cfg.accountId) throw Error("accountId required");
   const api = new CloudflareClient(process.env.CLOUDFLARE_API_TOKEN, cfg.accountId);
@@ -164,8 +164,13 @@ async function typed(expected) {
 
 export async function appCommand(args, file, apply) {
   const [sub, id] = args;
+  if (sub === "apply") {
+    const { appApplyCommand } = await import("./app-manifest.mjs");
+    return appApplyCommand(args, file, apply, { openNathanDatabase, ask, yesNo });
+  }
   if (!["enable", "disable"].includes(sub) || !id) {
-    console.log("Usage: nathan app enable|disable <app> [--apply]\nEnables an application registered by `rbac sync` (planned unless --apply).");
+    console.log("Usage: nathan app enable|disable <app> [--apply]\n       nathan app apply <manifest.json> [--apply] [--prune]\n" +
+      "Enables an application, or applies an application's manifest to the shared IdP (planned unless --apply).");
     return;
   }
   const db = await openNathanDatabase(file);
