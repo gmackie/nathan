@@ -281,14 +281,15 @@ test("audit parity: RBAC role grant, and a refused RBAC operation", async () => 
   assert.deepEqual(rowsB, [{ actor: ADMIN.id, action: "rbac_grant_create", target: "demo:viewer:user:u-bob", outcome: "succeeded" }]);
   assert.deepEqual(rowsB, rowsA);
 
-  // Refused by the schema and by the service: the service still writes its "rejected" row.
+  // Refused by the schema: the service never runs (independent review 2026-11-23), and the router
+  // records the refused write instead of the service's own "rejected" row.
   const invalid = { op: "grant.create", app: "demo", role: 7, principalType: "robot" };
   const refused = await parity(prepare, t => applyRbacOperation(t.env, invalid, ADMIN.id), "/rbac", invalid);
   assert.ok(refused.directError);
   assert.equal(refused.v1.status, 400);
   assert.equal(refused.v1.json.error.code, "validation_failed");
-  assert.deepEqual(refused.rowsB, [{ actor: ADMIN.id, action: "rbac_grant_create", target: "demo", outcome: "rejected" }]);
-  assert.deepEqual(refused.rowsB, refused.rowsA);
+  assert.deepEqual(refused.rowsA, [{ actor: ADMIN.id, action: "rbac_grant_create", target: "demo", outcome: "rejected" }]);
+  assert.deepEqual(refused.rowsB, [{ actor: ADMIN.id, action: "rbac.apply", target: "studio_api_v1", outcome: "refused_schema" }]);
 });
 
 test("audit parity: invitation create, and a refused invitation", async () => {
@@ -304,8 +305,8 @@ test("audit parity: invitation create, and a refused invitation", async () => {
   const refused = await parity(null, t => applyAdmissionOperation(t.env, invalid, ADMIN.id), "/admission", invalid);
   assert.equal(refused.v1.status, 400);
   assert.equal(refused.v1.json.error.code, "validation_failed");
-  assert.deepEqual(refused.rowsB, [{ actor: ADMIN.id, action: "invitation_create", target: "invalid", outcome: "rejected" }]);
-  assert.deepEqual(refused.rowsB, refused.rowsA);
+  assert.deepEqual(refused.rowsA, [{ actor: ADMIN.id, action: "invitation_create", target: "invalid", outcome: "rejected" }]);
+  assert.deepEqual(refused.rowsB, [{ actor: ADMIN.id, action: "admission.apply", target: "studio_api_v1", outcome: "refused_schema" }]);
 });
 
 test("NATH-39: the MCP register schema accepts the scope catalog the service and Studio send", () => {
@@ -323,4 +324,11 @@ test("NATH-39: GET /bootstrap is an admin read returning the administrator's own
   assert.equal(route.method, "GET");
   assert.equal(route.action, "bootstrap.read");
   assert.equal(route.stepUp ?? "admin-policy", "admin-policy");
+});
+
+test("schema-refused input never reaches the service (array redirectUri), and wildcard hosts are refused", async () => {
+  const { createOAuthClient } = await import("../src/auth/admin-service.ts");
+  const env = { DB: { prepare: () => ({ bind: () => ({ run: async () => ({}) }) }) }, NATHAN_ISSUER: "https://login.example.test" };
+  for (const redirectUri of [["https://ok.example.test/a"], "https://*.example.test/cb", "https://a_b.example.test/cb"])
+    await assert.rejects(createOAuthClient({ api: {} }, env, new Headers(), { name: "x", kind: "external", redirectUri }, "a"), /redirect/i, String(redirectUri));
 });

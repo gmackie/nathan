@@ -83,7 +83,7 @@ test("client create and disable leave the same audit rows through legacy and v1 
   assert.equal(disabled.n, 2);
 });
 
-test("v1 validation errors are 400 validation_failed; the service still audits refused RBAC attempts", async () => {
+test("v1 validation errors are 400 validation_failed before the service runs, and the refused write is audited", async () => {
   const before = await lastRow();
   const r = await studioPost(fetcher, ORIGIN, "/studio/api/v1/rbac", { op: "group.upsert", id: 12 }, admin.cookie);
   assert.equal(r.status, 400);
@@ -93,8 +93,10 @@ test("v1 validation errors are 400 validation_failed; the service still audits r
   const legacy = await studioPost(fetcher, ORIGIN, "/studio/api/rbac", { op: "group.upsert", id: 12 }, admin.cookie);
   assert.equal(legacy.status, 409);
   const rows = strip(await auditSince(before));
+  // v1 refuses at the schema (the service never runs) and records it; the legacy route's service
+  // still writes its own "rejected" row.
   assert.deepEqual(rows, [
-    { actor: "admin-1", action: "rbac_group_upsert", target: "-", outcome: "rejected" },
+    { actor: "admin-1", action: "rbac.apply", target: "studio_api_v1", outcome: "refused_schema" },
     { actor: "admin-1", action: "rbac_group_upsert", target: "-", outcome: "rejected" }
   ]);
 });

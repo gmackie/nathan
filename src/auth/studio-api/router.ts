@@ -7,18 +7,17 @@
  *   3. read the body with a byte limit (413) and parse JSON (400 invalid_json);
  *   4. check the input against the route's schema, then call the service.
  *
- * Step 4 deliberately calls the service even when the schema refuses the input. The services are
- * the authority (they repeat every check and look up state), and several of them write a security
- * audit row for a refused attempt (RBAC, admission, providers, SCIM, directory clients, SAML IdP).
- * Calling them keeps those rows identical to the legacy `/studio/api/*` routes, so this API adds
- * no write path and changes no audit record. When the schema refused the input and the service
- * refused it too, the response is 400 validation_failed with the schema issues. If the service
- * accepts an input the schema refused, the schema is stricter than the service: the result is
- * returned as on the legacy route and the drift is logged (route action only, never input).
+ * The schema is enforced: input it refuses never reaches the service (400 validation_failed, with
+ * the schema issues). The services still repeat every check against current state. A refused
+ * write gets a security audit row here (route action, outcome "refused_schema"), so refused
+ * attempts stay visible even though the service, which audits its own refusals, never ran.
+ * (Independent review, 2026-11-23: running services on schema-refused input let, for example,
+ * an array redirectUri be coerced to a string and accepted.)
  */
 import type { z } from "zod";
 import type { AuthEnv } from "../env";
 import { readBoundedText } from "../bounded-body.mjs";
+import { audit } from "../admin-service";
 import { authorizeStudioRequest, auditActor, type StudioPrincipal, type StudioStepUp } from "./authorize";
 import { StudioApiError, studioError, studioFail, studioOk, rejected } from "./http";
 import type { StudioIssue } from "./schemas";
@@ -104,12 +103,13 @@ export function createStudioRouter(routes: StudioRoute[]) {
     } else input = queryInput(url);
 
     const checked = route.input.safeParse(input);
+    if (!checked.success) {
+      if (write) await audit(env, ctx.actor, route.action, "studio_api_v1", "refused_schema").catch(() => {});
+      return studioFail(studioError(400, "validation_failed", "Input does not match the request schema", schemaIssues(checked.error)));
+    }
     try {
-      const data = await route.run(ctx, input);
-      if (!checked.success) console.warn("studio_api_schema_drift", route.action);
-      return studioOk(data);
+      return studioOk(await route.run(ctx, input));
     } catch (error) {
-      if (!checked.success) return studioFail(studioError(400, "validation_failed", "Input does not match the request schema", schemaIssues(checked.error)));
       return studioFail(refusalOf(route, error));
     }
   };

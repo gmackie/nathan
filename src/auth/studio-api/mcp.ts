@@ -5,7 +5,8 @@ import { rejected } from "./http";
 import { noInput, mcpInput } from "./schemas";
 
 export function mcpRefusalMessage(error: unknown) {
-  return error instanceof Error && /^(Invalid|Unknown|Explicit|Give)/.test(error.message) ? error.message : "MCP change rejected";
+  // These messages can quote the admin's own input (e.g. "Unknown permission <scope>"); cap them.
+  return error instanceof Error && /^(Invalid|Unknown|Explicit|Give)/.test(error.message) ? error.message.slice(0, 200) : "MCP change rejected";
 }
 
 export const routes: StudioRoute[] = [

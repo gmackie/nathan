@@ -3,7 +3,8 @@ import type { StudioErrorCode, StudioIssue } from "./schemas";
 
 const noStore = { "Cache-Control": "no-store" } as const;
 
-/** A refusal with a stable code. Messages are safe to show: they never contain submitted values. */
+/** A refusal with a stable code. Messages are short and rendered as text; a few quote a bounded
+ *  part of the admin's own input (for example an unknown MCP permission name). */
 export class StudioApiError extends Error {
   constructor(readonly status: number, readonly code: StudioErrorCode, message: string, readonly issues?: StudioIssue[]) {
     super(message);
