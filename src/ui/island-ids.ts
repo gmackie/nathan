@@ -4,8 +4,9 @@
  *
  * - passkey-button: example React island that hydrates a Kumo Button (no WebAuthn yet).
  * - auto-post: plain script, no React; submits the SAML auto-POST form (AutoPostPage).
+ * - studio: Identity Studio, the Kumo SPA at /studio (NATH-39, src/ui/pages/studio/).
  */
-export const ISLAND_IDS = ["passkey-button", "auto-post"] as const;
+export const ISLAND_IDS = ["passkey-button", "auto-post", "studio"] as const;
 export type IslandId = (typeof ISLAND_IDS)[number];
 
 export function isIslandId(id: string): id is IslandId {

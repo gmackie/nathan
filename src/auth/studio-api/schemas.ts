@@ -229,9 +229,12 @@ export const mcpScopeEntry = z.looseObject({
   sensitive: z.boolean().optional(),
   adminOnly: z.boolean().optional()
 });
+/** Scope metadata keyed by scope, as the service (validateResourceConfig) and the CLI send it. */
+export const mcpScopeCatalog = z.record(z.string().max(200), mcpScopeEntry.omit({ scope: true }));
 export const mcpInput = z.discriminatedUnion("op", [
   z.looseObject({ op: z.literal("resource.register"), identifier: resourceIdentifier, app: appId, name: text(200).optional(),
-    full: text(200).optional(), aliases: z.record(z.string(), z.unknown()).optional(), scopes: z.array(mcpScopeEntry).max(200).optional() }),
+    full: text(200).nullable().optional(), aliases: z.record(z.string(), z.unknown()).optional(),
+    scopes: z.union([mcpScopeCatalog, z.array(mcpScopeEntry).max(200)]).optional() }),
   z.looseObject({ op: z.literal("resource.status"), identifier: resourceIdentifier, enabled: z.boolean(), confirm }),
   z.looseObject({ op: z.literal("resource.remove"), identifier: resourceIdentifier, confirm }),
   z.looseObject({ op: z.literal("grant.revoke"), grantId: text(100), confirm })

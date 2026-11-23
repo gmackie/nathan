@@ -13,7 +13,9 @@ import {handleScim} from "./scim/gateway";
 import {listScimConnections,createScimConnection,setScimConnectionEnabled,rotateScimToken} from "./scim/admin";
 import {samlProtocolGate,handleSamlRoutes} from "./saml-routes";
 export {NathanScimDirectory} from "./scim/directory";
-import { signInPage, consentPage, studioPage } from "./ui";
+import { signInPage, consentPage } from "./ui";
+// NATH-39: Identity Studio is a Kumo SPA (one island) on /studio/api/v1.
+import { studioPage } from "../ui/pages/studio/StudioPage.tsx";
 import { securityPage } from "./security-ui";
 import { loadVerifiedRealm, listRealmClients,registerRealmClient,registerRealmClientsBatch } from "./domain-realm";
 import type { AuthEnv } from "./env";

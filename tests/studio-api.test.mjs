@@ -307,3 +307,20 @@ test("audit parity: invitation create, and a refused invitation", async () => {
   assert.deepEqual(refused.rowsB, [{ actor: ADMIN.id, action: "invitation_create", target: "invalid", outcome: "rejected" }]);
   assert.deepEqual(refused.rowsB, refused.rowsA);
 });
+
+test("NATH-39: the MCP register schema accepts the scope catalog the service and Studio send", () => {
+  const body = { op: "resource.register", identifier: "https://notes.example.com/mcp", app: "notes", name: "Notes", full: null,
+    aliases: { "notes:basic": ["notes:read"] },
+    scopes: { "notes:read": { label: "Read notes", description: "List notes.", group: "notes" }, "notes:export": { label: "Export", sensitive: true, requires: ["notes:read"] } } };
+  assert.equal(schemas.mcpInput.safeParse(body).success, true, "keyed catalog, full: null (Studio's 'no full marker')");
+  assert.equal(schemas.mcpInput.safeParse({ ...body, scopes: [{ scope: "notes:read", label: "Read" }] }).success, true, "array form still accepted");
+  assert.equal(schemas.mcpInput.safeParse({ ...body, scopes: { "notes:read": { sensitive: "yes" } } }).success, false);
+});
+
+test("NATH-39: GET /bootstrap is an admin read returning the administrator's own setup state", () => {
+  const route = STUDIO_API_V1_ROUTES.find(r => r.path === "/bootstrap");
+  assert.ok(route);
+  assert.equal(route.method, "GET");
+  assert.equal(route.action, "bootstrap.read");
+  assert.equal(route.stepUp ?? "admin-policy", "admin-policy");
+});

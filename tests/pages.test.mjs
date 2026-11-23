@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Script } from "node:vm";
-import { signInPage, consentPage, studioPage } from "../src/auth/ui.ts";
+import { signInPage, consentPage } from "../src/auth/ui.ts";
 import { securityPage } from "../src/auth/security-ui.ts";
 import { installerPage } from "../src/installer/ui.ts";
 
@@ -14,9 +14,9 @@ function assertScriptsParse(name, html) {
   return scripts.length;
 }
 
-test("Identity Studio, sign-in, consent, security and installer scripts parse", async () => {
+// Identity Studio is a Kumo SPA with no inline script (NATH-39); tests/studio-ui.test.mjs covers its shell.
+test("sign-in, consent, security and installer scripts parse", async () => {
   const pages = {
-    studio: await studioPage("admin@example.com").text(),
     signIn: await signInPage(["google", "github"], true, true).text(),
     consent: await consentPage(true, "Example app", "openid profile email").text(),
     security: await securityPage("admin@example.com").text(),
@@ -35,8 +35,8 @@ test("Identity Studio, sign-in, consent, security and installer scripts parse", 
  * requests while still sending no referrer cross-site: `same-origin`.
  */
 test("interactive pages keep the same-origin Origin header (no no-referrer)", async () => {
+  // Identity Studio: tests/studio-ui.test.mjs asserts the same header on its renderPage shell.
   const pages = {
-    studio: studioPage("admin@example.com"),
     signIn: signInPage(["google"], true, true),
     consent: consentPage(true, "Example app", "openid"),
     security: securityPage("admin@example.com")

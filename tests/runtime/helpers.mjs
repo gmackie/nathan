@@ -1,5 +1,6 @@
 /** Shared helpers for tests that run built Worker bundles in workerd via Miniflare. */
 import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { Miniflare, convertV4MiniflareOptions } from "miniflare";
 
 export const COMPAT = { compatibilityDate: "2026-10-27", compatibilityFlags: ["nodejs_compat"] };
@@ -107,6 +108,40 @@ export function studioPost(fetcher, origin, path, body, cookie) {
     method: "POST", body: JSON.stringify(body),
     headers: { Cookie: cookie, Origin: origin, "Content-Type": "application/json", "Sec-Fetch-Site": "same-origin" }
   });
+}
+/**
+ * NATH-39: Identity Studio is a Kumo SPA in one island. Given a fetcher (or fetch function) and a
+ * /studio response, checks the shell
+ * (renderPage CSP with nonce'd scripts, no style= attributes, no inline script but the import map)
+ * and returns { html, code }: `code` is the island module plus every chunk it imports, fetched
+ * from the same Worker and each checked against the SRI hash the page pins.
+ */
+export async function studioShell(fetcher, origin, response) {
+  if (response.status !== 200) throw Error("Studio returned " + response.status);
+  const csp = response.headers.get("content-security-policy") ?? "";
+  const nonce = /script-src 'self' 'nonce-([^']+)'/.exec(csp)?.[1];
+  if (!nonce || !/frame-ancestors 'none'/.test(csp)) throw Error("Studio CSP is not the renderPage island policy: " + csp);
+  if (response.headers.get("referrer-policy") !== "same-origin") throw Error("Studio Referrer-Policy must stay same-origin");
+  const html = await response.text();
+  if (/\sstyle=/i.test(html)) throw Error("Studio markup has a style= attribute");
+  const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)];
+  for (const [, attrs] of scripts) if (!attrs.includes('nonce="' + nonce + '"')) throw Error("Studio script without the page nonce");
+  const inline = scripts.filter(([, attrs, body]) => body);
+  if (inline.length !== 1 || !/type="importmap"/.test(inline[0][1])) throw Error("Studio has inline script besides the import map");
+  const integrity = JSON.parse(inline[0][2]).integrity;
+  const island = scripts.map(([, attrs]) => /type="module" src="([^"]+)" integrity="([^"]+)"/.exec(attrs)).filter(Boolean);
+  if (island.length !== 1 || !/^\/__nathan\/ui\/studio-[A-Za-z0-9_-]+\.js$/.test(island[0][1])) throw Error("Studio must load exactly the studio island");
+  if (!html.includes('data-nathan-island="studio"')) throw Error("Studio island container missing");
+  const get = typeof fetcher === "function" ? fetcher : url => fetcher.fetch(url);
+  const code = [];
+  for (const [src, hash] of Object.entries(integrity)) {
+    const asset = await get(origin + src);
+    const bytes = Buffer.from(await asset.arrayBuffer());
+    if (asset.status !== 200 || "sha384-" + createHash("sha384").update(bytes).digest("base64") !== hash) throw Error(src + " does not match its SRI hash");
+    code.push(bytes.toString("utf8"));
+  }
+  if (integrity[island[0][1]] !== island[0][2]) throw Error("island SRI differs between the script tag and the import map");
+  return { html, code: code.join("\n") };
 }
 /** A DPoP proof JWT (RFC 9449) for one request, from a fresh ES256 key. */
 export async function dpopProof(method, url) {

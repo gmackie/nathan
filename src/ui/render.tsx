@@ -71,7 +71,10 @@ export function renderPage(element: ReactElement, opts: RenderPageOptions): Resp
   for (const id of islands) if (!isIslandId(id) || !Object.hasOwn(manifest.islands, id)) throw Error("Unknown island: " + id);
 
   const nonce = newNonce();
-  const rendered = renderToString(<CSPProvider nonce={nonce}>{element}</CSPProvider>);
+  // disableStyleElements: base-ui's hoisted <style precedence> elements (ScrollArea in Kumo's Sidebar,
+  // Select) can't carry the nonce under renderToString, so the scan below would refuse the page.
+  // Their one rule (.base-ui-disable-scrollbar) ships in layout.css instead (NATH-39).
+  const rendered = renderToString(<CSPProvider nonce={nonce} disableStyleElements>{element}</CSPProvider>);
   for (const id of islandsInMarkup(rendered))
     if (!(islands as readonly string[]).includes(id)) throw Error("Island " + id + " is rendered but not in renderPage's islands");
   const { html: body, css } = moveInlineStylesToClasses(rendered);

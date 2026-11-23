@@ -82,6 +82,7 @@ All paths are below `/studio/api/v1`. Bodies are JSON. Limits are the legacy rou
 | --- | --- | --- | --- | --- | --- |
 | GET | `/status` | status.read | — | | `studioStatus` |
 | GET | `/plugins` | plugins.read | — | | plugin catalog (candidates) |
+| GET | `/bootstrap` | bootstrap.read | — | | `bootstrapStatus` (the administrator's own setup state; NATH-39) |
 | GET | `/audit` | audit.read | — | | `recentAudit` (latest 75) |
 | GET | `/users` | users.read | — | | `listUsers` |
 | GET | `/admins` | admins.read | — | | `listAdminGrants` |
@@ -139,8 +140,12 @@ All paths are below `/studio/api/v1`. Bodies are JSON. Limits are the legacy rou
 | POST | `/security-policy/tighten` | security-policy.tighten | `securityPolicyTightenInput` | 2 KB | `tightenAdminPolicy` |
 
 Typed confirmation strings (`confirm`) are unchanged; see each service for the exact text. Not in
-this API: the bootstrap endpoints under `/security/api/*` and the provider test landing page
-`/studio/providers/test-complete`, which are not admin management actions.
+this API: the bootstrap endpoints under `/security/api/*` (the account page's setup flow, which
+must work before someone is an administrator; `GET /bootstrap` above is the read-only admin view of
+the same state) and the provider test landing page `/studio/providers/test-complete`, which are not
+admin management actions.
+
+The Identity Studio SPA (NATH-39, `src/ui/pages/studio/`) uses only this API.
 
 ## Differences from the legacy routes
 

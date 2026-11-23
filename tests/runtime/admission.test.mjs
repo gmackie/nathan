@@ -9,7 +9,7 @@
  */
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
-import { authWorker, randomKey, insertSession, studioPost, cookiesOf } from "./helpers.mjs";
+import { authWorker, randomKey, insertSession, studioPost, cookiesOf, studioShell } from "./helpers.mjs";
 import { sealProviderCredentials } from "../../src/auth/config-crypto.mjs";
 
 const HOST = "login.example.test", ORIGIN = "https://" + HOST;
@@ -446,9 +446,13 @@ test("Studio: installations that had accounts before 0017 get a one-time notice 
   await db.prepare("UPDATE nathan_security_audit SET target='existing-users' WHERE action='admission_default_invitation_only'").run();
   await db.prepare("DELETE FROM nathan_security_audit WHERE action='admission_mode_change'").run();
   assert.match((await view()).upgradeNotice, /invitation.*SCIM just-in-time/s);
-  const page = await (await mf.dispatchFetch(ORIGIN + "/studio", { headers: { Cookie: admin.cookie } })).text();
-  assert.match(page, /href="#adm-mode"/, "the notice links to the setting");
-  assert.match(page, /enterprise SSO \(SAML and OIDC\)/);
+  // NATH-39: the Kumo Studio shows the notice above every panel, linking to the admission panel.
+  const { code } = await studioShell((u, i) => mf.dispatchFetch(u, i), ORIGIN,
+    await mf.dispatchFetch(ORIGIN + "/studio", { headers: { Cookie: admin.cookie } }));
+  assert.match(code, /#\/admission/, "the notice links to the setting");
+  assert.match(code, /Choose the admission mode/);
+  assert.match(code, /upgradeNotice/);
+  assert.match(code, /enterprise SSO \(SAML and OIDC\)/);
   assert.equal((await studio("/studio/api/admission", { op: "dismiss-upgrade-notice" })).status, 200);
   assert.equal((await view()).upgradeNotice, undefined, "shown once");
   assert.equal((await one("SELECT outcome FROM nathan_security_audit WHERE action='admission_upgrade_notice_dismiss'")).outcome, "succeeded");
