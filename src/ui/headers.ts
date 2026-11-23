@@ -4,6 +4,9 @@
  * hashed same-origin assets under /__nathan/ui/ (each one is also pinned with SRI).
  */
 
+/** The only extra headers a page may add (Refresh, Link and the like would bypass page policy). */
+export const EXTRA_HEADERS = ["set-cookie", "vary", "location", "x-robots-tag"] as const;
+
 /** Headers renderPage owns. Page-specific extras may not set or override any of them. */
 export const RESERVED_HEADERS = [
   "content-type", "cache-control", "content-security-policy", "referrer-policy", "x-content-type-options",
@@ -15,7 +18,8 @@ export function formActionSource(source: string): string {
   if (source === "'self'" || source === "'none'") return source;
   let url: URL;
   try { url = new URL(source); } catch { throw Error("Invalid form-action origin"); }
-  if (url.protocol !== "https:" || url.origin !== source) throw Error("form-action must be 'self', 'none' or a bare https origin");
+  if (url.protocol !== "https:" || url.origin !== source || !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::\d{1,5})?$/i.test(url.host))
+    throw Error("form-action must be 'self', 'none' or a bare https origin");
   return url.origin;
 }
 
@@ -57,6 +61,7 @@ export function securityHeaders(csp: CspOptions, extra?: HeadersInit): Headers {
   if (extra) {
     for (const [name, value] of new Headers(extra)) {
       if ((RESERVED_HEADERS as readonly string[]).includes(name)) throw Error("renderPage owns the " + name + " header");
+      if (!(EXTRA_HEADERS as readonly string[]).includes(name)) throw Error("renderPage does not allow the " + name + " header");
       if (name === "set-cookie") continue;
       headers.set(name, value);
     }

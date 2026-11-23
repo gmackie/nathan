@@ -35,7 +35,9 @@ export interface Tag {
   selfClosing: boolean;
 }
 
-const RAW_TEXT = new Set(["script", "style"]);
+const REFUSED_ELEMENTS = new Set(["xmp", "iframe", "noembed", "noframes", "plaintext"]);
+// Browsers read these elements' content as text up to the matching end tag (raw text or RCDATA).
+const RAW_TEXT = new Set(["script", "style", "title", "textarea"]);
 const NAME_CHAR = /[^\s"'>/=]/;
 const ENTITY = /&(#x[0-9a-fA-F]+|#[0-9]+|amp|quot|apos|lt|gt);/g;
 const NAMED: Record<string, string> = { amp: "&", quot: "\"", apos: "'", lt: "<", gt: ">" };
@@ -71,9 +73,11 @@ export function rewriteTags(html: string, visit: (tag: Tag, raw: string) => stri
     if (lt < 0) { out += html.slice(i); break; }
     out += html.slice(i, lt);
     if (html.startsWith("<!--", lt)) {
-      const end = html.indexOf("-->", lt + 4);
-      if (end < 0) throw Error("Unterminated HTML comment");
-      out += html.slice(lt, end + 3); i = end + 3; continue;
+      // Only the comment forms React emits. Browsers also end comments at "<!-->" and "--!>",
+      // which this scanner would read differently, so anything else fails closed.
+      const comment = /^<!--(?: |\$|\/\$|\$\?|\$!)?-->/.exec(html.slice(lt, lt + 12));
+      if (!comment) throw Error("Unexpected HTML comment in rendered HTML");
+      out += comment[0]; i = lt + comment[0].length; continue;
     }
     if (html[lt + 1] === "!" || html[lt + 1] === "/" || html[lt + 1] === "?") {
       const end = html.indexOf(">", lt);
@@ -87,6 +91,9 @@ export function rewriteTags(html: string, visit: (tag: Tag, raw: string) => stri
     let j = lt + 1;
     while (j < html.length && /[A-Za-z0-9-:]/.test(html[j])) j++;
     const name = html.slice(lt + 1, j).toLowerCase();
+    // Elements whose content browsers parse as raw text or differently with scripting on; React
+    // pages here never need them, and the scanner would misread what follows.
+    if (REFUSED_ELEMENTS.has(name)) throw Error("Refused element <" + name + "> in rendered HTML");
     const attributes: TagAttribute[] = [];
     let selfClosing = false;
     for (;;) {
@@ -121,6 +128,15 @@ export function rewriteTags(html: string, visit: (tag: Tag, raw: string) => stri
     const replacement = visit({ name, attributes, selfClosing }, raw);
     out += replacement ?? raw;
     i = j;
+    if (name === "noscript" && !selfClosing) {
+      // With scripting on, a browser ends <noscript> at the first "</noscript", even inside an
+      // attribute value. Use the same boundary and scan the content with the same checks.
+      const close = lower.indexOf("</noscript", i);
+      if (close < 0) throw Error("Unterminated <noscript> element");
+      const inner = html.slice(i, close);
+      if (lower.slice(i, close).includes("<noscript")) throw Error("Nested <noscript> in rendered HTML");
+      out += rewriteTags(inner, visit); i = close; continue;
+    }
     if (RAW_TEXT.has(name) && !selfClosing) {
       const close = lower.indexOf("</" + name, i);
       if (close < 0) throw Error("Unterminated <" + name + "> element");
@@ -144,6 +160,16 @@ export function safeDeclarations(style: string): string {
     else if (ch === "\"" || ch === "'") quote = ch;
   }
   if (quote) throw Error("Unsafe inline style declaration");
+  // Unbalanced ( or [ outside strings would swallow the following generated rules.
+  const stack: string[] = [];
+  quote = null;
+  for (const ch of text) {
+    if (quote) { if (ch === quote) quote = null; continue; }
+    if (ch === "\"" || ch === "'") quote = ch;
+    else if (ch === "(" || ch === "[") stack.push(ch === "(" ? ")" : "]");
+    else if (ch === ")" || ch === "]") { if (stack.pop() !== ch) throw Error("Unsafe inline style declaration"); }
+  }
+  if (stack.length) throw Error("Unsafe inline style declaration");
   return text;
 }
 
