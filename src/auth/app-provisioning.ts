@@ -99,23 +99,26 @@ async function reconcile(env: AuthEnv, app: string, hostname: string, key: strin
   const db = env.DB;
   // A ban prevents granting access. It must still be possible to withdraw
   // the source's existing roles so that lifting the ban cannot restore them.
-  const target = "FROM nathan_app_provisions p JOIN user u ON u.id=p.user_id AND u.email=p.email " +
+  const identity = "FROM nathan_app_provisions p JOIN user u ON u.id=p.user_id AND u.email=p.email " +
     "JOIN nathan_provisionable_apps a ON a.id=p.app_id WHERE p.app_id=? AND a.hostname=? AND p.external_id_hash=? " +
     "AND p.user_id=? AND p.erased_revision IS NULL AND COALESCE(u.role,'user')='user' " +
-    "AND (?='[]' OR (COALESCE(u.banned,0)=0 AND NOT EXISTS(SELECT 1 FROM nathan_scim_users " +
-    "WHERE user_id=u.id AND link_state='deprovisioned' AND override_cause IS NULL))) " +
     "AND u.email NOT IN (SELECT value FROM json_each(?)) " +
     "AND NOT EXISTS(SELECT 1 FROM nathan_admin_grants WHERE enabled=1 AND (user_id=u.id OR email=u.email COLLATE NOCASE)) " +
     "AND NOT EXISTS(SELECT 1 FROM nathan_bootstrap_status WHERE admin_user_id=u.id OR admin_email=u.email COLLATE NOCASE)";
-  const targetArgs = [app,hostname,key,sub,roles,JSON.stringify(adminEmails(env))];
+  const identityArgs = [app,hostname,key,sub,JSON.stringify(adminEmails(env))];
+  const canApply = "(?='[]' OR (COALESCE(u.banned,0)=0 AND NOT EXISTS(SELECT 1 FROM nathan_scim_users " +
+    "WHERE user_id=u.id AND link_state='deprovisioned' AND override_cause IS NULL)))";
+  const target = identity + " AND " + canApply;
+  const targetArgs = [...identityArgs,roles];
   const manifest = "SELECT 1 WHERE EXISTS(" + configuredApp + ") AND NOT EXISTS(SELECT 1 FROM json_each(?) wanted " +
     "WHERE NOT EXISTS(SELECT 1 FROM nathan_rbac_roles WHERE app_id=? AND key=wanted.value))";
   const manifestArgs = [app,hostname,roles,app];
   const [configured, previous, update] = await auditedBatch(db, app, "app_grants_sync", [
     db.prepare(manifest).bind(...manifestArgs),
-    db.prepare("SELECT grant_revision,desired_roles " + target +
-      " UNION ALL SELECT erased_revision,NULL FROM nathan_app_provisions WHERE app_id=? AND external_id_hash=? AND subject_hash=? " +
-      "AND user_id IS NULL AND erased_revision IS NOT NULL").bind(...targetArgs,app,key,await subjectKey(key,sub)),
+    db.prepare("SELECT grant_revision,desired_roles," + canApply + " AS writable " + identity +
+      " UNION ALL SELECT erased_revision,NULL,0 FROM nathan_app_provisions WHERE app_id=? AND external_id_hash=? AND subject_hash=? " +
+      "AND user_id IS NULL AND erased_revision IS NOT NULL AND EXISTS(" + configuredApp + ")")
+      .bind(roles,...identityArgs,app,key,await subjectKey(key,sub),app,hostname),
     db.prepare("UPDATE nathan_app_provisions SET grant_revision=?1, desired_roles=?2 WHERE grant_revision<?1 " +
       "AND user_id=(SELECT user_id " + target + ") AND EXISTS(" + manifest + ") RETURNING grant_revision")
       .bind(revision,roles,...targetArgs,...manifestArgs),
@@ -125,11 +128,13 @@ async function reconcile(env: AuthEnv, app: string, hostname: string, key: strin
       "FROM (SELECT 1) LEFT JOIN (SELECT user_id,grant_revision,desired_roles " + target + ") p ON EXISTS(" + manifest + ")")
       .bind(crypto.randomUUID(),"app-provision:" + app,revision,roles,...targetArgs,...manifestArgs)
   ]);
-  if (!configured.results.length) return { error: "not_configured" };
   if (update.results.length) return { sub, revision, applied: true };
-  const prior = previous.results[0] as { grant_revision: number; desired_roles: string } | undefined;
+  const prior = previous.results[0] as { grant_revision: number; desired_roles: string | null; writable: number } | undefined;
   if (prior && prior.grant_revision > revision) return { error: "stale_revision" };
-  if (prior?.grant_revision === revision && prior.desired_roles === roles) return { sub, revision, applied: false };
+  // Erasure is terminal even if Studio has since retired a role from this delivery.
+  if (prior?.desired_roles === null) return { error: "identity_conflict" };
+  if (!configured.results.length) return { error: "not_configured" };
+  if (prior?.writable && prior.grant_revision === revision && prior.desired_roles === roles) return { sub, revision, applied: false };
   return { error: "identity_conflict" };
 }
 
