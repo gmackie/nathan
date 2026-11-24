@@ -55,9 +55,9 @@ async function postEmailOtp(env: AuthEnv, background: Background | undefined, pa
   }));
 }
 
-function classify(status: number, begin: boolean): SingleAppBegin | null {
+function refusal(status: number): { ok: false; error: "unavailable" | "invalid" | "rate_limited" } | null {
   if (status === 429 || status === 403) return limited();
-  if (status === 200) return begin ? { ok: true } : null;
+  if (status === 200) return null;
   if (status === 400) return invalid();
   return unavailable();
 }
@@ -69,7 +69,7 @@ export async function beginEmailSignIn(env: AuthEnv, input: { email?: unknown; i
   if (!email) return invalid();
   try {
     const response = await postEmailOtp(env, background, "/email-otp/send-verification-otp", { email, type: "sign-in" }, clientIp(input?.ip));
-    return classify(response.status, true) ?? unavailable();
+    return refusal(response.status) ?? (response.status === 200 ? { ok: true } : unavailable());
   } catch {
     return unavailable();
   }
@@ -86,7 +86,7 @@ export async function finishEmailSignIn(env: AuthEnv, input: { email?: unknown; 
   if (!email || !/^\d{6}$/.test(code)) return invalid();
   try {
     const response = await postEmailOtp(env, background, "/sign-in/email-otp", { email, otp: code }, clientIp(input?.ip));
-    const early = classify(response.status, false);
+    const early = refusal(response.status);
     if (early) return early;
     const payload = await response.json().catch(() => null) as { user?: { id?: unknown; email?: unknown; name?: unknown; emailVerified?: unknown } } | null;
     const user = payload?.user;
