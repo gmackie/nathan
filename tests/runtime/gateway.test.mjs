@@ -76,7 +76,9 @@ before(async () => {
     .bind(await sha256(handle),ISSUER,CLIENT,"unrelated-established","old-established").run();
   await db.batch([
     db.prepare("DELETE FROM nathan_gateway_sessions WHERE issuer=? AND client_id=? AND sid=?").bind(ISSUER,CLIENT,"old-pending"),
-    db.prepare("INSERT INTO nathan_gateway_logout_jti(jti, exp) VALUES (?,unixepoch()+120)").bind("old-pending-event")
+    db.prepare("INSERT INTO nathan_gateway_logout_jti(jti, exp) VALUES (?,unixepoch()+120)").bind("old-pending-event"),
+    db.prepare("INSERT INTO nathan_gateway_logout_jti(jti, exp) VALUES ('pruned-legacy-event',unixepoch()-1)"),
+    db.prepare("DELETE FROM nathan_gateway_logout_jti WHERE exp<=unixepoch()")
   ]);
   await migrateGateway(db, "0001_sessions.sql");
 });
@@ -130,6 +132,22 @@ test("after a gateway upgrade an unfinished old login restarts and an unrelated 
   const page = await mf.dispatchFetch(ORIGIN + "/reports", { headers: { Cookie: "__Host-nathan-session=" + handle } });
   assert.equal(page.status, 200);
   await login("upgrade-person", "fresh-upgrade-sid");
+});
+
+test("a pre-cutover flow with a receipt sequence cannot resume after its five-minute lifetime", async () => {
+  const state = randomKey(), nonce = randomKey(), code = randomKey();
+  const elapsed = await seal({ state, nonce, verifier: randomKey(), returnTo: "/reports",
+    logoutSequence: 0, expiresAt: Date.now() - 1 }, flowKey);
+  let exchanges = 0;
+  issued.set(code, { nonce, sub: "old-sequenced-flow", sid: "old-sequenced",
+    iat: Math.floor(Date.now() / 1000), afterIssue() { exchanges++; } });
+  const response = await mf.dispatchFetch(ORIGIN + "/__nathan/callback?" + new URLSearchParams({ code, state }), {
+    redirect: "manual", headers: { Cookie: "__Host-nathan-flow=" + elapsed }
+  });
+  assert.equal(response.status, 400);
+  assert.equal(exchanges, 0);
+  assert.equal(cookiesOf(response)["__Host-nathan-session"], undefined);
+  assert.equal(await sessionCount("old-sequenced"), 0);
 });
 
 async function logoutToken(claims, iat = Math.floor(Date.now() / 1000), jti = crypto.randomUUID()) {
@@ -216,6 +234,28 @@ test("a subject logout without toe ends an in-flight login and admits an immedia
   await login(sub, "fresh-legacy", issuedAt);
   assert.equal((await postLogout(await logoutToken({ sub }, issuedAt + 1, jti))).status, 204);
   assert.equal(await sessionCount("fresh-legacy"), 1);
+});
+
+test("a pending subject logout with a pruned legacy JTI is acknowledged during gateway maintenance", async () => {
+  const sub = "pending-legacy-user", before = "before-hold", pending = "pending-hold", fresh = "after-hold";
+  const jti = "pruned-legacy-event", token = await logoutToken({ sub }, Math.floor(Date.now() / 1000), jti);
+  assert.equal(await db.prepare("SELECT 1 FROM nathan_gateway_logout_jti WHERE jti=?").bind(jti).first(), null);
+  await login(sub, before);
+  await login("unaffected-during-hold", "other-session");
+  const complete = await startLogin(sub, pending);
+  await migrate(db, "scripts/gateway-maintenance/hold-session-creation.sql");
+  try {
+    await assertLoginEnded(complete, pending);
+    assert.equal((await postLogout(token)).status, 204);
+    assert.equal(await sessionCount(before), 0);
+    assert.equal(await sessionCount("other-session"), 1);
+    const receipt = await db.prepare("SELECT subject,event_time FROM nathan_gateway_logout_receipts WHERE issuer=? AND client_id=? AND jti=?")
+      .bind(ISSUER,CLIENT,jti).first();
+    assert.deepEqual(receipt, { subject: sub, event_time: null });
+  } finally { await migrate(db, "scripts/gateway-maintenance/resume-session-creation.sql"); }
+  await login(sub, fresh);
+  assert.equal((await postLogout(token)).status, 204);
+  assert.equal(await sessionCount(fresh), 1);
 });
 
 test("back-channel logout deletes the matching session", async () => {
