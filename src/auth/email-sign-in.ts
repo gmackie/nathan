@@ -157,6 +157,7 @@ async function redeem(request: Request, env: AuthEnv, flow: EmailFlow, browser: 
   const [, audit] = await env.DB.batch([
     env.DB.prepare("DELETE FROM nathan_email_sign_ins WHERE id=? AND generation=? AND expires_at>unixepoch() " +
       'AND EXISTS(SELECT 1 FROM session s JOIN "user" u ON u.id=s.userId WHERE s.id=? AND u.email=nathan_email_sign_ins.email ' +
+      "AND (NOT EXISTS(SELECT 1 FROM nathan_app_provisions WHERE user_id=u.id) OR EXISTS(SELECT 1 FROM nathan_active_app_provisions WHERE user_id=u.id)) " +
       "AND COALESCE(u.twoFactorEnabled,0)=EXISTS(SELECT 1 FROM twoFactor WHERE userId=u.id AND COALESCE(verified,1)=1) " +
       "AND (COALESCE(u.twoFactorEnabled,0)=0 OR (?=1 AND second_factor IS NOT NULL)))").bind(flow.id, flow.generation, sessionId, Number(isFactor)),
     env.DB.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) " +

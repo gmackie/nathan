@@ -19,7 +19,8 @@ async function promoteEmailSubject(env: AuthEnv, flow: EmailFlow) {
   const eligibility = invited
     ? "EXISTS(SELECT 1 FROM nathan_admission_pending p WHERE p.email=user.email AND (p.user_id=user.id OR p.user_id IS NULL)) " +
       "AND EXISTS(SELECT 1 FROM nathan_invitations i WHERE i.id=? AND i.email=user.email AND i.uses=0 AND i.revoked_at IS NULL AND i.expires_at>unixepoch())"
-    : "EXISTS(SELECT 1 FROM nathan_scim_users WHERE user_id=user.id AND link_state='linked' AND link_method='jit' AND active=1 AND deleted=0)";
+    : "(EXISTS(SELECT 1 FROM nathan_scim_users WHERE user_id=user.id AND link_state='linked' AND link_method='jit' AND active=1 AND deleted=0) " +
+      "OR EXISTS(SELECT 1 FROM nathan_active_app_provisions WHERE user_id=user.id))";
   const verifySubject = env.DB.prepare('UPDATE "user" SET emailVerified=1' + (invited ? ",name='',image=NULL" : "") +
     " WHERE id=? AND email=? AND emailVerified=0 AND EXISTS(SELECT 1 FROM nathan_email_sign_ins WHERE id=? AND generation=? " +
     "AND subject_id=user.id AND email=user.email AND invitation_id IS ? AND expires_at>unixepoch()) AND " + eligibility)

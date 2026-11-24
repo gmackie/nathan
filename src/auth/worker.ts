@@ -21,6 +21,7 @@ import {listScimConnections,createScimConnection,setScimConnectionEnabled,rotate
 import {samlProtocolGate,handleSamlRoutes} from "./saml-routes";
 export { NathanAppAuth } from "./app-auth";
 export {NathanScimDirectory} from "./scim/directory";
+export { NathanAppProvisioner } from "./app-provisioning";
 import { signInPage, consentPage, studioPage } from "./ui";
 import { securityPage } from "./security-ui";
 import { loadVerifiedRealm, listRealmClients,registerRealmClient,registerRealmClientsBatch,updateRealmClientStatus } from "./domain-realm";

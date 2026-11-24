@@ -29,7 +29,13 @@ export async function resolveAccess(env: AuthEnv, applicationId: unknown, subjec
   const observedAt = new Date().toISOString();
   if (!isAppId(applicationId) || !isSubjectId(subject))
     return { allowed: false, reason: "invalid_input", roles: [], permissions: [], email: null, observedAt };
-  const rows = await read(env, accessQueries(applicationId as string, subject as string));
+  const rows = await read(env, [...accessQueries(applicationId as string, subject as string), {
+    sql: "SELECT 1 FROM nathan_app_provisions p WHERE p.app_id=? AND p.user_id=? " +
+      "AND NOT EXISTS(SELECT 1 FROM nathan_active_app_provisions WHERE user_id=p.user_id)",
+    params: [applicationId, subject]
+  }]);
+  if (rows.pop()?.length)
+    return { allowed: false, reason: "app_membership_revoked", roles: [], permissions: [], email: null, observedAt };
   const decision = decideFromRows(rows as any);
   return { ...decision, email: decision.allowed ? rows[1][0]?.email ?? null : null, observedAt };
 }

@@ -18,6 +18,7 @@ import { createAuth } from "./instance";
 import { issuerOf } from "./rbac";
 import { audit } from "./admin-service";
 import { fetchNoRedirect } from "../shared/security.mjs";
+import { standaloneOrigins } from "./management-ingress";
 
 /** Delay before attempt n+1 after n failed attempts; the queue gives up after the last one. */
 export const LOGOUT_RETRY_DELAYS = [15, 60, 300, 900, 3600, 6 * 3600, 12 * 3600];
@@ -53,9 +54,15 @@ export async function deliverLogouts(env: AuthEnv, { connectionId = null, limit 
   ).bind(connectionId, limit).all<Due>()).results;
   let delivered = 0;
   if (due.length) {
-    const context: any = await createAuth(env).$context;
+    // A standalone installation issues customer tokens at the app's origin.
+    // Cron runs under the management configuration and must use that same issuer.
+    const appOrigin = env.NATHAN_APP_ORIGIN && env.NATHAN_APP_ORIGIN !== env.NATHAN_ISSUER
+      ? standaloneOrigins(env)?.app : env.NATHAN_ISSUER;
+    if (!appOrigin) throw Error("Standalone logout issuer is unavailable");
+    const issuerEnv = { ...env, NATHAN_ISSUER: appOrigin };
+    const context: any = await createAuth(issuerEnv).$context;
     const options = context.options.plugins?.find((p: any) => p.id === "jwt")?.options;
-    const iss = issuerOf(env);
+    const iss = issuerOf(issuerEnv);
     const outcomes = await Promise.all(due.map(async row => {
       if (!row.uri || row.disabled === 1 || row.disabled === true || row.disabled === "1") return { row, status: "client_unavailable", ok: false, final: true };
       try {

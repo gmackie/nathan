@@ -302,6 +302,29 @@ test("an active directory user outside enterprise SSO finishes enrolled TOTP bef
   assert.equal((await one("SELECT count(*) AS n FROM nathan_security_audit WHERE actor='mfa' AND action='email_otp_sign_in' AND outcome='succeeded'")).n, 1);
 });
 
+test("an app-provisioned account proves its mailbox on the reserved subject and loses email admission when its member grant is removed", async () => {
+  const address = "app-member@example.test", subject = "app-supplied", now = new Date().toISOString();
+  await sql('INSERT INTO "user"(id,name,email,emailVerified,createdAt,updatedAt) VALUES (?,?,?,0,?,?)', subject, "", address, now, now);
+  await sql("INSERT INTO nathan_applications(id,hostname,enabled,access_mode) VALUES ('classcheck-provision','classcheck.example.test',1,'approved')");
+  await sql("INSERT INTO nathan_rbac_roles(app_id,key) VALUES ('classcheck-provision','member')");
+  await sql("INSERT INTO nathan_rbac_grants(id,app_id,role_key,principal_type,principal_id,created_by) VALUES ('cc-member','classcheck-provision','member','user',?,'app-provision')", subject);
+  await sql("INSERT INTO nathan_app_provisions(app_id,external_id_hash,subject_hash,user_id,email) VALUES ('classcheck-provision','external-key','subject-hash',?,?)", subject,address);
+  assert.equal((await one('SELECT emailVerified FROM "user" WHERE id=?', subject)).emailVerified, 0);
+  const start = await requestCode(address);
+  const { code } = await mailFor(address);
+  const confirmed = await verify(cookie(start, "__Host-nathan-email"), code);
+  assert.equal(confirmed.status, 200, await confirmed.clone().text());
+  assert.ok(cookie(confirmed, "__Secure-nathan.session_token"));
+  assert.equal((await one('SELECT emailVerified FROM "user" WHERE id=?', subject)).emailVerified, 1);
+
+  const next = await requestCode(address);
+  const nextMail = await mailFor(address, 1);
+  await sql("DELETE FROM nathan_rbac_grants WHERE id='cc-member'");
+  const refused = await verify(cookie(next, "__Host-nathan-email"), nextMail.code);
+  assert.equal(refused.status, 400);
+  assert.equal(cookie(refused, "__Secure-nathan.session_token"), "");
+});
+
 test("an invitee taking over a provisional signup retires its credentials, consent and delegated access", async () => {
   const address = "provisional@example.test", inv = await invite(address);
   const signup = await post("/api/auth/sign-up/email", { name: "Provisional", email: address, password: randomKey() });
