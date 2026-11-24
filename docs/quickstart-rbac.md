@@ -78,7 +78,7 @@ export default {
 In **Identity Studio → Roles and access**:
 
 1. Enter `dashboard` and choose **Load roles and grants**.
-2. Under **Grants**, grant `editor` to a user's exact email, or create a group, add members, and grant the role to the group.
+2. Under **Grants**, grant `editor` to a user's verified email, or create a group, add members, and grant the role to the group.
 3. Under **Protected applications**, enable `dashboard` (confirmation required).
 
 Or, from the CLI with a Cloudflare API token that has D1 edit on the Nathan account (no Studio session; see [account-token administration](security.md#account-token-administration)):
@@ -89,6 +89,8 @@ node scripts/nathan.mjs rbac grant dashboard editor --user ada@example.com --app
 node scripts/nathan.mjs app enable dashboard --apply                                     # asks you to type CONFIRM ENABLE dashboard
 node scripts/nathan.mjs rbac revoke dashboard editor --user ada@example.com --apply
 ```
+
+For a grant or revoke, `--user` accepts a Nathan user ID or an address that matches exactly one account and is verified on that account. Use the ID if the user has changed addresses or has yet to verify their email.
 
 Each command plans without `--apply`. With it, the CLI runs Studio's own validation (unknown apps, roles, users and groups are refused, and refusals are audited `rejected`), asks for confirmation, and commits the change, its change-feed entry and Studio's `succeeded` audit row in one D1 batch, after an `attempted` row; all are audited as `cli:<accountId>`.
 

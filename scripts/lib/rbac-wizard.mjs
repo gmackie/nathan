@@ -63,7 +63,7 @@ export async function rbacCommand(args, file, apply) {
   if ((sub === "grant" || sub === "revoke") && appId && args[2]) return grantCommand(args, file, apply);
   if (!["plan", "sync"].includes(sub) || !appId) {
     console.log("Usage: nathan rbac plan <app>\n       nathan rbac sync <app> --apply [--prune]\n" +
-      "       nathan rbac grant|revoke <app> <role> --user <user id or email> | --group <group> [--apply]\n" +
+      "       nathan rbac grant|revoke <app> <role> --user <user id or verified email> | --group <group> [--apply]\n" +
       "Syncs applications[].rbac (permissions and roles) from nathan.config.json. Grants are made with `rbac grant`\n" +
       "(account-token path, audited as cli:<accountId>) or in Identity Studio.");
     return;

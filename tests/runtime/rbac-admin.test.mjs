@@ -22,8 +22,8 @@ async function signedCookie(token) {
   const signature = Buffer.from(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(token))).toString("base64");
   return "__Secure-nathan.session_token=" + encodeURIComponent(token + "." + signature);
 }
-async function user(id, email, role = "user") {
-  await sql('INSERT INTO "user"("id","name","email","emailVerified","createdAt","updatedAt","role") VALUES (?,?,?,1,?,?,?)', id, id, email, now(), now(), role);
+async function user(id, email, role = "user", verified = 1) {
+  await sql('INSERT INTO "user"("id","name","email","emailVerified","createdAt","updatedAt","role") VALUES (?,?,?,?,?,?,?)', id, id, email, verified, now(), now(), role);
 }
 async function session(userId) {
   const id = "sess-" + crypto.randomUUID(), token = "tok" + randomKey();
@@ -131,10 +131,12 @@ test("the account-token CLI grants, revokes and enables with Studio's validation
   assert.equal((await post("/studio/api/apps", { id: "ledger", hostname: "ledger.example.test" })).status, 200);
   assert.equal((await rbac({ op: "permission.upsert", app: "ledger", key: "ledger:read" })).status, 200);
   assert.equal((await rbac({ op: "role.upsert", app: "ledger", key: "reader", permissions: ["ledger:read"] })).status, 200);
+  await user("unverified-reader", "unverified@example.test", "user", 0);
   for (const [body, cliInput] of [
     [{ app: "nope", role: "reader", email: "alice@example.test" }, { app: "nope", role: "reader", user: "alice@example.test" }],
     [{ app: "ledger", role: "admin", email: "alice@example.test" }, { app: "ledger", role: "admin", user: "alice@example.test" }],
     [{ app: "ledger", role: "reader", email: "ghost@example.test" }, { app: "ledger", role: "reader", user: "ghost@example.test" }],
+    [{ app: "ledger", role: "reader", email: "unverified@example.test" }, { app: "ledger", role: "reader", user: "unverified@example.test" }],
     [{ app: "Bad!", role: "reader", email: "alice@example.test" }, { app: "Bad!", role: "reader", user: "alice@example.test" }]
   ]) {
     const studioRefusal = await rbac({ op: "grant.create", principalType: "user", ...body });

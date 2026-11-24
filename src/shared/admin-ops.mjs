@@ -35,12 +35,13 @@ export async function requireApp(db, appId) {
   if (!await first(db, "SELECT id FROM nathan_applications WHERE id=?", [appId])) throw Error("Unknown application");
   return /** @type {string} */ (appId);
 }
-/** Exactly one user with this email (case-insensitive). @param {AdminReader} db @param {unknown} email */
-export async function userByEmail(db, email) {
+/** Exactly one case-insensitive match. @param {AdminReader} db @param {unknown} email @param {{ requireVerified?: boolean }} [options] */
+export async function userByEmail(db, email, { requireVerified = false } = {}) {
   const value = String(email ?? "").trim().toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) || value.length > 254) throw Error("Select an existing user by exact email");
-  const users = await db.all('SELECT "id" AS id FROM "user" WHERE lower("email")=? LIMIT 2', [value]);
+  const users = await db.all('SELECT "id" AS id, "emailVerified" FROM "user" WHERE lower("email")=? LIMIT 2', [value]);
   if (users.length !== 1) throw Error("User not found");
+  if (requireVerified && users[0].emailVerified !== 1) throw Error("A verified email is required to select a user by address");
   return /** @type {string} */ (users[0].id);
 }
 /** An existing user by Nathan user id (the OIDC `sub`). @param {AdminReader} db @param {unknown} userId */
@@ -90,7 +91,8 @@ export async function planGrantCreate(db, body, actor) {
   /** @type {string} */ let principalId;
   if (body.principalType === "user") {
     principalType = "user";
-    principalId = body.userId !== undefined && body.userId !== null && body.userId !== "" ? await userById(db, body.userId) : await userByEmail(db, body.email);
+    principalId = body.userId !== undefined && body.userId !== null && body.userId !== ""
+      ? await userById(db, body.userId) : await userByEmail(db, body.email, { requireVerified: true });
   } else if (body.principalType === "group") { principalType = "group"; principalId = await requireGroup(db, body.group); }
   else throw Error("Grant a role to a user or a group");
   const target = app + ":" + body.role + ":" + principalType + ":" + principalId;

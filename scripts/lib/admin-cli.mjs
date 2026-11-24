@@ -3,7 +3,7 @@
  * token (D1 edit on the Nathan account) can make from the CLI without a Studio session.
  *
  *   nathan app enable|disable <app> [--apply]
- *   nathan rbac grant|revoke <app> <role> --user <user id or email> | --group <group> [--apply]
+ *   nathan rbac grant|revoke <app> <role> --user <user id or verified email> | --group <group> [--apply]
  *   nathan mcp register <identifier> --app <app> --name <name> [--scopes <json|@file>] [--full <scope>] [--aliases <json|@file>] [--apply]
  *   nathan mcp status <identifier> --enable|--disable [--apply]
  *   nathan user find --email <email>
@@ -64,7 +64,7 @@ async function rbacPlan({ api, databaseId, actor, apply, body, build }) {
     throw error;
   }
 }
-/** `--user` takes a Nathan user id (the OIDC `sub`) or an email. */
+/** `--user` takes a Nathan user id (the OIDC `sub`) or a verified email. */
 const principal = ({ user, group }) => {
   if (user && group) throw Error("Grant a role to a user or a group");
   if (group) return { principalType: "group", group };
@@ -87,7 +87,7 @@ export async function revokeRole({ api, databaseId, actor, apply, app, role, use
     const appId = await requireApp(db, app);
     if (!isRoleKey(role)) throw Error("Unknown role");
     const id = body.principalType === "group" ? await requireGroup(db, body.group)
-      : body.userId ? await userById(db, body.userId) : await userByEmail(db, body.email);
+      : body.userId ? await userById(db, body.userId) : await userByEmail(db, body.email, { requireVerified: true });
     const rows = await db.all("SELECT id FROM nathan_rbac_grants WHERE app_id=? AND role_key=? AND principal_type=? AND principal_id=? LIMIT 1",
       [appId, role, body.principalType, id]);
     if (!rows[0]) throw Error("Unknown grant");

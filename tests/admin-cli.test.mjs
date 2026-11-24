@@ -115,6 +115,29 @@ test("rbac grant takes a user id or an email, refuses unknown apps, roles and us
   await assert.rejects(() => revokeRole({ ...base(api), apply: true, app: "lms", role: "teacher", user: "user-1", confirm: yes }), /Unknown grant/);
 });
 
+test("role grants and revocations require a verified email when selecting a user by address", async () => {
+  const api = await seeded();
+  user(api, "pending", "Pending@Example.com", 0);
+  const input = { ...base(api), app: "lms", role: "teacher", apply: true, confirm: yes };
+  const email = "pending@example.com";
+
+  await assert.rejects(() => grantRole({ ...input, user: email, apply: false }), /verified email/i);
+  assert.deepEqual(audits(api), []);
+  await assert.rejects(() => grantRole({ ...input, user: email }), /verified email/i);
+  assert.equal(api.db.prepare("SELECT count(*) AS n FROM nathan_rbac_grants").get().n, 0);
+  assert.equal(audits(api).at(-1).outcome, "rejected");
+
+  await grantRole({ ...input, user: "pending" });
+  await assert.rejects(() => revokeRole({ ...input, user: email }), /verified email/i);
+  assert.equal(audits(api).at(-1).action, "rbac_grant_revoke");
+  assert.equal(audits(api).at(-1).outcome, "rejected");
+  assert.equal(api.db.prepare("SELECT principal_id FROM nathan_rbac_grants").get().principal_id, "pending");
+  assert.equal((await revokeRole({ ...input, user: "pending" })).result.revoked, true);
+
+  user(api, "other-user", "PENDING@example.com", 1);
+  await assert.rejects(() => grantRole({ ...input, user: email }), /User not found/);
+});
+
 test("a failed commit is rolled back and audited 'attempted' then 'failed'", async () => {
   const api = await seeded();
   api.failBatch = true;
