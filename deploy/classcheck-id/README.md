@@ -26,7 +26,23 @@ The ClassCheck web Worker serves end-user pages and calls its own stage’s name
      node deploy/classcheck-id/bootstrap.mjs "$stage" --apply
    ```
 
-5. Attach the exact management custom domain to the private Worker after verifying Access. Confirm the host redirects an anonymous request to Cloudflare Access and that its workers.dev and preview endpoints are disabled. Before promoting production, request two staging sign-ins from the ClassCheck origin with the QA mailbox. Verify both messages arrive from `ClassCheck <noreply@classcheck.io>`. Redeem the code from the first and the link from the second, completing each flow through consent, callback, session and sign-out. Check MFA with an enrolled account and confirm session revocation. ClassCheck can switch its own rollout mode and retains its previous Worker version for rollback.
+5. From the Nathan checkout root, apply native-client registration and web logout to the installed staging database before its protocol checks. Each command verifies the stage D1 UUID and the installation receipt, commits the change and audit together, and verifies its own receipt on retry.
+
+   ```sh
+   node deploy/classcheck-id/native-clients.mjs staging --apply
+   node deploy/classcheck-id/web-logout.mjs staging --apply
+   ```
+
+6. Attach the exact management custom domain to the private Worker after verifying Access. Confirm the host redirects an anonymous request to Cloudflare Access and that its workers.dev and preview endpoints are disabled. Before promoting production, request two staging sign-ins from the ClassCheck origin with the QA mailbox. Verify both messages arrive from `ClassCheck <noreply@classcheck.io>`. Redeem the code from the first and the link from the second, completing each flow through consent, callback, session and sign-out. Check MFA with an enrolled account and confirm session revocation.
+
+7. After staging verification and production release approval, apply the guarded upgrades to the installed production database before verifying its native and web flows.
+
+   ```sh
+   node deploy/classcheck-id/native-clients.mjs production --apply
+   node deploy/classcheck-id/web-logout.mjs production --apply
+   ```
+
+   ClassCheck controls its rollout mode and retains its previous web Worker version for rollback.
 
 ## Management enrollment
 

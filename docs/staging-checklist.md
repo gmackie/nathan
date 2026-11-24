@@ -46,7 +46,7 @@
 
 ## Hosted email sign-in
 
-- [ ] On the staging issuer, record the deployed revision, migrations 0019 through 0023 for every auth Worker and migration 0024 for app-scoped provisioning, the email feature flag and the configured Resend sender. Open a registered staging RP with S256 PKCE, state and nonce using an invited test mailbox.
+- [ ] On the staging issuer, record the deployed revision, all packaged migration receipts (including hosted email 0019–0022, shared logout 0023 and app lifecycle 0024–0026), the email feature flag and the configured Resend sender. Open a registered staging RP with S256 PKCE, state and nonce using an invited test mailbox.
 - [ ] Check the delivered subject, app name and any configured inline logo. Complete one authorization with the code and another with the link. Verify the exact callback, state, token signature, issuer, nonce and registered resource audience.
 - [ ] Confirm each email yields at most one session. Check that an email-authenticated administrator still needs a passkey for Studio. Check that a directory member outside a verified SSO domain still needs enrolled TOTP. Check a verified enterprise-domain refusal and one success audit per completed sign-in. Record delivery and round-trip results against the revision.
 

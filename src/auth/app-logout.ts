@@ -59,13 +59,17 @@ export async function endAppSession(auth: ReturnType<typeof createAuth>, env: Au
     // Better Auth 1.7.14 uses fetch(..., {redirect:"error"}) for logout notifications, which
     // workerd rejects. Capture the hinted client and the other session-bound grants before their
     // sessionId foreign keys are cleared. The queue delivers only after this session is gone.
-    await env.DB.prepare("INSERT INTO nathan_backchannel_deliveries(id,client_id,user_id,issued_subject,session_id,reason) " +
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO nathan_app_session_ends(session_id) SELECT id FROM session WHERE id=? AND userId=? " +
+        "ON CONFLICT(session_id) DO NOTHING").bind(current.session.id,current.session.userId),
+      env.DB.prepare("INSERT INTO nathan_backchannel_deliveries(id,client_id,user_id,issued_subject,session_id,reason) " +
       "SELECT json_array('app-session-end',?1,c.clientId,t.subject),c.clientId,?2,t.subject,?1,'app-session-end' FROM (" +
       "SELECT ?3 AS client,?2 AS subject WHERE ?3 IS NOT NULL UNION SELECT client_id,issued_subject " +
       "FROM nathan_app_rp_participation WHERE user_id=?2 AND session_id=?1 AND (issued_subject IS NOT NULL OR client_id IS NOT ?3)" +
       ") t JOIN oauthClient c ON c.clientId=t.client WHERE c.backchannelLogoutUri IS NOT NULL AND COALESCE(c.disabled,0)=0 " +
       "AND EXISTS(SELECT 1 FROM session WHERE id=?1 AND userId=?2) ON CONFLICT(id) DO NOTHING")
-      .bind(current.session.id, current.session.userId, form?.client ?? null).run();
+      .bind(current.session.id, current.session.userId, form?.client ?? null)
+    ]);
 
     // Keep Better Auth's token-revocation hooks and native cookie handling. It can clear the
     // cookie even when a delete fails, so only release the clearances once deletion is durable.

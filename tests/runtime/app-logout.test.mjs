@@ -51,7 +51,7 @@ before(async () => {
 });
 after(() => mf?.dispose());
 
-async function grant(scope = "openid email", existing, rpClient = client) {
+async function grant(scope = "openid email", existing, rpClient = client, expectedStatus = 200) {
   const sub = existing?.sub ?? crypto.randomUUID(), now = new Date().toISOString(), verifier = randomKey();
   if (!existing) {
     await sql("INSERT INTO user(id,name,email,emailVerified,createdAt,updatedAt) VALUES (?,'Member',?,1,?,?)", sub,sub + "@example.test",now,now);
@@ -68,7 +68,8 @@ async function grant(scope = "openid email", existing, rpClient = client) {
     "Content-Type": "application/x-www-form-urlencoded", Authorization: "Basic " + btoa(rpClient + ":" + secret)
   }, body: new URLSearchParams({ client_id: rpClient, grant_type: "authorization_code", code: location.searchParams.get("code"),
     redirect_uri: callback, resource, code_verifier: verifier }).toString() });
-  assert.equal(exchanged.status, 200);
+  assert.equal(exchanged.status, expectedStatus);
+  if (!exchanged.ok) return { ...session, sub, refusal: await exchanged.json() };
   const tokens = await exchanged.json();
   assert.equal(decodeJwt(tokens.id_token).sid, session.id);
   return { ...session, sub, tokens, params: { client_id: rpClient, id_token_hint: tokens.id_token, post_logout_redirect_uri: target } };
@@ -266,5 +267,98 @@ for (const mode of ["hinted", "ordinary"]) test(mode + " logout notifies both JW
     assert.notEqual(seen.get(secondary),a.sub);
   } finally {
     await sql("UPDATE oauthClient SET backchannelLogoutUri=NULL WHERE clientId IN (?,?)", client,secondary);
+  }
+});
+
+test("pending sign-out captures a final RP when another operation completes session deletion", async () => {
+  const late = "late-session-client";
+  await sql("UPDATE oauthClient SET backchannelLogoutUri=? WHERE clientId=?", backchannel, client);
+  await sql("INSERT INTO oauthClient(id,clientId,clientSecret,redirectUris,skipConsent,requirePKCE,grantTypes,scopes," +
+    "tokenEndpointAuthMethod,backchannelLogoutUri) VALUES (?,?,?,?,1,1,'[\"authorization_code\"]','[\"openid\",\"email\"]','client_secret_basic',?)",
+    late, late, hash(secret), JSON.stringify([origin + "/auth/callback"]), backchannel);
+  await sql("INSERT INTO oauthClientResource(id,clientId,resourceId) VALUES (?,?,?)", late, late, resource);
+  try {
+    const browser = await grant();
+    await sql("CREATE TRIGGER pause_logout BEFORE DELETE ON session BEGIN SELECT RAISE(ABORT,'retry later'); END");
+    try {
+      assert.equal((await end(browser.params,browser.cookie)).status,503);
+    } finally {
+      await sql("DROP TRIGGER pause_logout");
+    }
+    await grant("openid email",browser,late);
+    await sql("DELETE FROM session WHERE id=?",browser.id);
+    const queued = await db.prepare("SELECT client_id FROM nathan_backchannel_deliveries WHERE session_id=? AND reason='app-session-end' ORDER BY client_id")
+      .bind(browser.id).all();
+    assert.deepEqual(queued.results.map(r=>r.client_id),[client,late].sort());
+  } finally {
+    await sql("UPDATE oauthClient SET backchannelLogoutUri=NULL WHERE clientId IN (?,?)", client,late);
+  }
+});
+
+test("an offline agent can retry a failed OpenID refresh after browser logout and records no new session ID", async () => {
+  const agent = "offline-agent";
+  await sql("INSERT INTO oauthClient(id,clientId,clientSecret,redirectUris,skipConsent,requirePKCE,grantTypes,scopes," +
+    "tokenEndpointAuthMethod,backchannelLogoutUri,subjectType) VALUES (?,?,?,?,1,1,?,?,'client_secret_basic',?,'pairwise')",
+    agent, agent, hash(secret), JSON.stringify([origin + "/auth/callback"]), '["authorization_code","refresh_token"]',
+    '["openid","email","offline_access"]', backchannel);
+  await sql("INSERT INTO oauthClientResource(id,clientId,resourceId) VALUES (?,?,?)", agent,agent,resource);
+  await sql("INSERT INTO nathan_client_principals(client_id,principal_kind,set_by) VALUES (?,'agent','operator')", agent);
+  const a = await grant("openid email offline_access", undefined, agent);
+  const oldSub = decodeJwt(a.tokens.id_token).sub;
+  const refresh = token => get("/api/auth/oauth2/token", { method: "POST", headers: {
+    "Content-Type": "application/x-www-form-urlencoded", Authorization: "Basic " + btoa(agent + ":" + secret)
+  }, body: new URLSearchParams({ client_id: agent, grant_type: "refresh_token", refresh_token: token, resource }).toString() });
+  const ended = await get("/api/auth/sign-out", { method: "POST", headers: {
+    Origin: origin, Cookie: a.cookie, "Content-Type": "application/json" }, body: "{}" });
+  assert.equal(ended.status, 200);
+  assert.equal(await exists(a.id), null);
+  await sql("UPDATE oauthClient SET redirectUris=? WHERE clientId=?", '["https://new-agent-sector.example.test/callback"]',agent);
+  const liveGrant = () => one("SELECT id FROM oauthRefreshToken WHERE clientId=? AND revoked IS NULL", agent);
+  const original = await liveGrant();
+  assert.ok(original);
+  await sql("CREATE TRIGGER block_offline_participation BEFORE INSERT ON nathan_app_rp_sessions " +
+    "WHEN NEW.session_id='' BEGIN SELECT RAISE(ABORT,'participation unavailable'); END");
+  try {
+    const failed = await refresh(a.tokens.refresh_token);
+    assert.equal(failed.status,503);
+    const error = await failed.json();
+    assert.equal(error.error,"temporarily_unavailable");
+    assert.equal(error.access_token,undefined);
+    assert.equal(error.refresh_token,undefined);
+    assert.equal(error.id_token,undefined);
+    assert.deepEqual(await liveGrant(),original, "a failed participation write must leave the presented refresh token usable");
+  } finally {
+    await sql("DROP TRIGGER block_offline_participation");
+  }
+  const retried = await refresh(a.tokens.refresh_token);
+  assert.equal(retried.status,200, retried.ok ? "" : await retried.clone().text());
+  const next = await retried.json();
+  const keys = createLocalJWKSet(await (await get("/api/auth/jwks")).json());
+  const { payload: id } = await jwtVerify(next.id_token,keys,{issuer,audience:agent,algorithms:["EdDSA"]});
+  assert.notEqual(id.sub,oldSub);
+  assert.equal(id.sid ?? null,null);
+  assert.equal(decodeJwt(next.access_token).principal_kind,"agent");
+  assert.notEqual(next.refresh_token,a.tokens.refresh_token);
+  assert.equal((await refresh(next.refresh_token)).status,200);
+
+  const participation = async () => (await db.prepare("SELECT issued_subject,session_id FROM nathan_app_erasure_recipients WHERE user_id=? AND client_id=?")
+    .bind(a.sub,agent).all()).results;
+  const wide = await participation();
+  assert.deepEqual(new Set(wide.map(row => row.issued_subject)),new Set([oldSub,id.sub]));
+  assert.ok(wide.every(row => row.session_id === null));
+  await sql("UPDATE oauthClient SET backchannelLogoutSessionRequired=1 WHERE clientId=?",agent);
+  assert.deepEqual(await participation(),[{ issued_subject:oldSub,session_id:a.id }]);
+
+  // The provider already validated this code's session. Delete it exactly when the private
+  // provider commits its grant, before Nathan records the initial RP and releases the response.
+  await sql("UPDATE oauthClient SET redirectUris=? WHERE clientId=?",JSON.stringify([origin + "/auth/callback"]),agent);
+  await sql("CREATE TRIGGER end_agent_during_exchange AFTER INSERT ON oauthRefreshToken WHEN NEW.clientId='offline-agent' " +
+    "BEGIN DELETE FROM session WHERE id=NEW.sessionId; END");
+  try {
+    const late = await grant("openid email offline_access",undefined,agent,503);
+    assert.deepEqual(late.refusal,{error:"temporarily_unavailable"});
+    assert.equal(await one("SELECT 1 FROM nathan_app_rp_sessions WHERE user_id=?",late.sub),null);
+  } finally {
+    await sql("DROP TRIGGER end_agent_during_exchange");
   }
 });

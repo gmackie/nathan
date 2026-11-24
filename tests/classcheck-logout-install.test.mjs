@@ -7,6 +7,7 @@ import { freshInstallation, applyBatch } from "./fixtures/classcheck-install.mjs
 for (const stage of ["staging","production"]) {
   test("web logout configures only the exact " + stage + " return", async () => {
     const spec = await readStage(stage);
+    assert.ok(spec.worker.triggers.crons.includes("* * * * *"), "retry due RP notifications every minute");
     const db = freshInstallation(spec);
     applyBatch(db, webLogout(spec));
     const read = () => db.prepare("SELECT enableEndSession,postLogoutRedirectUris FROM oauthClient WHERE clientId=?").get(spec.clientId);

@@ -573,7 +573,11 @@ async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Pr
 
 export default {
   fetch: (request: Request, env: AuthEnv, ctx: ExecutionContext) => managementIngress(request, env, ctx, handle),
-  scheduled: async (_: ScheduledEvent,env:AuthEnv) => {
+  scheduled: async (event: ScheduledEvent,env:AuthEnv) => {
+    if (event.cron === "* * * * *" && env.NATHAN_APP_ORIGIN) {
+      await deliverLogouts(env,{limit:100});
+      return;
+    }
     await env.DB.prepare("DELETE FROM nathan_mcp_limits WHERE expires_at < unixepoch()").run();
     await pruneEmailOtpLimits(env.DB);
     await env.DB.batch([

@@ -117,10 +117,12 @@ async function appFetch(request: Request, env: AuthEnv, ctx: ExecutionContext, a
     raw = data;
   }
   const forward = () => new Request(request.url,{method:request.method,headers,body:raw,redirect:"manual"});
+  let grantType: string | null = null;
   if (path === token || path === revoke) {
     if (headers.get("Content-Type")?.split(";")[0] !== "application/x-www-form-urlencoded") return error(415,"invalid_request");
     const params = new URLSearchParams(raw);
-    if (path === token && (one(params,"resource") !== resource || !["authorization_code","refresh_token","client_credentials"].includes(one(params,"grant_type") ?? "")))
+    if (path === token) grantType = one(params,"grant_type");
+    if (path === token && (one(params,"resource") !== resource || !["authorization_code","refresh_token","client_credentials"].includes(grantType ?? "")))
       return error(400,"invalid_target");
     if (!await clientForResource(env,app,credentialsClient(request,params),resource)) return error(401,"invalid_client");
     headers.delete("Cookie");
@@ -167,7 +169,7 @@ async function appFetch(request: Request, env: AuthEnv, ctx: ExecutionContext, a
     headers.delete("Cookie");
   }
   const response = path === prefix + "/sign-out" ? await endAppSession(auth,env,ctx,forward()) : await auth.handler(forward());
-  if (path === token && response.ok) {
+  if (grantType === "authorization_code" && response.ok) {
     try { await recordAppRpSession(env,response); } catch { return error(503,"temporarily_unavailable"); }
   }
   if (path === metadata && response.ok) return json(publicDiscovery(await response.json() as Record<string,unknown>, await hasLogoutClient(env,app,resource)));

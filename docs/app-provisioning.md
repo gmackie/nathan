@@ -72,7 +72,7 @@ audits the operation in one transaction. An identical replay returns
 can throw. The caller acknowledges only its matching successful revision, or a
 stale delivery for which it can account for the later state.
 
-Apply migrations through `0024_app_membership_changes.sql` before enabling app-scoped provisioning.
+Apply the packaged migrations through `0026_legacy_erasure_deliveries.sql` before enabling app-scoped provisioning.
 
 Sending `roles: []` suspends app access. While suspended, token exchange and refresh return `invalid_grant`, UserInfo rejects existing access tokens, and the directory reports the current denial. The live verifier denies it even when
 the subject also has a grant from another source. A subsequent provision call
@@ -106,6 +106,9 @@ corresponding Nathan session has already expired. Historical stored grants
 and consents identify additional participating clients. A historical
 JWT-only session issued before migration 0023 with neither a consent nor
 a stored token requires reconciliation from the relying party's records.
+The same applies to a historical consent without a proven SID at an RP that
+requires one. Migration 0026 marks ambiguous pending erasures for those RPs as
+`unproven_erasure_session` for operator reconciliation.
 The source record
 retains hashes of the identifiers and the final revision for idempotence. The
 source mailbox is cleared. Account erasure is terminal for that external ID.
