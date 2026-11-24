@@ -5,6 +5,8 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -12,39 +14,69 @@ permissions:
   contents: read
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    # `apps`: the fleet's app-CI label (container runners with the
+    # /npm-cache and other fleet cache mounts).
+    runs-on: apps
     timeout-minutes: 20
     steps:
+      # Push to main: skip the heavy steps (and stay green) when main already
+      # has a newer commit, whose own run verifies it. PRs always run.
+      - name: Superseded?
+        id: superseded
+        uses: https://git.forgegraf.com/gmackie/ci-actions/fleet/superseded@ddd693744c0254b1cb078eec0e4d5a1bc38f57eb
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+        if: steps.superseded.outputs.skip != 'true'
+      # Node only here; dependencies install further down, as before.
+      - name: Set up Node
+        if: steps.superseded.outputs.skip != 'true'
+        uses: https://git.forgegraf.com/gmackie/ci-actions/fleet/setup@ddd693744c0254b1cb078eec0e4d5a1bc38f57eb
         with:
           node-version: '22'
+          install: "false"
       - name: Verify the original naming illustration
+        if: steps.superseded.outputs.skip != 'true'
         run: echo 'ee83ade5d1023fca1892d0a7c0d86d7348a47b3077106d7f16b97d578f3a9920  assets/naming-origin.png' | sha256sum -c -
       - uses: actions/setup-python@v5
+        if: steps.superseded.outputs.skip != 'true'
         with:
           python-version: '3.12'
       - name: Verify static marketing site and cost scenarios
+        if: steps.superseded.outputs.skip != 'true'
         run: npm run verify:site
+      # The runner's /npm-cache mount and the same npm ci, with retries.
       - name: Install dependencies
-        run: npm ci --ignore-scripts --no-audit --no-fund
+        if: steps.superseded.outputs.skip != 'true'
+        uses: https://git.forgegraf.com/gmackie/ci-actions/fleet/setup@ddd693744c0254b1cb078eec0e4d5a1bc38f57eb
+        with:
+          node-version: '22'
+          npm-install-command: npm ci --ignore-scripts --no-audit --no-fund
       - name: Generate Better Auth SQL schema
+        if: steps.superseded.outputs.skip != 'true'
         run: npm run schema:generate
       - name: Verify committed Better Auth schema is in sync
+        if: steps.superseded.outputs.skip != 'true'
         run: git diff --exit-code -- migrations/0002_better_auth.sql
       - name: Unit tests
+        if: steps.superseded.outputs.skip != 'true'
         run: npm test
       - name: Static types
+        if: steps.superseded.outputs.skip != 'true'
         run: npm run typecheck
       - name: Auth Worker bundle (no deployment)
+        if: steps.superseded.outputs.skip != 'true'
         run: npm run build:auth
       - name: Gateway Worker bundle (no deployment)
+        if: steps.superseded.outputs.skip != 'true'
         run: npm run build:gateway
       - name: Workers runtime tests (built bundles in workerd)
+        if: steps.superseded.outputs.skip != 'true'
         run: npm run test:runtime
       - name: Pack pinned IdP release into hosted installer
+        if: steps.superseded.outputs.skip != 'true'
         run: npm run pack:release
       - name: Verify release manifest and every package hash
+        if: steps.superseded.outputs.skip != 'true'
         run: npm run verify:release
       - name: Hosted installer Worker bundle (no deployment)
+        if: steps.superseded.outputs.skip != 'true'
         run: npm run build:installer
