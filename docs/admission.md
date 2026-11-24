@@ -14,7 +14,7 @@ One installation-wide setting, changed in Identity Studio → **Account admissio
 | Mode | Who can create an account |
 | --- | --- |
 | **Invitation-only** (default) | Only an email address with an open invitation, and only once the sign-in method has proven that address (see below). Also the installer's first administrator. |
-| **Self-service** | Anyone who can complete a sign-in method that creates accounts (password sign-up, an enabled social provider, enterprise OIDC SSO, a just-in-time SAML or SCIM connection). |
+| **Self-service** | Anyone who can complete a sign-in method that creates accounts (password sign-up, an enabled social provider, an email sign-in code, enterprise OIDC SSO, a just-in-time SAML or SCIM connection). |
 
 A missing setting, an unknown value or a database error counts as invitation-only, so admission fails closed.
 
@@ -37,6 +37,7 @@ An invitation is claimed only by a method that has **proven** the address. For e
 | --- | --- | --- |
 | Password sign-up | Better Auth `databaseHooks.user.create.before`, then `emailVerification.beforeEmailVerification` | Nothing at sign-up. With an open invitation the account is created **provisionally** (unverified, recorded in `nathan_admission_pending`) and claims nothing; it cannot sign in. The invitation is claimed when the person opens the verification link. If by then it was revoked, expired or used by the real person, verification is refused (`ACCOUNT_NOT_ADMITTED`) and the account stays unverified and unusable. |
 | Social sign-in (all six providers) | same hook | The provider's verified email; claimed when the account is created. A provider that does not verify the address gives Nathan a placeholder address (`<id>@<provider>.placeholder.invalid`), which never matches an invitation. |
+| Email sign-in code (`/sign-in/email-otp`, NATH-49) | same hook (method `email-otp`) | The 6-digit code mailed to the address; claimed when the account is created. In invitation-only mode a code is mailed only to an address with an account, an open invitation or the first-administrator record, and an unknown address creates no account even with a valid code. A code for an existing **unverified** account (for example a squatted password sign-up) runs the same check as a verification link before Better Auth marks it verified: it claims the open invitation (recorded as `email-otp`) or is refused, and the unproven profile, password and sessions are dropped. |
 | Enterprise OIDC SSO (`/sso/callback/<connection>`) | same hook, after the enterprise OIDC guard (`src/auth/enterprise-oidc-policy.mjs`) | An address inside the connection's DNS-verified domain; claimed when the account is created. Nathan never trusts the IdP's `email_verified` claim (`trustEmailVerified: false`), so, as with SAML, an address outside the verified domain, or a connection whose domain is not verified, creates no account in either mode and claims nothing. |
 | SAML just-in-time | same hook, after the SAML connection guard (just-in-time connection, verified domain) | The address the IdP signed, inside the connection's verified domain; claimed when the account is created. |
 | SCIM just-in-time | `admitJustInTime` in `src/auth/scim/lifecycle.ts` (SCIM writes D1 directly) | The directory address, inside the connection's verified domain. The invitation is claimed in the same D1 batch that creates the account, so a SCIM claim racing a Better Auth claim for the same invitation leaves exactly one account. |
@@ -56,7 +57,7 @@ A refused sign-in creates no user row and shows a clear reason. Better Auth erro
 - At most one open invitation exists per address. A new one supersedes the previous one.
 - An address that already has a verified account gets no invitation. That account simply signs in. For an address held by an **unverified** account, Studio refuses a plain invitation and offers **reissue** (see below).
 - Studio lists invitations with their state (`pending`, `used`, `expired`, `revoked`), creator, and the account and method that used them. Rows are never deleted.
-- Every change is audited (`admission_mode_change`, `invitation_create`, `invitation_revoke`, `unverified_account_remove`, `admission_upgrade_notice_dismiss`, outcomes `succeeded` or `rejected`). Admission decisions are audited as `account_admission` with the method (`password`, `social:github`, `enterprise-sso:<connection>`, `saml:<connection>`, `scim:<connection>`) and outcome `admitted_invitation`, `admitted_invitation_pending` (a provisional password sign-up), `admitted_self_service`, `admitted_bootstrap`, `refused` or `refused_at_verification`. Refusals at sign-up are recorded at most once per method per minute.
+- Every change is audited (`admission_mode_change`, `invitation_create`, `invitation_revoke`, `unverified_account_remove`, `admission_upgrade_notice_dismiss`, outcomes `succeeded` or `rejected`). Admission decisions are audited as `account_admission` with the method (`password`, `social:github`, `email-otp`, `enterprise-sso:<connection>`, `saml:<connection>`, `scim:<connection>`) and outcome `admitted_invitation`, `admitted_invitation_pending` (a provisional password sign-up), `admitted_self_service`, `admitted_bootstrap`, `refused` or `refused_at_verification`. Refusals at sign-up are recorded at most once per method per minute.
 
 An invitation is claimed atomically (one statement) when a proving method is about to create the account, or when a provisional password account verifies its address. If Better Auth then fails to create the account (for example, a concurrent sign-up created the same address first), the invitation stays used: create a new one.
 
@@ -75,7 +76,7 @@ Studio shows which method used each invitation, and the users list shows whether
 
 The installer's first administrator is admitted without an invitation, in either mode, when **both** hold:
 
-- the sign-in method proved the address (a verified provider email, or an enterprise SSO address inside a verified domain; a password sign-up only when it was invited and then verified its address), and it equals the installer-recorded `admin_email`;
+- the sign-in method proved the address (a verified provider email, an email sign-in code, or an enterprise SSO address inside a verified domain; a password sign-up only when it was invited and then verified its address), and it equals the installer-recorded `admin_email`;
 - that account does not exist yet (`admin_user_id` is still empty).
 
 Legacy manual installations have no installer record (`NATHAN_BOOTSTRAP_REQUIRED` is not `true`). There, a proven address in `NATHAN_ADMIN_EMAILS` is admitted the same way. Admission never grants administrator rights; the bootstrap and grant flows do.

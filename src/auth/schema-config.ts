@@ -5,7 +5,7 @@
  */
 import { DatabaseSync } from "node:sqlite";
 import { betterAuth } from "better-auth";
-import { admin, jwt, organization, twoFactor } from "better-auth/plugins";
+import { admin, emailOTP, jwt, organization, twoFactor } from "better-auth/plugins";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { passkey } from "@better-auth/passkey";
 import { sso } from "@better-auth/sso";
@@ -29,6 +29,8 @@ export const auth = betterAuth({
     twoFactor(),
     passkey({ rpID: "auth.example.com", rpName: "Nathan" }),
     jwt(),
+    // NATH-49: adds no tables (codes live in Better Auth's `verification` table).
+    emailOTP({ sendVerificationOTP: async () => {} }),
     oauthProvider({
       loginPage: "/sign-in", consentPage: "/consent",
       scopes: ["openid","profile","email","offline_access"],

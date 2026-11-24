@@ -149,13 +149,47 @@ node scripts/nathan.mjs providers add discord --apply
 
 The Worker secret then becomes the provider's only credential source: it takes effect on the next request and overrides credentials saved in Studio, which Studio reports as unused. It also voids the previous test sign-in. A provider disabled in Studio stays disabled. To hand control back to Studio, delete the secret (`npx wrangler secret delete NATHAN_PROVIDER_<ID>`) and save the credentials in Studio.
 
+## Passwordless email sign-in (email code)
+
+NATH-49. Better Auth's first-party `emailOTP` plugin, for sign-in only: the person enters an email address, Nathan mails a 6-digit code, and the person enters it on the hosted sign-in page ("Email me a code"). It suits people who have no social account to use and should not hold a password, such as an app's outside bidders.
+
+**Enable it per instance.** It is off by default and existing instances do not change.
+
+| Setting | Value |
+| --- | --- |
+| `ENABLE_EMAIL_OTP` (Worker var) | `"true"` turns it on; anything else is off. |
+| `RESEND_API_KEY` (Worker secret) | Resend API key. Mail goes only through `src/auth/email.ts`. |
+| `EMAIL_FROM` (Worker var or secret) | Sender on a domain verified in Resend, for example `gmacko <login@gmac.io>`. |
+
+With the flag on but Resend not configured, the sign-in page does not offer the method and the send endpoint answers 503 (`EMAIL_SIGN_IN_UNAVAILABLE`): nothing fails silently. The plugin adds no tables (codes live in Better Auth's `verification` table), so there is no migration.
+
+**Routes.** `POST /api/auth/email-otp/send-verification-otp` (`{email, type: "sign-in"}`) and `POST /api/auth/sign-in/email-otp` (`{email, otp, oauth_query?}`). Other fields are refused (a first sign-in takes no name, image or other profile from the request). The plugin's other routes (email verification, password reset, email change, code check) are disabled on every instance.
+
+**Codes.** 6 digits, valid 10 minutes, stored hashed, single use. A new code replaces the previous one. After 3 wrong guesses the code is gone and the person requests a new one.
+
+**Rate limits.** Per IP (Better Auth's limiter): 10 sends and 20 sign-in attempts per 10 minutes. Per address (the same `rateLimit` table, under a SHA-256 key so it never holds an address): 3 sends and 5 sign-in attempts per 10 minutes. Over a limit the answer is 429 with `X-Retry-After`, and the refusal is audited (`email_otp_rate_limited`, at most one row per minute).
+
+**No account enumeration.** The send step answers `{success: true}` for every valid address and mails in the background (`waitUntil`), so the answer and its timing do not depend on the address. In invitation-only mode a code is mailed only to an address that could sign in: an existing account that is not an administrator, an open invitation, or the installer's first administrator. For any other address nothing is mailed, and any code typed fails exactly like a wrong code. Delivery errors are logged by Resend status only; codes and addresses are never logged.
+
+**Mail.** Subject "Your <instance name> sign-in code" (the code is not in the subject); the body has the code, the requesting host, the 10-minute lifetime and a warning to enter it only on that host. No link.
+
+**Admission.** The code proves the address, so the account is created `emailVerified` through the admission guard as method `email-otp`: it can claim an open invitation, the installer's first administrator is admitted, self-service creates the account, and invitation-only refuses an unknown address (`ACCOUNT_NOT_ADMITTED`, no user row). See [admission.md](admission.md).
+
+**Administrators.** An administrator account (Better Auth admin role, an administrator grant, or the installer's bound first administrator) never signs in by email code, so a mailbox alone never opens Identity Studio, whatever the security profile. It is treated like an address that cannot sign in: no mail is sent, and a code attempt gets the wrong-code answer. Administrators use a passkey or a provider. (The installer's first administrator may still create the account by code before the bootstrap binds it, as with any method that proves the address.)
+
+**Assurance.** An emailed code is neither a passkey nor phishing-resistant MFA. The session gets no `nathan_admin_assurance` row, so tokens carry no `nathan_amr`/`nathan_acr`, SAML assertions use the unspecified AuthnContext, and the session never counts as an administrator step-up. Like social sign-in, it does not ask for an enrolled TOTP second factor: anyone who controls the mailbox can sign in to that account. Leave it off on instances whose accounts must not be reachable by email alone.
+
+**Audit.** `email_otp_sign_in` (actor: user, target: session, `succeeded`) for each sign-in, and refused codes as `email_otp_sign_in` with the error code (`rejected`, at most one row per code per minute). Account creation is audited as `account_admission` with method `email-otp`.
+
+**OIDC.** The sign-in page sends the signed `oauth_query`, so `/api/auth/oauth2/authorize` resumes after the code is accepted (workerd-tested).
+
 ## Enterprise SSO
 
 Better Auth's SSO plugin supports enterprise OIDC and SAML **as inbound identity sources**. The code enables the plugin via `ENTERPRISE_SSO=true`. Identity Studio registers enterprise OIDC providers and, since NATH-10, inbound SAML connections with metadata validation, DNS domain verification, disabled-by-default enablement, certificate rotation and per-connection provisioning; see [saml.md](saml.md) for Okta, Entra ID and Google Workspace setup. Nathan serving as a SAML IdP downstream is a separate future feature (NATH-12).
 
 ## Multi-factor authentication
 
-Passkeys and TOTP are enabled at the Better Auth plugin level. A successful social sign-in is not NIST AAL2: Nathan never derives an AAL claim from a social provider.
+Passkeys and TOTP are enabled at the Better Auth plugin level. A successful social or email-code sign-in is not NIST AAL2: Nathan never derives an AAL claim from a social provider or an emailed code.
 
 ## Not verified yet
 

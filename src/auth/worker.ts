@@ -33,6 +33,8 @@ import { scimUserOperation, scimOutboxView, skipScimOutbox, SCIM_REVIEW_ERRORS }
 import { admissionOverview, applyAdmissionOperation, ADMISSION_ERRORS } from "./admission";
 import { healthResponse } from "./health";
 import { handleSamlIdp, samlIdpReturnRedirect, pruneSamlIdp } from "./saml-idp";
+import type { Background } from "./email-otp";
+import { emailOtpOffered } from "./email-otp-policy.mjs";
 
 function reject(status: number, reason: string) {
   return Response.json({ error: reason }, { status, headers: { "Cache-Control": "no-store" } });
@@ -41,7 +43,7 @@ async function isAdmin(session:any,env:AuthEnv):Promise<boolean>{
   return Boolean(session?.user && await isAdminPrincipal(session.user,env));
 }
 
-async function handle(request: Request, env: AuthEnv): Promise<Response> {
+async function handle(request: Request, env: AuthEnv, background?: Background): Promise<Response> {
   const issuer = new URL(env.NATHAN_ISSUER);
   const url = new URL(request.url);
   if (url.origin !== issuer.origin || url.protocol !== "https:") return reject(421, "Misdirected request");
@@ -58,7 +60,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
   }
   if(url.pathname.startsWith("/scim/v2/"))return handleScim(request,env);
   const socialProviders=await loadSocialCredentials(env);
-  const auth = createAuth(env,socialProviders);
+  const auth = createAuth(env,socialProviders,background);
   // NATH-14: authorization server for remote MCP servers, consent and MCP connections (src/auth/mcp-oauth.ts).
   if (isMcpOAuthPath(url.pathname)) return handleMcpOAuth(request, env, auth);
   if (url.pathname === "/mcp") return handleMcp(request,env,auth);
@@ -88,7 +90,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
       if (session?.user?.id) return Response.redirect(issuer.origin + "/security", 302);
     }
     const providers = enabledProviderIds(socialProviders);
-    return signInPage(providers, env.ENABLE_PASSWORD === "true", env.ENTERPRISE_SSO === "true");
+    return signInPage(providers, env.ENABLE_PASSWORD === "true", env.ENTERPRISE_SSO === "true", emailOtpOffered(env));
   }
   if (url.pathname === "/consent" && request.method === "GET") {
     const { secret } = await auth.$context;
@@ -553,7 +555,8 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
 }
 
 export default {
-  fetch: (request: Request, env: AuthEnv) => handle(request, env),
+  fetch: (request: Request, env: AuthEnv, ctx?: ExecutionContext) =>
+    handle(request, env, ctx ? promise => ctx.waitUntil(promise) : undefined),
   scheduled: async (_: ScheduledEvent,env:AuthEnv) => {
     await env.DB.prepare("DELETE FROM nathan_mcp_limits WHERE expires_at < unixepoch()").run();
     await pruneRbacChanges(env);

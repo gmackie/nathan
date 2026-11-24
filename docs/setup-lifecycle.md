@@ -53,6 +53,7 @@ Visit \`https://login.example.com/studio\` as a fully enrolled administrator. Se
 | SAML applications (Nathan as IdP) | Nothing until an administrator generates a signing key | Generate and rotate the IdP signing key, register SPs bound to an application (disabled), enable/disable, update ([saml-idp.md](saml-idp.md)) |
 | SCIM directory | Optional disabled initial directory connection | Create, list, enable/disable and rotate bearer token |
 | Passkeys / TOTP | Enrollment required to complete initial admin | Self-service enrollment, authenticator inspection and passkey reauthentication |
+| Email sign-in code (NATH-49) | Off (`ENABLE_EMAIL_OTP=false`); needs `RESEND_API_KEY` and `EMAIL_FROM` | Set `ENABLE_EMAIL_OTP=true` and redeploy; follows the admission mode; never counts as admin assurance ([providers.md](providers.md#passwordless-email-sign-in-email-code)) |
 | MFA posture | Standard or Business profile | View effective policy and *increase* admin requirements without redeploying |
 | Additional administrators | Not during initial install | Grant an existing verified user and revoke additional admins with session termination |
 | Plugin code changes | Pinned Worker release | Requires reviewed build/deploy, not hot-loaded arbitrary JavaScript |
