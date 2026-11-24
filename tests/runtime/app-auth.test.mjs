@@ -134,6 +134,9 @@ for (const method of ["code","link"]) test("ClassCheck " + method + " through a 
   const session = "__Secure-nathan.session_token=" + cookiesOf(response)["__Secure-nathan.session_token"].value;
   const consent = new URL((await response.json()).url,origin);
   assert.equal(consent.origin + consent.pathname, origin + "/consent");
+  const reduced = await post("/api/auth/oauth2/consent",{accept:true,scope:"email",oauth_query:consent.search.slice(1)},session);
+  assert.equal(reduced.status,400);
+  assert.deepEqual(await reduced.json(),{error:"invalid_scope"});
   const approved = await post("/api/auth/oauth2/consent",{accept:true,oauth_query:consent.search.slice(1)},session);
   const returned = new URL((await approved.json()).url);
   assert.equal(returned.origin + returned.pathname, callback);

@@ -148,6 +148,9 @@ async function appFetch(request: Request, env: AuthEnv, ctx: ExecutionContext, a
       const context = await signedContext(env,app,input.oauth_query);
       if (!context) return error(400,"invalid_request");
       if (path === "/sign-in/context") return json(context);
+      if (path === consent && input.accept === true && input.scope !== undefined &&
+          (typeof input.scope !== "string" || !input.scope.split(" ").includes("openid")))
+        return error(400,"invalid_scope");
     }
     if (path === "/sign-in/email/request" || path === "/sign-in/email/verify")
       return emailSignIn(forward(),env,ctx,path.endsWith("/request") ? "request" : "verify",
