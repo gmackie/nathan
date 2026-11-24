@@ -1,3 +1,4 @@
+import { isEmailCodeSession } from "./email-otp-policy.mjs";
 import type { AuthEnv } from "./env";
 import { audit } from "./admin-service";
 import {effectiveAdminPolicy} from "./security-policy";
@@ -58,6 +59,8 @@ export async function completeBootstrap(env:AuthEnv,userId:string) {
 }
 /** For any administrator, enrollment is required before privileged UI and MCP. */
 export async function mayAdminister(env:AuthEnv,userId:string,sessionId?:string) {
+  // NATH-49: a session created by an emailed code never administers, whatever the profile.
+  if(await isEmailCodeSession(env.DB,sessionId))return false;
   if(env.NATHAN_BOOTSTRAP_REQUIRED!=="true")return true; // Legacy manual installations
   const b=await row(env);
   if(!b||b.state!=="complete")return false;

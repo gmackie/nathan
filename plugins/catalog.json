@@ -112,7 +112,9 @@
           "/api/auth/email-otp/send-verification-otp",
           "/api/auth/sign-in/email-otp"
         ],
-        "migrations": [],
+        "migrations": [
+          "0019_email_otp.sql"
+        ],
         "docs": "docs/providers.md#passwordless-email-sign-in-email-code"
       }
     },

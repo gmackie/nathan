@@ -17,8 +17,8 @@ import { APIError } from "better-auth/api";
 import type { AuthEnv } from "./env";
 import { sendSignInCode } from "./email";
 import {
-  EMAIL_OTP, SEND_PATH, VERIFY_PATH, emailOtpEnabled, emailDeliveryConfigured, requestProblem, consumeAddressLimit, mayReceiveSignInCode,
-  isAdministratorAccount
+  EMAIL_OTP, SEND_PATH, VERIFY_PATH, FAILURE_BUDGET, emailOtpEnabled, emailDeliveryConfigured, requestProblem, consumeAddressLimit,
+  mayReceiveSignInCode, codeSignInRefusal, inVerifiedSsoDomain, failureBudgetExhausted, recordFailure
 } from "./email-otp-policy.mjs";
 import { normalizeEmail, admitOnVerification, auditAdmission, NOT_ADMITTED } from "./admission-policy.mjs";
 
@@ -71,6 +71,13 @@ export function emailOtpPlugins(env: AuthEnv, background?: Background) {
   })];
 }
 
+/** Better Auth's own wrong-code answer. Nathan's refusals after a code check use it, so they reveal nothing. */
+const invalidCode = () => new APIError("BAD_REQUEST", { code: "INVALID_OTP", message: "Invalid OTP" });
+const tooMany = (retryAfter: number) => new APIError("TOO_MANY_REQUESTS",
+  { code: "TOO_MANY_REQUESTS", message: "Too many requests. Please try again later." }, { "X-Retry-After": String(retryAfter) });
+/** Code failures that count against the instance-wide budget. */
+const CODE_FAILURES = new Set(["INVALID_OTP", "OTP_EXPIRED", "TOO_MANY_ATTEMPTS"]);
+
 /** hooks.before for the two email-OTP routes. Throws the refusal; returns nothing otherwise. */
 export async function emailOtpRequestGuard(env: AuthEnv, ctx: any) {
   const path = ctx?.path;
@@ -78,37 +85,89 @@ export async function emailOtpRequestGuard(env: AuthEnv, ctx: any) {
   if (!emailOtpEnabled(env)) return;
   if (path === SEND_PATH && !emailDeliveryConfigured(env))
     throw new APIError("SERVICE_UNAVAILABLE", { code: "EMAIL_SIGN_IN_UNAVAILABLE", message: "Email sign-in is not available on this server." });
+  // Same-origin only (the hosted page). Better Auth also accepts only JSON bodies here.
+  const headers: Headers | undefined = ctx.request?.headers ?? ctx.headers;
+  const origin = headers?.get("origin");
+  if ((origin && origin !== new URL(env.NATHAN_ISSUER).origin) || headers?.get("sec-fetch-site") === "cross-site")
+    throw new APIError("FORBIDDEN", { code: "CROSS_ORIGIN_REQUEST", message: "Cross-origin request denied" });
   const problem = requestProblem(path, ctx.body);
   if (problem) throw new APIError("BAD_REQUEST", { code: "INVALID_REQUEST", message: problem });
   const kind = path === SEND_PATH ? "send" : "verify";
+  if (kind === "verify") {
+    const wait = await failureBudgetExhausted(env.DB);
+    if (wait) {
+      await auditThrottled(env, "email_otp_rate_limited", "instance-failure-budget", "refused").catch(() => {});
+      throw tooMany(wait);
+    }
+  }
   const limit = await consumeAddressLimit(env.DB, kind, normalizeEmail(ctx.body.email)!);
   if (!limit.allowed) {
     await auditThrottled(env, "email_otp_rate_limited", kind, "refused").catch(() => {});
-    throw new APIError("TOO_MANY_REQUESTS", { code: "TOO_MANY_REQUESTS", message: "Too many requests. Please try again later." },
-      { "X-Retry-After": String(limit.retryAfter) });
-  }
-  // Administrators never sign in by email code; the answer is Better Auth's own wrong-code answer,
-  // so it says nothing about the account. (No code is mailed to them either.)
-  if (path === VERIFY_PATH && await isAdministratorAccount(env.DB, ctx.body.email)) {
-    await auditThrottled(env, "email_otp_sign_in", "ADMINISTRATOR_ACCOUNT", "rejected").catch(() => {});
-    throw new APIError("BAD_REQUEST", { code: "INVALID_OTP", message: "Invalid OTP" });
+    throw tooMany(limit.retryAfter!);
   }
 }
 
-/** hooks.after for the verify route: the sign-in, or a refused code (throttled), audited. */
+/**
+ * hooks.after for the verify route. A sign-in: records the session as an email-code session (it
+ * never administers) and audits it; if either write fails the session is deleted and the request
+ * fails (closed). A refused code: counted against the instance budget and audited (one row a minute
+ * per error code, with the hour's failure count).
+ */
 export async function emailOtpAudit(env: AuthEnv, ctx: any) {
   if (ctx?.path !== VERIFY_PATH) return;
   const created = ctx.context?.newSession;
   if (created?.session?.id && created.user?.id) {
-    await env.DB.prepare(AUDIT + "VALUES (?,?,'email_otp_sign_in',?,'succeeded')")
-      .bind(crypto.randomUUID(), created.user.id, created.session.id).run();
+    try {
+      await env.DB.batch([
+        env.DB.prepare("INSERT INTO nathan_email_otp_sessions(session_id,user_id) VALUES (?,?)").bind(created.session.id, created.user.id),
+        env.DB.prepare(AUDIT + "VALUES (?,?,'email_otp_sign_in',?,'succeeded')").bind(crypto.randomUUID(), created.user.id, created.session.id)
+      ]);
+    } catch {
+      await env.DB.prepare('DELETE FROM "session" WHERE "id"=?').bind(created.session.id).run().catch(() => {});
+      throw new APIError("SERVICE_UNAVAILABLE", { code: "SIGN_IN_NOT_RECORDED", message: "Sign-in could not be completed. Try again." });
+    }
     return;
   }
   const returned = ctx.context?.returned;
   if (returned && typeof returned === "object" && Number(returned.statusCode) >= 400) {
     const code = typeof returned.body?.code === "string" && /^[A-Z_]{1,64}$/.test(returned.body.code) ? returned.body.code : "rejected";
-    await auditThrottled(env, "email_otp_sign_in", code, "rejected").catch(() => {});
+    let count = 0;
+    if (CODE_FAILURES.has(code)) count = await recordFailure(env.DB).catch(() => 0);
+    if (count === FAILURE_BUDGET.max)
+      await env.DB.prepare(AUDIT + "VALUES (?,'system:email-otp','email_otp_failure_budget_exhausted',?,'refused')")
+        .bind(crypto.randomUUID(), String(count) + " refused codes this hour").run().catch(() => {});
+    await auditThrottled(env, "email_otp_sign_in", code + (count ? " failures_this_hour=" + count : ""), "rejected").catch(() => {});
   }
+}
+
+/**
+ * databaseHooks.user.create.before, ahead of admission: an address inside a verified enterprise SSO
+ * domain never gets an account by email code (its people sign in through their IdP). Reached only
+ * with a correct code, which is never mailed to such an address; answered as a wrong code.
+ */
+export async function emailOtpUserCreateGuard(env: AuthEnv, user: any, ctx: any) {
+  if (ctx?.path !== VERIFY_PATH) return;
+  let refused = true;
+  try { refused = await inVerifiedSsoDomain(env.DB, user?.email); } catch { /* fail closed */ }
+  if (refused) throw invalidCode();
+}
+
+/**
+ * databaseHooks.session.create.before for the verify route, after Better Auth accepted the code: no
+ * session for an account that may not sign in by code (codeSignInRefusal) or that is still
+ * unverified. The answer is the wrong-code answer, so it says nothing about the account.
+ */
+export async function emailOtpSessionGuard(env: AuthEnv, session: any, ctx: any) {
+  if (ctx?.path !== VERIFY_PATH) return;
+  let refusal: string | null = "error";
+  try {
+    const user = await env.DB.prepare('SELECT "emailVerified" AS verified FROM "user" WHERE "id"=? LIMIT 1')
+      .bind(session?.userId ?? "").first<{ verified: number }>();
+    refusal = !user ? "unknown" : Number(user.verified) !== 1 ? "unverified" : await codeSignInRefusal(env.DB, { userId: session.userId });
+  } catch { /* fail closed */ }
+  if (!refusal) return;
+  await auditThrottled(env, "email_otp_sign_in", "refused:" + refusal, "rejected").catch(() => {});
+  throw invalidCode();
 }
 
 /**
@@ -128,8 +187,11 @@ export async function emailOtpPromotionGuard(env: AuthEnv, data: any, ctx: any) 
     const user = await env.DB.prepare('SELECT "id" AS id FROM "user" WHERE lower("email")=? AND "emailVerified"=0 LIMIT 1')
       .bind(email).first<{ id: string }>();
     if (!user) return;
+    // An account that may not sign in by code is not promoted either (answered as a wrong code).
+    if (await codeSignInRefusal(env.DB, { userId: user.id })) throw invalidCode();
     decision = await admitOnVerification(env.DB, env, { userId: user.id, email, method: "email-otp" });
-  } catch {
+  } catch (error) {
+    if (error instanceof APIError) throw error;
     refuse();
   }
   if (decision!.pending) {
