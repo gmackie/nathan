@@ -2,7 +2,7 @@ import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
-import { EventEmitter, once } from "node:events";
+import { EventEmitter } from "node:events";
 import { createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify, SignJWT } from "jose";
 import { bundle, COMPAT, cookiesOf, migrate, randomKey, start } from "./helpers.mjs";
 
@@ -22,6 +22,30 @@ const get = (path, options = {}) => app.fetch(origin + path, { redirect: "manual
 const post = (path, body, cookie = "") => get(path, { method: "POST", headers: {
   "Content-Type": "application/json", Origin: origin, Cookie: cookie, "CF-Connecting-IP": "192.0.2.24"
 }, body: JSON.stringify(body) });
+
+const deliveryTimeout = 30_000;
+async function requestMail(email, query) {
+  const delivery = Promise.withResolvers();
+  inbox.once(email, delivery.resolve);
+  let timer;
+  try {
+    const challenge = await post("/sign-in/email/request", {email, oauth_query:query});
+    assert.equal(challenge.status, 202);
+    timer = setTimeout(() => delivery.reject(Error("No email arrived after challenge acceptance")), deliveryTimeout);
+    return { challenge, mail: await delivery.promise };
+  } finally {
+    clearTimeout(timer);
+    inbox.off(email, delivery.resolve);
+  }
+}
+
+async function waitForPublication(email) {
+  const deadline = Date.now() + deliveryTimeout;
+  while (!await db.prepare("SELECT 1 FROM nathan_email_delivery_order WHERE email=? AND delivered>0").bind(email).first()) {
+    assert.ok(Date.now() < deadline, "Nathan did not publish the email challenge");
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+}
 
 before(async () => {
   const caller = (name, pin) => ({ name, ...COMPAT, modules: true, routes: name === "web" ? ["classcheck.example.test/*"] : [], script: "export default {fetch(r,e){return e.AUTH.fetch(r)}}",
@@ -96,12 +120,10 @@ for (const method of ["code","link"]) test("ClassCheck " + method + " through a 
   const query = login.search.slice(1);
   assert.deepEqual(await (await post("/sign-in/context", {oauth_query:query})).json(),
     {clientName:"ClassCheck",scopes,loginHint:email,enterpriseSso:false});
-  const delivery = once(inbox, email, {signal:AbortSignal.timeout(7000)});
-  const challenge = await post("/sign-in/email/request", {email, oauth_query:query});
-  assert.equal(challenge.status, 202);
+  const { challenge, mail } = await requestMail(email, query);
+  await waitForPublication(email);
   const {flowId} = await challenge.json();
   const browser = "__Host-nathan-email=" + cookiesOf(challenge)["__Host-nathan-email"].value;
-  const [mail] = await delivery;
   const link = new URL(mail.text.match(/https:\/\/\S+/)[0]);
   assert.equal(link.origin + link.pathname, origin + "/sign-in/email");
   const digits = mail.text.match(/\b[0-9]{6}\b/)[0];
@@ -112,6 +134,9 @@ for (const method of ["code","link"]) test("ClassCheck " + method + " through a 
   const session = "__Secure-nathan.session_token=" + cookiesOf(response)["__Secure-nathan.session_token"].value;
   const consent = new URL((await response.json()).url,origin);
   assert.equal(consent.origin + consent.pathname, origin + "/consent");
+  const reduced = await post("/api/auth/oauth2/consent",{accept:true,scope:"email",oauth_query:consent.search.slice(1)},session);
+  assert.equal(reduced.status,400);
+  assert.deepEqual(await reduced.json(),{error:"invalid_scope"});
   const approved = await post("/api/auth/oauth2/consent",{accept:true,oauth_query:consent.search.slice(1)},session);
   const returned = new URL((await approved.json()).url);
   assert.equal(returned.origin + returned.pathname, callback);
@@ -154,8 +179,12 @@ for (const method of ["code","link"]) test("ClassCheck " + method + " through a 
   assert.equal((await post("/api/auth/sign-out",{},session)).status,200);
 });
 
-test("operator bootstrap stays available to management when its email is submitted on ClassCheck", async () => {
+test("operator bootstrap stays available to management when its email is submitted on ClassCheck", async t => {
   const email = "owner@example.test", verifier = randomKey();
+  let sent = false;
+  const recordMail = () => { sent = true; };
+  inbox.on(email, recordMail);
+  t.after(() => inbox.off(email, recordMail));
   const idOfInvite = crypto.randomUUID();
   await sql("INSERT INTO nathan_invitations(id,email,created_by,expires_at) VALUES (?,?,'operator',unixepoch()+3600)",idOfInvite,email);
   const params = new URLSearchParams({client_id:id,redirect_uri:callback,resource,response_type:"code",scope:"openid email",
@@ -166,11 +195,8 @@ test("operator bootstrap stays available to management when its email is submitt
   assert.equal(challenge.status,202);
   // A published, non-delivered challenge has no invitation_id or subject. Wait on publication so
   // an accidentally queued real delivery can't pass the assertion by finishing after the test.
-  const deadline = AbortSignal.timeout(7000);
-  while (!await db.prepare("SELECT 1 FROM nathan_email_delivery_order WHERE email=? AND delivered>0").bind(email).first()) {
-    deadline.throwIfAborted();
-    await new Promise(resolve=>setTimeout(resolve,25));
-  }
+  await waitForPublication(email);
+  assert.equal(sent, false, "the operator must receive no ClassCheck sign-in proof");
   assert.deepEqual(await db.prepare("SELECT subject_id,invitation_id FROM nathan_email_sign_ins WHERE email=?").bind(email).first(),{subject_id:null,invitation_id:null});
   assert.equal(await db.prepare("SELECT uses FROM nathan_invitations WHERE id=?").bind(idOfInvite).first("uses"),0);
 });

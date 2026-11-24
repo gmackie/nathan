@@ -207,6 +207,7 @@ test("a source can suspend its banned member and a later unban keeps the newer w
   await sql("UPDATE user SET role='user' WHERE id=?", sub);
   assert.deepEqual(await sync(withdrawal), { sub, revision: 3, applied: true });
   assert.deepEqual(await sync(withdrawal), { sub, revision: 3, applied: false });
+  assert.deepEqual(await sync(grant), { error: "stale_revision" });
   await sql("UPDATE user SET banned=0 WHERE id=?", sub);
   assert.deepEqual(await sync(grant), { error: "stale_revision" });
   assert.equal((await call("/access", { subject: sub })).allowed, false);
@@ -218,6 +219,7 @@ test("a source can suspend its banned member and a later unban keeps the newer w
     "VALUES ('suspension-directory','app-member','cc-staff',?,0,?,'deprovisioned')", identity.email, sub);
   await sql("UPDATE user SET banned=1 WHERE id=?", sub);
   assert.deepEqual(await sync({ ...withdrawal, revision: 5 }), { sub, revision: 5, applied: true });
+  assert.deepEqual(await sync(grant), { error: "stale_revision" });
   assert.deepEqual(await sync({ ...grant, revision: 6 }), { error: "identity_conflict" });
   assert.equal((await first("SELECT link_state FROM nathan_scim_users WHERE user_id=?", sub)).link_state, "deprovisioned");
 });
@@ -226,7 +228,16 @@ test("an erasure tombstone classifies an older grant only for the exact app, sou
   const identity = { externalId: "terminal-revision", email: "terminal-revision@example.test" };
   const { sub } = await provision(identity);
   const input = { externalId: identity.externalId, sub, revision: 7 };
+  const oldDriverGrant = { ...input, roles: ["member", "driver"], revision: 6 };
+  assert.deepEqual(await sync(oldDriverGrant), { sub, revision: 6, applied: true });
   assert.deepEqual(await erase(input), { sub, revision: 7, applied: true });
+  await sql("DELETE FROM nathan_rbac_roles WHERE app_id=? AND key='driver'", app);
+  try {
+    assert.deepEqual(await sync(oldDriverGrant), { error: "stale_revision" });
+    assert.deepEqual(await sync({ ...oldDriverGrant, revision: 8 }), { error: "identity_conflict" });
+  } finally {
+    await sql("INSERT INTO nathan_rbac_roles(app_id,key) VALUES (?,'driver')", app);
+  }
   for (const roles of [[], ["member"]]) {
     assert.deepEqual(await sync({ ...input, roles, revision: 6 }), { error: "stale_revision" });
     assert.deepEqual(await sync({ ...input, roles }), { error: "identity_conflict" });

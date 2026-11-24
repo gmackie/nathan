@@ -15,6 +15,8 @@
  */
 import type { AuthEnv } from "./env";
 import { APIError } from "better-auth/api";
+import type { SchemaClient } from "@better-auth/oauth-provider";
+import { recordAppRefreshSession } from "./app-rp-session";
 import { audit } from "./admin-service";
 import { resolveAccess } from "./rbac";
 import { principalKind, evidenceClaims, rolesClaim, audienceApp, validateAudience, liveSession, userBanned, apiScopeAllowed,
@@ -29,7 +31,7 @@ const APP_ID = /^[a-z][a-z0-9-]{0,62}$/;
 
 type ClaimInput = {
   user?: { id?: unknown } | null;
-  client: { clientId: string };
+  client: Pick<SchemaClient, "clientId" | "subjectType" | "redirectUris" | "enableEndSession" | "backchannelLogoutUri">;
   sessionId?: string | null;
   scopes?: string[];
   grantType?: string;
@@ -101,6 +103,8 @@ export async function accessTokenClaims(env: AuthEnv, input: ClaimInput): Promis
     if (roles) claims.roles = roles;
   }
   if (session && sessionId) Object.assign(claims, evidenceClaims(session, { userId, sessionId }));
+  if (customerIssuer && input.grantType === "refresh_token" && input.scopes?.includes("openid"))
+    await recordAppRefreshSession(env, userId, input.client, sessionId, kind === "agent");
   return claims;
 }
 
