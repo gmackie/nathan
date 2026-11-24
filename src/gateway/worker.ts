@@ -11,7 +11,7 @@ import type { AccessDecision } from "./env";
 const SESSION_COOKIE = "__Host-nathan-session";
 const FLOW_COOKIE = "__Host-nathan-flow";
 const FLOW_SECONDS = 300;
-type Flow = { state: string; nonce: string; verifier: string; returnTo: string; expiresAt: number; logoutSequence?: number };
+type Flow = { state: string; nonce: string; verifier: string; returnTo: string; expiresAt: number; logoutSequence: number };
 type StoredSession = { subject: string; email: string | null; sessionIdHash: string; expiresAt: number; acr: string | null; authTime: number | null; issuer: string; sid?: string | null };
 
 function origin(env: GatewayEnv) {
@@ -59,10 +59,11 @@ async function beginLogin(url: URL, env: GatewayEnv) {
   const logoutSequence = await env.SESSIONS.prepare(
     "SELECT coalesce(max(sequence),0) AS sequence FROM nathan_gateway_logout_receipts"
   ).first<number>("sequence");
+  if (logoutSequence === null) throw Error("Gateway logout sequence unavailable");
   const flow: Flow = {
     state: randomId(), nonce: randomId(), verifier: randomId(),
     returnTo: safeReturnPath(url.searchParams.get("returnTo") || "/"),
-    expiresAt: Date.now() + FLOW_SECONDS * 1000, logoutSequence: logoutSequence ?? 0
+    expiresAt: Date.now() + FLOW_SECONDS * 1000, logoutSequence
   };
   const loginUrl = await authorizeUrl(env, meta, flow.state, flow.nonce, flow.verifier);
   const response = redirectWithCookies(loginUrl, 302,
@@ -72,7 +73,9 @@ async function beginLogin(url: URL, env: GatewayEnv) {
 async function completeLogin(url: URL, request: Request, env: GatewayEnv): Promise<Response> {
   const encrypted = parseCookie(request.headers.get("Cookie"), FLOW_COOKIE);
   const flow = encrypted && await unseal<Flow>(encrypted, env.SESSION_ENCRYPTION_KEY);
+  // A pre-upgrade flow could have crossed a logout recorded with a JTI alone.
   if (!flow || !Number.isSafeInteger(flow.expiresAt) || flow.expiresAt < Date.now()
+      || !Number.isSafeInteger(flow.logoutSequence) || flow.logoutSequence < 0
       || !constantTimeEqual(url.searchParams.get("state") || "", flow.state))
     return cleared(errorResponse(400, "Login state invalid or expired. Please try again.", request, loginRetry()));
   if (url.searchParams.has("error")) return cleared(errorResponse(401, "Identity provider rejected login", request, loginRetry(flow.returnTo)));
@@ -105,7 +108,7 @@ async function completeLogin(url: URL, request: Request, env: GatewayEnv): Promi
       )
     `).bind(hash, id.sub, id.email_verified === true && typeof id.email === "string" ? id.email : null, meta.issuer, env.OIDC_CLIENT_ID,
       typeof id.acr === "string" ? id.acr : null, typeof id.auth_time === "number" ? id.auth_time : null, typeof id.sid === "string" ? id.sid : null,
-      expiresAt, Math.floor(issuedAt), flow.expiresAt, flow.logoutSequence ?? 0).run();
+      expiresAt, Math.floor(issuedAt), flow.expiresAt, flow.logoutSequence).run();
     if (inserted.meta.changes !== 1)
       return cleared(errorResponse(401, "This sign-in has ended. Please try again.", request, loginRetry(flow.returnTo)));
     const response = redirectWithCookies(origin(env) + flow.returnTo, 303, [makeCookie(SESSION_COOKIE, handle, { maxAge: ttl })]);

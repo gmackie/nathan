@@ -58,7 +58,7 @@ export async function handleBackchannelLogout(request: Request, env: GatewayEnv)
     const record = env.SESSIONS.prepare(`
       INSERT INTO nathan_gateway_logout_receipts(issuer,client_id,jti,sid,subject,event_time,exp)
       SELECT ?1,?2,?3,?4,?5,?6,?7
-      WHERE NOT EXISTS (SELECT 1 FROM nathan_gateway_logout_jti WHERE jti=?3 AND exp>unixepoch())
+      WHERE NOT EXISTS (SELECT 1 FROM nathan_gateway_logout_jti WHERE jti=?3)
       ON CONFLICT(issuer,client_id,jti) DO NOTHING
     `).bind(metadata.issuer, env.OIDC_CLIENT_ID, payload.jti, sid, subject, occurred ?? null, replayUntil);
     // changes() is the receipt insertion in this transaction. Redelivery acknowledges
