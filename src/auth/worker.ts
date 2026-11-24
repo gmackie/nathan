@@ -35,6 +35,7 @@ import { healthResponse } from "./health";
 import { handleSamlIdp, samlIdpReturnRedirect, pruneSamlIdp } from "./saml-idp";
 import type { Background } from "./email-otp";
 import { emailOtpOffered, pruneEmailOtpLimits } from "./email-otp-policy.mjs";
+import { beginEmailSignIn, finishEmailSignIn } from "./single-app";
 
 function reject(status: number, reason: string) {
   return Response.json({ error: reason }, { status, headers: { "Cache-Control": "no-store" } });
@@ -622,6 +623,24 @@ export class NathanVerifier extends WorkerEntrypoint<AuthEnv, BindingProps> {
     const scope = scopedApplication(this.ctx.props, input?.applicationId);
     if (!scope.ok) return outOfScope(scope.reason);
     return resolveAccess(this.env, scope.app, input?.subject);
+  }
+  /**
+   * NATH-52: the pinned app asks for an email code and shows its own form.
+   * Unavailable unless this instance is AUTH_MODE=single-app. The answer does
+   * not say whether a message was sent. Mail stays off this call's wait when
+   * the runtime can defer it, so the answer's timing does not reveal the address.
+   */
+  async beginEmailSignIn(input: { email?: string; ip?: string }) {
+    const scope = scopedApplication(this.ctx.props, undefined);
+    if (!scope.ok) return { ok: false, error: "unavailable" };
+    const waitUntil = this.ctx.waitUntil?.bind(this.ctx);
+    return beginEmailSignIn(this.env, input, waitUntil);
+  }
+  /** NATH-52: a correct code returns the person. No cookie, token, or admin role. */
+  async finishEmailSignIn(input: { email?: string; code?: string; ip?: string }) {
+    const scope = scopedApplication(this.ctx.props, undefined);
+    if (!scope.ok) return { ok: false, error: "unavailable" };
+    return finishEmailSignIn(this.env, input);
   }
   /**
    * NATH-14 grant check for remote MCP servers (the SDK's nathanMcp()): verifies the access token,

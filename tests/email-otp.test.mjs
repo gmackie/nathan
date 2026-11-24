@@ -34,6 +34,16 @@ test("deployed configurations keep the flag off except staging", () => {
   assert.equal(vars("deploy/staging/wrangler.auth.jsonc").ENABLE_EMAIL_OTP, "true");
 });
 
+test("single-app sign-in is only Insure's identity instances (NATH-52)", () => {
+  const vars = file => JSON.parse(readFileSync(file, "utf8").replace(/^\s*\/\/.*$/gm, "")).vars;
+  for (const file of ["wrangler.auth.jsonc", "deploy/production/wrangler.auth.jsonc", "deploy/staging/wrangler.auth.jsonc"])
+    assert.equal(vars(file).AUTH_MODE, undefined, file);
+  for (const file of ["deploy/insure-production/wrangler.auth.jsonc", "deploy/insure-staging/wrangler.auth.jsonc"]) {
+    assert.equal(vars(file).AUTH_MODE, "single-app", file);
+    assert.equal(vars(file).ENABLE_EMAIL_OTP, "true", file);
+  }
+});
+
 test("codes are short-lived, few-attempt, 6 digits; limits per 10 minutes and per day", () => {
   assert.equal(EMAIL_OTP.expiresIn, 600);
   assert.equal(EMAIL_OTP.allowedAttempts, 3);

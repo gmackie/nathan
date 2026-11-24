@@ -3,6 +3,7 @@
 Nathan's Better Auth OAuth Provider issues tokens and owns discovery, client registration, JWKS, refresh and revocation. Clients can be in the same account or on any other hosting provider.
 
 - Worker with service binding: session verification via private RPC; OIDC client optional.
+- Single-app instance (`AUTH_MODE=single-app`): the pinned app calls `beginEmailSignIn` / `finishEmailSignIn` on `NathanVerifier` and draws its own sign-in form. The methods return a subject and email, never a session cookie, a token, or an admin role. The identity hostname stays the instance's IdP management UI. Unset on a shared IdP (`id.gmac.io`); those methods then answer unavailable, as does a binding that is not pinned.
 - Worker or external web app: confidential OIDC client using authorization code + PKCE.
 - Mobile app: public OIDC client with PKCE, claimed HTTPS or loopback redirects.
 - CLI: device authorization where enabled.

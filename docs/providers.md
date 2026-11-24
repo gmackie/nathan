@@ -151,7 +151,7 @@ The Worker secret then becomes the provider's only credential source: it takes e
 
 ## Passwordless email sign-in (email code)
 
-NATH-49. Better Auth's first-party `emailOTP` plugin, for sign-in only: the person enters an email address, Nathan mails a 6-digit code, and the person enters it on the hosted sign-in page ("Email me a code"). It suits people who have no social account to use and should not hold a password, such as an app's outside bidders.
+NATH-49. Better Auth's first-party `emailOTP` plugin, for sign-in only: the person enters an email address, Nathan mails a 6-digit code, and the person enters it on the hosted sign-in page ("Email me a code"). It suits people who have no social account to use and should not hold a password, such as an app's outside bidders. On an instance with `AUTH_MODE=single-app` (NATH-52), the pinned app calls the same checks over `NathanVerifier` and draws its own form; the hosted page on the identity hostname remains the IdP management UI.
 
 **Enable it per instance.** It is off by default and existing instances do not change.
 
