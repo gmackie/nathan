@@ -1,0 +1,44 @@
+// Insure's dedicated staging identity Worker at insure-id-stg.gmac.io (NATH-50), deployed through ForgeGraph
+// (app "insure-id", stage "staging"). Insure (insure.gmac.io) signs users in here over OIDC (INSU-10).
+// Not a template for customer installs. Secrets (BETTER_AUTH_SECRET, NATHAN_CONFIG_KEY,
+// NATHAN_ADMIN_EMAILS, provider credentials) come from ForgeGraph's staging secret store for
+// insure-id and are uploaded with the Worker; none are written here.
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "nathan-insure-stg-auth",
+  "main": "../../src/auth/worker.ts",
+  // NATH-32: build the hashed Kumo UI assets the Worker bundles (src/ui/assets.ts). Wrangler runs
+  // this from the directory it is invoked in (the repository root), not this config's directory.
+  "build": { "command": "node scripts/build-ui.mjs" },
+  "compatibility_date": "2026-10-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "nathan-insure-stg-auth",
+      "database_id": "0bb9ee00-7388-4eac-9ddb-e0e0a9200704",
+      "migrations_dir": "../../migrations"
+    }
+  ],
+  "vars": {
+    "NATHAN_ISSUER": "https://insure-id-stg.gmac.io",
+    "NATHAN_SECURITY_PROFILE": "business",
+    "NATHAN_BOOTSTRAP_REQUIRED": "true",
+    "NATHAN_INSTALL_ACTIVE": "true",
+    "NATHAN_MCP_WRITE_ENABLED": "false",
+    "NATHAN_REALM_APEX": "",
+    "ENABLE_PASSWORD": "false",
+    "ENTERPRISE_SSO": "true",
+    "NATHAN_ADMIN_STEPUP_REQUIRED": "true",
+    "NATHAN_INSTANCE_NAME": "insure staging"
+  },
+  "routes": [{ "pattern": "insure-id-stg.gmac.io", "custom_domain": true }],
+  "triggers": { "crons": ["17 5 * * *"] },
+  "durable_objects": {
+    "bindings": [{ "name": "SCIM_DIRECTORY", "class_name": "NathanScimDirectory" }]
+  },
+  "migrations": [{ "tag": "nathan-scim-v1", "new_sqlite_classes": ["NathanScimDirectory"] }]
+}
