@@ -282,7 +282,8 @@ test("every Worker config builds the UI assets first, from the repository root",
   // Wrangler resolves build.cwd against the directory it is invoked in, not the config file's, and
   // ForgeGraph deploys from the repository root: a cwd of "../.." broke the staging deploy.
   for (const path of ["wrangler.auth.jsonc", "wrangler.gateway.jsonc", "wrangler.installer.jsonc",
-    "deploy/staging/wrangler.auth.jsonc", "deploy/production/wrangler.auth.jsonc"]) {
+    "deploy/staging/wrangler.auth.jsonc", "deploy/production/wrangler.auth.jsonc",
+    "deploy/insure-staging/wrangler.auth.jsonc", "deploy/insure-production/wrangler.auth.jsonc"]) {
     const text = readFileSync(path, "utf8");
     assert.ok(text.includes('"build": { "command": "node scripts/build-ui.mjs" }'), path);
     // The installer keeps its own static-assets binding, but only for sealed release files.
