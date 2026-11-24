@@ -88,4 +88,3 @@ export async function inVerifiedSsoDomain(db, email) {
   return rows.some(row => String(row.domain ?? "").toLowerCase().split(",").map(d => d.trim()).filter(Boolean)
     .some(d => domain === d || domain.endsWith("." + d)));
 }
-
