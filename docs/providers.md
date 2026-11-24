@@ -1,6 +1,6 @@
 # Social login providers
 
-Nathan supports six social login providers: **Google, GitHub, Apple, Discord, Twitch and X**. None of them offers an API to create OAuth clients, so you still create the client in each provider's console. Nathan does the rest. It links straight to the right console page, shows the exact callback URL with a copy button, lists short setup steps, checks your credentials before saving them, and runs a live test sign-in.
+Nathan supports six social login providers: **Google, GitHub, Apple, Discord, Twitch and X**, plus **Sign in with Nathan** (provider id `nathan`), which lets a parent Nathan instance be this instance's upstream. The Nathan upstream shares the registry, storage and Studio lifecycle described here; its discovery, trust and admission rules are in [nathan-upstream.md](nathan-upstream.md). None of them offers an API to create OAuth clients, so you still create the client in each provider's console. Nathan does the rest. It links straight to the right console page, shows the exact callback URL with a copy button, lists short setup steps, checks your credentials before saving them, and runs a live test sign-in.
 
 All three setup surfaces read the same registry (`src/shared/providers.mjs`), so they show identical callback URLs and steps:
 
@@ -10,7 +10,7 @@ All three setup surfaces read the same registry (`src/shared/providers.mjs`), so
 | Hosted installer | Step 3, "Configure first sign-in": any of the six as the first administrator's login |
 | CLI | `node scripts/nathan.mjs providers guide <id>` and `providers add <id> --apply` |
 
-Provider ids are `google`, `github`, `apple`, `discord`, `twitch` and `twitter` (X keeps Better Auth's `twitter` id, so its callback path ends in `/twitter`). Every callback has the form:
+Provider ids are `google`, `github`, `apple`, `discord`, `twitch`, `twitter` and `nathan` (X keeps Better Auth's `twitter` id, so its callback path ends in `/twitter`). Every callback has the form:
 
 ```
 https://<identity host>/api/auth/callback/<id>
@@ -47,7 +47,7 @@ https://<identity host>/api/auth/callback/<id>
 
 ## Email trust and account linking
 
-Sign-in always uses the redirect flow (state, and PKCE where the provider supports it). Direct ID-token sign-in and linking (`/sign-in/social` or `/link-social` with an `idToken`) is disabled for every provider, so a leaked provider ID token issued to Nathan's client ID cannot be replayed to sign in.
+Sign-in always uses the redirect flow (state, and PKCE where the provider supports it). Direct ID-token sign-in and linking (`/sign-in/social` or `/link-social` with an `idToken`) is disabled for every provider, so a leaked provider ID token issued to Nathan's client ID cannot be replayed to sign in. Since NATH-51 a Better Auth before-hook also refuses any such request (`ID_TOKEN_SIGN_IN_DISABLED`) whatever the provider.
 
 Nathan never trusts a provider by name (`trustedProviders: []`). Better Auth links a social account to an existing Nathan user only when both of these hold:
 
@@ -64,6 +64,7 @@ Different-email linking and profile overwrite on link are off. An email that is 
 | Discord | the user object's `verified` flag is `true` |
 | Twitch | the ID token's `email_verified` claim is `true` (Nathan requests the `email` and `email_verified` claims) |
 | X | X returns `confirmed_email`, which needs email access on the app |
+| Nathan upstream | the parent's UserInfo `email_verified` is exactly `true` **and** an administrator marked the parent trusted (same owner). Otherwise the sign-in is refused: no placeholder account ([nathan-upstream.md](nathan-upstream.md)) |
 
 **Admission.** The provider config never sets `disableSignUp`, `disableImplicitSignUp` or any other per-provider sign-up option. New-account admission is therefore identical for all six providers, and is decided by Nathan's installation-wide admission policy ([admission.md](admission.md), NATH-16). It is invitation-only by default: a social sign-in creates an account only for a provider-verified email with an open invitation, or in self-service mode. An unverified provider email becomes a placeholder address and never matches an invitation. Administrator rights still need the verified-email allowlist and an explicit grant.
 

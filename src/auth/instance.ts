@@ -1,6 +1,6 @@
 import { betterAuth } from "better-auth";
 import { passkeyRpName, instanceName } from "./passkey-config.mjs";
-import {createAuthMiddleware} from "better-auth/api";
+import {createAuthMiddleware, APIError} from "better-auth/api";
 import { admin, jwt, organization, twoFactor } from "better-auth/plugins";
 import { passkey } from "@better-auth/passkey";
 import { oauthProvider } from "@better-auth/oauth-provider";
@@ -11,7 +11,9 @@ import type { SocialCredentials } from "./provider-store";
 import { recordProviderSignIn } from "./provider-store";
 import { ACCOUNT_LINKING, buildSocialProviders } from "../shared/providers.mjs";
 import {mayAdminister} from "./bootstrap";
-import {isAdminPrincipal} from "./admin-service";
+import {isAdminPrincipal, audit} from "./admin-service";
+import { nathanUpstreamPlugin } from "./nathan-upstream.mjs";
+import { supersedeUnprovenAccount } from "./admission-policy.mjs";
 import { nathanAccessTokenExtension, guardAuthorizationScopes, MAX_ACCESS_TOKEN_SECONDS, API_SCOPE } from "./tokens";
 
 // NATH-15: the provider's scopes, also Better Auth's default for an authorization request without `scope`.
@@ -36,6 +38,15 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
       ? { github: { clientId: env.GITHUB_CLIENT_ID, clientSecret: env.GITHUB_CLIENT_SECRET } } : {})
   });
 
+  // NATH-51: the Nathan upstream ("Sign in with Nathan") is registered through genericOAuth, not as
+  // a Better Auth social provider. Only a trusted, discovered parent ever reaches this point.
+  const { nathan: upstream, ...social } = withInviteeSupersession(env, resolvedSocialProviders ?? socialProviders) as SocialCredentials;
+  const upstreamPlugins = upstream?.upstream === true ? [nathanUpstreamPlugin(upstream, {
+    onRefused: reason => audit(env, "system:nathan-upstream", "nathan_upstream_signin", "nathan", "refused_" + reason).catch(() => {}),
+    // NATH-16: like a verified social address, a verified parent address replaces a squatted provisional account.
+    onVerified: async email => { await supersedeUnprovenAccount(env.DB, email, "nathan"); }
+  })] : [];
+
   return betterAuth({
     // NATH-43: the name users see (TOTP issuer fallback, emails); "gmacko" at id.gmac.io.
     appName: instanceName(env),
@@ -54,7 +65,13 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
     databaseHooks: nathanDatabaseHooks(env),
     hooks: {
       // NATH-15: a client not marked agent may not have a user delegate nathan:api.
-      before: createAuthMiddleware(async (ctx) => guardAuthorizationScopes(env, ctx, OAUTH_SCOPES)),
+      before: createAuthMiddleware(async (ctx) => {
+        // NATH-9/NATH-51: sign-in and linking use the redirect flow only. A client-submitted ID token
+        // carries no state, PKCE or nonce bound to this browser, so it is refused for every provider.
+        if ((ctx.path === "/sign-in/social" || ctx.path === "/link-social") && ctx.body?.idToken)
+          throw new APIError("BAD_REQUEST", { code: "ID_TOKEN_SIGN_IN_DISABLED", message: "Sign in with the provider's redirect flow" });
+        return guardAuthorizationScopes(env, ctx, OAUTH_SCOPES);
+      }),
       after: createAuthMiddleware(async (ctx) => {
         // NATH-9: remember which social provider created a session, so a Studio test
         // sign-in can prove the provider round trip.
@@ -88,7 +105,7 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
     },
     trustedOrigins: [issuer.origin],
     // NATH-16: a verified provider address supersedes a squatted provisional password account.
-    socialProviders: withInviteeSupersession(env, resolvedSocialProviders ?? socialProviders),
+    socialProviders: social,
     emailAndPassword: {
       enabled: env.ENABLE_PASSWORD === "true",
       requireEmailVerification: true,
@@ -152,7 +169,8 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
         ...(env.NATHAN_PAIRWISE_SECRET ? { pairwiseSecret: env.NATHAN_PAIRWISE_SECRET } : {})
       }),
       // Hardened SAML/OIDC enterprise SSO options: see src/auth/saml-policy.mjs.
-      ...(env.ENTERPRISE_SSO === "true" ? [sso(ssoPluginOptions())] : [])
+      ...(env.ENTERPRISE_SSO === "true" ? [sso(ssoPluginOptions())] : []),
+      ...upstreamPlugins
     ]
   });
 }

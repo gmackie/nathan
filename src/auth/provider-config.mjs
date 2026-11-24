@@ -22,6 +22,7 @@ import {
 } from "../shared/providers.mjs";
 import { decryptProviderSecret, decryptProviderField, sealProviderCredentials } from "./config-crypto.mjs";
 import { mintAppleClientSecret } from "./apple-secret.mjs";
+import { resolveUpstream } from "./nathan-upstream.mjs";
 
 const CREDENTIAL_COLUMNS = "id,client_id,secret_cipher,config,secret_fields,updated_at,updated_by";
 const STATE_COLUMNS = "id,enabled,updated_at,updated_by,tested_at,tested_by,tested_user,tested_version";
@@ -135,9 +136,14 @@ async function inventory(env, only) {
 }
 const testCounts = p => Boolean(p.state?.tested_version && p.version && p.state.tested_version === p.version);
 
-/** Better Auth wants {clientId, clientSecret}; Apple's secret is minted from the .p8 key. */
-async function resolve(id, values) {
+/**
+ * Better Auth wants {clientId, clientSecret}; Apple's secret is minted from the .p8 key. The Nathan
+ * upstream (NATH-51) also needs its parent's validated discovery document, cached per isolate; a
+ * parent whose discovery fails is unusable (`unusable_credentials`) until it recovers.
+ */
+async function resolve(env, id, values) {
   if (id === "apple") return { clientId: values.clientId, clientSecret: await mintAppleClientSecret(values) };
+  if (id === "nathan") return resolveUpstream(values, { selfIssuer: env.NATHAN_ISSUER });
   return { clientId: values.clientId, clientSecret: values.clientSecret };
 }
 
@@ -174,7 +180,7 @@ export async function loadSocialProviderState(env) {
       if (source !== "not-configured") unavailable.push({ id, reason: unusableReason(source) });
       continue;
     }
-    try { out[id] = await resolve(id, values); }
+    try { out[id] = await resolve(env, id, values); }
     catch { unavailable.push({ id, reason: "unusable_credentials" }); }
   }
   if (health) await recordProviderHealth(env, unavailable, health).catch(() => {});
@@ -274,8 +280,13 @@ export async function providerStatus(env, deps = {}) {
       ? { reason: marked?.reason ?? unusableReason(source), since: marked?.first_failed_at ?? null } : null;
     if (unavailable) notices.push(name + " sign-in is unavailable: its credentials cannot be used, so the button is hidden and other methods keep working. " +
       "Save new credentials to repair it, or disable it.");
+    const guide = providerGuide(id, env.NATHAN_ISSUER);
+    // NATH-51: the upstream's OAuth client lives in the configured parent's own Identity Studio.
+    if (id === "nathan" && typeof values.issuer === "string") {
+      try { guide.consoleUrl = new URL(values.issuer).origin + "/studio"; } catch {}
+    }
     return {
-      ...providerGuide(id, env.NATHAN_ISSUER),
+      ...guide,
       enabled: p.enabled,
       available: source !== "not-configured" && switchedOn && !unavailable,
       unavailable,
@@ -298,10 +309,12 @@ export async function providerStatus(env, deps = {}) {
   });
 }
 
-async function validated(id, input) {
+async function validated(env, id, input) {
   const values = validateProviderCredentials(id, input);
   // Prove an Apple key can actually sign before storing it.
   if (id === "apple") await mintAppleClientSecret(values);
+  // NATH-51: prove the parent publishes a usable discovery document for exactly this issuer.
+  if (id === "nathan") await resolveUpstream(values, { selfIssuer: env.NATHAN_ISSUER, fresh: true });
   return values;
 }
 
@@ -323,7 +336,7 @@ export async function upsertSocialProvider(env, input, actor, deps) {
   if (!id) return fail("failed_validation", inputError("Unsupported social provider"));
   if (hasWorkerSecret(env, id)) return fail("denied_worker_secret", inputError(workerSecretManaged(id)));
   let values;
-  try { values = await validated(id, input); } catch (e) { return fail("failed_validation", e); }
+  try { values = await validated(env, id, input); } catch (e) { return fail("failed_validation", e); }
   if (!env.NATHAN_CONFIG_KEY)
     return fail("failed_config_key", inputError("NATHAN_CONFIG_KEY missing: provision the encryption key before updating providers"));
   try {
@@ -423,7 +436,7 @@ export async function beginProviderTest(env, input, actor, deps) {
   getProvider(id);
   const [provider] = await inventory(env, id);
   if (!provider.enabled) await refuse(id, "rejected_disabled", "Provider must be configured and enabled before a test sign-in");
-  try { await resolve(id, provider.values); }
+  try { await resolve(env, id, provider.values); }
   catch { await refuse(id, "rejected_unusable_credentials", PROVIDERS[id].name + " credentials cannot be used for sign-in"); }
   const ticket = base64url(crypto.getRandomValues(new Uint8Array(32)));
   await env.DB.prepare("DELETE FROM nathan_provider_test_tickets WHERE expires_at<unixepoch()-86400").run();

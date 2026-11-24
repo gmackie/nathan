@@ -1,6 +1,6 @@
 import type { AuthEnv } from "./env";
 import { audit, isAdminPrincipal } from "./admin-service";
-import { buildSocialProviders, PROVIDER_IDS } from "../shared/providers.mjs";
+import { buildSocialProviders, PROVIDER_IDS, signInLabel } from "../shared/providers.mjs";
 import * as config from "./provider-config.mjs";
 
 /** Better Auth `socialProviders` built from the shared registry (NATH-9). */
@@ -15,6 +15,10 @@ export async function loadSocialCredentials(env: AuthEnv): Promise<SocialCredent
 /** Enabled provider ids in registry order (sign-in page buttons). */
 export function enabledProviderIds(providers: SocialCredentials): string[] {
   return PROVIDER_IDS.filter(id => Boolean(providers[id]));
+}
+/** Sign-in button text per enabled provider; the Nathan upstream uses its configured name (NATH-51). */
+export function providerLabels(providers: SocialCredentials): Record<string, string> {
+  return Object.fromEntries(enabledProviderIds(providers).map(id => [id, signInLabel(id, providers[id]?.displayName)]));
 }
 /** Audit sink and the authoritative admin predicate (also used for the last-login-method rule). */
 function deps(env: AuthEnv) {

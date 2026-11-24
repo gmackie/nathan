@@ -3,7 +3,7 @@ import { TOKENS_STUDIO_HTML, TOKENS_STUDIO_SCRIPT } from "./tokens-ui.ts";
 import { MCP_STUDIO_HTML, MCP_STUDIO_SCRIPT } from "./mcp-ui.ts";
 import { SCIM_LIFECYCLE_HTML, SCIM_LIFECYCLE_SCRIPT } from "./scim-ui.ts";
 import { ADMISSION_STUDIO_HTML, ADMISSION_STUDIO_SCRIPT } from "./admission-ui.ts";
-import { displayName } from "../shared/providers.mjs";
+import { signInLabel } from "../shared/providers.mjs";
 import { providerStudioSection, providerStudioScript } from "./provider-ui.mjs";
 import { samlStudioSection, samlStudioScript } from "./saml-ui.mjs";
 import { samlIdpStudioSection, samlIdpStudioScript } from "./saml-idp-ui.mjs";
@@ -33,8 +33,9 @@ function page(title: string, body: string, script = ""): Response {
   });
 }
 
-export function signInPage(providers: string[], passwordEnabled: boolean, enterpriseSso=false): Response {
-  const buttons=providers.map(p=>'<button data-provider="'+htmlEscape(p)+'">Continue with '+htmlEscape(displayName(p))+'</button>').join("");
+export function signInPage(providers: string[], passwordEnabled: boolean, enterpriseSso=false, labels: Record<string,string>={}): Response {
+  // NATH-51: "Sign in with <name>" for the Nathan upstream; "Continue with <provider>" otherwise.
+  const buttons=providers.map(p=>'<button data-provider="'+htmlEscape(p)+'">'+htmlEscape(labels[p]??signInLabel(p))+'</button>').join("");
   const password=passwordEnabled?'<h2>Email/password</h2><label>Email<input id="email" type="email" autocomplete="username"></label>'+
     '<label>Password<input id="password" type="password" autocomplete="current-password"></label>'+
     '<button id="password-submit">Sign in</button>'+

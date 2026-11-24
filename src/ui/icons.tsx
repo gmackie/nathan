@@ -21,6 +21,7 @@ import { Fingerprint } from "@phosphor-icons/react/dist/ssr/Fingerprint";
 import { Gear } from "@phosphor-icons/react/dist/ssr/Gear";
 import { GithubLogo } from "@phosphor-icons/react/dist/ssr/GithubLogo";
 import { GoogleLogo } from "@phosphor-icons/react/dist/ssr/GoogleLogo";
+import { IdentificationBadge } from "@phosphor-icons/react/dist/ssr/IdentificationBadge";
 import { IdentificationCard } from "@phosphor-icons/react/dist/ssr/IdentificationCard";
 import { Info } from "@phosphor-icons/react/dist/ssr/Info";
 import { Key } from "@phosphor-icons/react/dist/ssr/Key";
@@ -47,7 +48,9 @@ export const PROVIDER_ICONS: Readonly<Record<string, PhosphorIcon>> = {
   apple: AppleLogo,
   discord: DiscordLogo,
   twitch: TwitchLogo,
-  twitter: XLogo
+  twitter: XLogo,
+  // NATH-51: a parent Nathan instance ("Sign in with Nathan").
+  nathan: IdentificationBadge
 };
 
 /** Shown for a provider without a logo of its own (custom OIDC, enterprise SSO, future ids). */

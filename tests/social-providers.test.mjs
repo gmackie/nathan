@@ -18,6 +18,8 @@ import {
 } from "../src/auth/provider-config.mjs";
 
 const HOST = "login.example.com";
+/** The six social providers; the Nathan upstream (NATH-51) is tested in nathan-upstream.test.mjs. */
+const SOCIAL_IDS = PROVIDER_IDS.filter(id => id !== "nathan");
 
 /** A P-256 PKCS#8 key in Apple's .p8 PEM format, plus its public key. */
 async function appleKey() {
@@ -38,12 +40,14 @@ const VALID = {
   apple: { clientId: "com.example.login", teamId: "ABCDE12345", keyId: "KEY1234567", privateKey: apple.pem },
   discord: { clientId: "123456789012345678", clientSecret: "AbCdEfGhIjKlMnOpQrStUvWxYz012345" },
   twitch: { clientId: "abcdefghijklmnopqrstuvwxyz0123", clientSecret: "0123456789abcdefghijklmnopqrst" },
-  twitter: { clientId: "M1M5R3BMVy13QmpScXkzTUt5OE46MTpjaQ", clientSecret: "aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789-_aBcDeFgHiJ" }
+  twitter: { clientId: "M1M5R3BMVy13QmpScXkzTUt5OE46MTpjaQ", clientSecret: "aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789-_aBcDeFgHiJ" },
+  nathan: { issuer: "https://id.example.com/api/auth", clientId: "parentClient123", clientSecret: "pArEnTsEcReT0123456789abcdefXYZ",
+    displayName: "Example ID", trustEmailVerified: "true" }
 };
 
-test("the registry covers exactly the six guided providers with complete setup guides", () => {
-  assert.deepEqual(PROVIDER_IDS, ["google", "github", "apple", "discord", "twitch", "twitter"]);
-  for (const id of PROVIDER_IDS) {
+test("the registry covers exactly the six guided providers and the Nathan upstream, with complete setup guides", () => {
+  assert.deepEqual(PROVIDER_IDS, ["google", "github", "apple", "discord", "twitch", "twitter", "nathan"]);
+  for (const id of SOCIAL_IDS) {
     const p = PROVIDERS[id];
     assert.equal(p.id, id);
     assert.match(p.consoleUrl, /^https:\/\//, id + " console deep link");
@@ -55,6 +59,13 @@ test("the registry covers exactly the six guided providers with complete setup g
   assert.equal(PROVIDERS.twitter.name, "X");
   assert.equal(PROVIDERS.apple.responseMode, "form_post");
   assert.deepEqual(PROVIDERS.apple.fields.map(f => f.name), ["clientId", "teamId", "keyId", "privateKey"]);
+  // NATH-51: no fixed console (the client is registered in the parent's own Studio), same guide shape otherwise.
+  const n = PROVIDERS.nathan;
+  assert.equal(n.consoleUrl, null);
+  assert.match(n.consoleHint, /Identity Studio/);
+  assert.ok(n.steps.length >= 3 && n.fields.some(f => f.secret) && n.emailTrust.length > 20);
+  assert.deepEqual(n.fields.map(f => f.name), ["issuer", "clientId", "clientSecret", "displayName", "trustEmailVerified"]);
+  assert.deepEqual(n.scopes, ["openid", "email", "profile"]);
 });
 
 test("callback URLs are exact and identical in the registry, Studio guide, installer and CLI", () => {
@@ -83,7 +94,8 @@ test("credential validation accepts each provider's real formats and rejects mal
     assert.deepEqual(Object.keys(v).sort(), PROVIDERS[id].fields.map(f => f.name).sort(), id);
     assert.ok(!("unrelated" in v));
     for (const field of PROVIDERS[id].fields) {
-      assert.throws(() => validateProviderCredentials(id, { ...VALID[id], [field.name]: "" }), id + "." + field.name + " empty");
+      if (field.optional) assert.ok(!(field.name in validateProviderCredentials(id, { ...VALID[id], [field.name]: "" })), id + "." + field.name + " optional");
+      else assert.throws(() => validateProviderCredentials(id, { ...VALID[id], [field.name]: "" }), id + "." + field.name + " empty");
       assert.throws(() => validateProviderCredentials(id, { ...VALID[id], [field.name]: "x".repeat(20000) }), id + "." + field.name + " huge");
       assert.throws(() => validateProviderCredentials(id, { ...VALID[id], [field.name]: 42 }), id + "." + field.name + " type");
     }
@@ -95,8 +107,12 @@ test("credential validation accepts each provider's real formats and rejects mal
     apple: { teamId: "abcde12345", keyId: "SHORT", clientId: "nodots", privateKey: "-----BEGIN RSA PRIVATE KEY-----\nabc\n-----END RSA PRIVATE KEY-----" },
     discord: { clientId: "not-a-snowflake" },
     twitch: { clientId: "UPPERCASEUPPERCASEUPPERCASE123" },
-    twitter: { clientSecret: "short" }
+    twitter: { clientSecret: "short" },
+    nathan: { issuer: "http://id.example.com/api/auth", trustEmailVerified: "false", displayName: "<script>" }
   };
+  for (const issuer of ["https://id.example.com/api/auth/", "https://id.example.com/api/auth?x=1", "https://id.example.com#f",
+    "https://user@id.example.com", "javascript:alert(1)", "https://ID.example.com"])
+    assert.throws(() => validateProviderCredentials("nathan", { ...VALID.nathan, issuer }), "nathan issuer " + issuer);
   for (const [id, fields] of Object.entries(bad))
     for (const [name, value] of Object.entries(fields))
       assert.throws(() => validateProviderCredentials(id, { ...VALID[id], [name]: value }), id + "." + name + " format");
@@ -120,10 +136,10 @@ test("validation errors never echo a submitted secret", () => {
 });
 
 test("the Better Auth config builder emits only enabled providers with trust-preserving profile mapping", async () => {
-  const resolved = Object.fromEntries(PROVIDER_IDS.map(id => [id, { clientId: "cid-" + id, clientSecret: "secret-" + id }]));
+  const resolved = Object.fromEntries(SOCIAL_IDS.map(id => [id, { clientId: "cid-" + id, clientSecret: "secret-" + id }]));
   const built = buildSocialProviders(resolved);
-  assert.deepEqual(Object.keys(built), PROVIDER_IDS);
-  for (const id of PROVIDER_IDS) {
+  assert.deepEqual(Object.keys(built), SOCIAL_IDS);
+  for (const id of SOCIAL_IDS) {
     assert.equal(built[id].clientId, "cid-" + id);
     assert.equal(built[id].clientSecret, "secret-" + id);
     // Admission stays uniform: no provider may bypass or alter sign-up policy.
@@ -287,7 +303,7 @@ function d1(db) {
 }
 function storeEnv(vars = {}) {
   const db = new DatabaseSync(":memory:");
-  for (const f of ["0002_better_auth.sql", "0003_security_audit.sql", "0006_control_plane.sql", "0012_social_providers.sql"])
+  for (const f of ["0002_better_auth.sql", "0003_security_audit.sql", "0006_control_plane.sql", "0012_social_providers.sql", "0019_nathan_upstream.sql"])
     db.exec(readFileSync("migrations/" + f, "utf8"));
   const events = [];
   const audit = async (_env, actor, action, target, outcome) => { events.push({ actor, action, target, outcome }); };

@@ -5,7 +5,7 @@
  * ever sent to the server, never read back.
  */
 export const providerStudioSection = `<h2>Social login providers</h2>
-  <p>Configure Google, GitHub, Apple, Discord, Twitch and X without redeploying. None of these services lets Nathan create the OAuth app for you, so each card links straight to the right console page, gives the exact callback URL to paste, and checks your credentials before saving. Secrets are encrypted in your own D1 database and are never shown again.</p>
+  <p>Configure Google, GitHub, Apple, Discord, Twitch and X, or a parent Nathan instance (“Sign in with Nathan”), without redeploying. None of these services lets Nathan create the OAuth app for you, so each card links straight to the right console page, gives the exact callback URL to paste, and checks your credentials before saving. Secrets are encrypted in your own D1 database and are never shown again.</p>
   <p><small>Each provider has one credential source: a <code>NATHAN_PROVIDER_&lt;ID&gt;</code> Worker secret set by the CLI wins over credentials saved here, which win over legacy Worker secrets. You can disable a provider only while another enabled login method has a successful test sign-in by a Nathan administrator with its current credentials. Changing credentials, by any path, voids that provider's test.</small></p>
   <button class="secondary" id="providers-refresh">Refresh providers</button>
   <p id="providers-status" role="status"></p>
@@ -37,14 +37,17 @@ export const providerStudioScript = String.raw`
         const callback=el('code',{text:p.callbackUrl});
         const copy=el('button',{type:'button',className:'secondary',text:'Copy callback URL'});
         copy.addEventListener('click',()=>navigator.clipboard.writeText(p.callbackUrl).then(()=>{result.textContent='Callback URL copied.'}));
-        const consoleLink=el('a',{href:p.consoleUrl,target:'_blank',rel:'noopener noreferrer',text:'Open the '+p.name+' developer console ↗'});
+        // NATH-51: the Nathan upstream's client lives in the parent's Studio (known once an issuer is saved).
+        const consoleLink=p.consoleUrl?el('a',{href:p.consoleUrl,target:'_blank',rel:'noopener noreferrer',
+          text:(p.id==='nathan'?'Open the parent Identity Studio':'Open the '+p.name+' developer console')+' ↗'}):el('p',{text:p.consoleHint||''});
         const inputs={};
         const fields=p.fields.map(f=>{
           const set=p.secretsSet.includes(f.name);
-          const input=f.multiline?el('textarea',{rows:6,autocomplete:'off',spellcheck:false}):
+          const input=f.checkbox?el('input',{type:'checkbox'}):f.multiline?el('textarea',{rows:6,autocomplete:'off',spellcheck:false}):
             el('input',{type:f.secret?'password':'text',autocomplete:f.secret?'new-password':'off',spellcheck:false});
           input.id='prov-'+p.id+'-'+f.name;
-          if(!f.secret&&p.values[f.name])input.value=p.values[f.name];
+          if(f.checkbox)input.checked=p.values[f.name]==='true';
+          else if(!f.secret&&p.values[f.name])input.value=p.values[f.name];
           input.placeholder=f.secret?(set?'Stored and encrypted. Enter a new value to rotate.':'Paste '+f.label):(f.hint||'');
           inputs[f.name]={field:f,input};
           const label=el('label',{htmlFor:input.id},[document.createTextNode(f.label),input]);
@@ -59,7 +62,8 @@ export const providerStudioScript = String.raw`
         function collect(){
           const values={},errors=[];
           for(const {field,input} of Object.values(inputs)){
-            const v=normalize(field,input.value);
+            const v=field.checkbox?(input.checked?'true':''):normalize(field,input.value);
+            if(field.optional&&v==='')continue;
             if(v.length<field.min||v.length>field.max||!new RegExp(field.pattern).test(v))errors.push(field.label+(field.hint?' ('+field.hint+')':''));
             values[field.name]=v;
           }

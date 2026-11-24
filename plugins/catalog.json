@@ -43,6 +43,16 @@
       "securityReviewed": false
     },
     {
+      "id": "generic-oauth",
+      "name": "Sign in with Nathan (parent instance upstream)",
+      "tier": "verified",
+      "packageName": "better-auth/plugins/generic-oauth",
+      "activation": "compiled",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
       "id": "organization",
       "name": "Organizations",
       "tier": "verified",

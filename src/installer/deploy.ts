@@ -186,7 +186,7 @@ function b64url(count:number) {
 /** First-admin login provider, validated by the shared registry (NATH-9). Never echoes values. */
 async function validateProvider(payload:any) {
   if(!payload||!PROVIDER_IDS.includes(payload.provider))
-    throw Error("Select a supported login provider (Google, GitHub, Apple, Discord, Twitch or X) for first administrator login");
+    throw Error("Select a supported login provider (Google, GitHub, Apple, Discord, Twitch, X or a parent Nathan instance) for first administrator login");
   let values:Record<string,string>;
   try{values=validateProviderCredentials(payload.provider,payload) as Record<string,string>}
   catch(e){throw Error((e as {publicMessage?:string}).publicMessage||"Provider credentials are required at initial upload")}

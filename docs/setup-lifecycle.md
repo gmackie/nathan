@@ -61,6 +61,8 @@ Visit \`https://login.example.com/studio\` as a fully enrolled administrator. Se
 
 Each provider has one credential source: the CLI's \`NATHAN_PROVIDER_<ID>\` Worker secret, else credentials encrypted in \`nathan_oauth_providers\` (Studio or installer), else legacy Worker secrets. Credentials are never copied between sources, and Studio reports any that are present but unused. Disabling a provider never falls back to other credentials. A single conditional D1 write prevents disabling a provider unless another enabled provider has a test sign-in by a current administrator against its current credentials (or password/enterprise SSO is enabled and usable by an administrator). Changing credentials by any path voids the test. See [providers.md](providers.md).
 
+A parent Nathan instance can also be a sign-in method ("Sign in with Nathan", provider id \`nathan\`, NATH-51). It is configured with the parent's exact issuer, a client registered in the parent's Studio for \`https://<this host>/api/auth/callback/nathan\`, and an explicit "trust the parent's email_verified (same owner)" flag, and has the same lifecycle as the social providers. Endpoints come only from the parent's discovery document. Account creation still follows this instance's admission policy, and the parent's MFA never counts as local assurance. See [nathan-upstream.md](nathan-upstream.md).
+
 \`NATHAN_CONFIG_KEY\` is held in Cloudflare Workers Secrets; losing it renders managed provider credentials undecryptable. Operators must back up the key in a separate secure secrets manager and rotate credentials deliberately. Encryption at rest does not eliminate the need for access controls, database backups, key rotation, and incident handling.
 
 ### Enterprise OIDC federation
@@ -104,6 +106,7 @@ See [staging-checklist.md](staging-checklist.md). Integration tests must cover:
 - Wrong Cloudflare owner, email mismatch, replayed installer job, forged session cookie and MFA-bypass attempts.
 - Setup and rotation of all six social providers from wizard, Studio and CLI without leaking client secrets or the Apple key.
 - Enterprise OIDC registration, TXT ownership verification, untrusted-provider rejection and account-linking safety.
+- Sign in with Nathan against the real parent: discovery from the exact issuer, a verified and an unverified parent address, admission refusal and invitation claim, linking to a verified child account, and a Studio test sign-in ([nathan-upstream.md](nathan-upstream.md)).
 - SCIM group/user CRUD, duplicate externalId rejection, disabled connection, token rotation/revocation, PATCH and concurrency, with no automatic auth access.
 - Added admin grant and revocation, including online authorization checks and expired bearer tokens.
 - Live Cloudflare D1, Workers and SQLite Durable Object behavior, recovery drills and independent protocol review.

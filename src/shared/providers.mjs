@@ -11,7 +11,17 @@
  * absent email can never link to, squat on, or be mistaken for a real Nathan account.
  */
 
-export const PROVIDER_IDS = ["google", "github", "apple", "discord", "twitch", "twitter"];
+export const PROVIDER_IDS = ["google", "github", "apple", "discord", "twitch", "twitter", "nathan"];
+
+/**
+ * NATH-51: "Sign in with Nathan". A parent Nathan instance as an upstream OIDC provider for this
+ * (child) instance. Unlike the six social providers it has no fixed endpoints: everything comes from
+ * the configured issuer's discovery document (src/auth/nathan-upstream.mjs), and its email is trusted
+ * only because an administrator explicitly marked the parent as trusted (docs/nathan-upstream.md).
+ */
+export const NATHAN_UPSTREAM_ID = "nathan";
+/** Default sign-in label word for the upstream ("Sign in with Nathan"). */
+export const NATHAN_UPSTREAM_DEFAULT_NAME = "Nathan";
 
 /** Better Auth's OAuth callback route under the issuer's /api/auth base path. */
 export const CALLBACK_PATH_PREFIX = "/api/auth/callback/";
@@ -29,7 +39,7 @@ export function callbackUrl(host, id) {
   if (h.charAt(h.length - 1) === "/") h = h.slice(0, -1);
   if (h.length > 253 || !/^(localhost|([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?)(:[0-9]{1,5})?$/.test(h))
     throw new Error("Invalid identity hostname");
-  if (["google", "github", "apple", "discord", "twitch", "twitter"].indexOf(id) < 0)
+  if (["google", "github", "apple", "discord", "twitch", "twitter", "nathan"].indexOf(id) < 0)
     throw new Error("Unsupported social provider");
   return "https://" + h + "/api/auth/callback/" + id;
 }
@@ -37,6 +47,9 @@ export function callbackUrl(host, id) {
 const CLIENT_SECRET = (pattern, hint, extra = {}) => ({
   name: "clientSecret", label: "Client secret", secret: true, min: 20, max: 200, pattern, hint, ...extra
 });
+
+/** Allowed upstream button names: plain text only, it is rendered on a credential page. */
+const NATHAN_NAME_PATTERN = "^[A-Za-z0-9][A-Za-z0-9 .'&()_-]{0,39}$";
 
 /** Provider definitions. `pattern` strings are shared with the browser forms. */
 export const PROVIDERS = {
@@ -177,6 +190,44 @@ export const PROVIDERS = {
       "X always uses PKCE; Nathan sends an S256 code challenge."
     ],
     legacyEnv: null
+  },
+  nathan: {
+    id: "nathan", name: "Nathan upstream",
+    // The OAuth client is registered in the parent instance's own Identity Studio, so there is no
+    // fixed console URL. Studio links the configured parent's /studio instead.
+    consoleUrl: null,
+    consoleHint: "The parent Nathan instance's Identity Studio → OAuth clients",
+    docsUrl: "https://openid.net/specs/openid-connect-core-1_0.html",
+    scopes: ["openid", "email", "profile"],
+    responseMode: "query",
+    steps: [
+      "On the parent Nathan instance (for example https://id.gmac.io), sign in to Identity Studio as an administrator and open OAuth clients.",
+      "Register a client: kind “external”, confidential (not public), with the callback URL below as its only redirect URI. Nathan clients use authorization code + PKCE and client_secret_basic.",
+      "Copy the client ID and the client secret it shows once.",
+      "Here, enter the parent's issuer exactly as its discovery document states it (for a Nathan parent, https://<parent host>/api/auth), the client ID and secret, and optionally the name shown on the button (“gmacko ID” shows “Sign in with gmacko ID”).",
+      "Tick the trust box only if the parent is operated by the same owner as this instance: this instance then accepts the parent's email_verified claim as proof of the address.",
+      "Save, then run a test sign-in as an administrator."
+    ],
+    fields: [
+      { name: "issuer", label: "Parent issuer", secret: false, min: 12, max: 300,
+        pattern: "^https://[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._~-]+)*$",
+        hint: "Exact issuer, e.g. https://id.gmac.io/api/auth (no trailing slash)" },
+      { name: "clientId", label: "Client ID", secret: false, min: 8, max: 200, pattern: "^[A-Za-z0-9._~-]{8,200}$",
+        hint: "From the client you registered on the parent" },
+      CLIENT_SECRET("^[A-Za-z0-9._~+/=-]{20,300}$", "Shown once by the parent's Identity Studio", { max: 300 }),
+      { name: "displayName", label: "Button name", secret: false, optional: true, min: 1, max: 40,
+        pattern: NATHAN_NAME_PATTERN, hint: "Optional. “gmacko ID” shows “Sign in with gmacko ID”; empty shows “Sign in with Nathan”" },
+      { name: "trustEmailVerified", label: "Trust the parent's email_verified (same owner)", secret: false, checkbox: true, min: 4, max: 4,
+        pattern: "^true$", hint: "Required. Only for a parent operated by the same owner: its verified addresses then link to and create accounts here" }
+    ],
+    emailTrust: "Only the parent's ID token email, only when its email_verified claim is exactly true, and only because an administrator marked this parent as trusted (same owner). Anything else is refused: no account is created or linked.",
+    gotchas: [
+      "Endpoints come only from the issuer's discovery document; the issuer, authorization, token and JWKS URLs must be HTTPS on the issuer's own origin.",
+      "The parent's MFA is not local MFA: a sign-in through the parent never produces nathan_amr, nathan_acr or administrator assurance here.",
+      "Account creation still follows this instance's admission policy (invitation-only by default).",
+      "Administrator rights here still need this instance's allowlist and an explicit grant; parent administrators get nothing automatically."
+    ],
+    legacyEnv: null
   }
 };
 
@@ -205,6 +256,12 @@ export function getProvider(id) {
 export function displayName(id) {
   return hasProvider(id) ? PROVIDERS[id].name : String(id);
 }
+/** Hosted sign-in button text. The Nathan upstream uses its configured name ("Sign in with gmacko ID"). */
+export function signInLabel(id, name) {
+  if (id === NATHAN_UPSTREAM_ID)
+    return "Sign in with " + (typeof name === "string" && new RegExp(NATHAN_NAME_PATTERN).test(name) ? name : NATHAN_UPSTREAM_DEFAULT_NAME);
+  return "Continue with " + displayName(id);
+}
 export function secretFieldNames(id) {
   return getProvider(id).fields.filter(f => f.secret).map(f => f.name);
 }
@@ -228,6 +285,7 @@ export function validateProviderCredentials(id, input) {
   const values = {};
   for (const field of provider.fields) {
     const raw = Object.prototype.hasOwnProperty.call(source, field.name) ? source[field.name] : undefined;
+    if (field.optional && (raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === ""))) continue;
     if (typeof raw !== "string" || raw.length > 16384) throw inputError(provider.name + " " + field.label + " is missing or invalid");
     const value = normalize(field, raw);
     if (value.length < field.min || value.length > field.max || !new RegExp(field.pattern).test(value))
@@ -241,7 +299,7 @@ export function validateProviderCredentials(id, input) {
 export function providerGuide(id, host) {
   const p = getProvider(id);
   return {
-    id: p.id, name: p.name, consoleUrl: p.consoleUrl, docsUrl: p.docsUrl,
+    id: p.id, name: p.name, consoleUrl: p.consoleUrl, consoleHint: p.consoleHint ?? null, docsUrl: p.docsUrl,
     callbackUrl: callbackUrl(host, p.id), responseMode: p.responseMode, scopes: [...p.scopes],
     steps: [...p.steps], gotchas: [...p.gotchas], emailTrust: p.emailTrust,
     fields: p.fields.map(f => ({ ...f }))
@@ -256,7 +314,7 @@ export function installerRegistry() {
     callbackUrlSource: callbackUrl.toString(),
     providers: PROVIDER_IDS.map(id => {
       const p = PROVIDERS[id];
-      return { id: p.id, name: p.name, consoleUrl: p.consoleUrl, steps: [...p.steps], gotchas: [...p.gotchas],
+      return { id: p.id, name: p.name, consoleUrl: p.consoleUrl, consoleHint: p.consoleHint ?? null, steps: [...p.steps], gotchas: [...p.gotchas],
         emailTrust: p.emailTrust, responseMode: p.responseMode, fields: p.fields.map(f => ({ ...f })) };
     })
   };
@@ -318,6 +376,15 @@ export function buildSocialProviders(resolved, options = {}) {
   for (const id of PROVIDER_IDS) {
     const c = resolved && Object.prototype.hasOwnProperty.call(resolved, id) ? resolved[id] : null;
     if (!c || typeof c.clientId !== "string" || typeof c.clientSecret !== "string") continue;
+    // NATH-51: the Nathan upstream is not a Better Auth social provider. Its resolved, discovered
+    // configuration is handed to createAuth, which registers it through genericOAuth
+    // (src/auth/nathan-upstream.mjs). Only an explicitly trusted parent is ever built.
+    if (id === NATHAN_UPSTREAM_ID) {
+      if (c.trustEmailVerified === "true" && c.discovery && typeof c.issuer === "string")
+        out.nathan = { upstream: true, clientId: c.clientId, clientSecret: c.clientSecret, issuer: c.issuer,
+          displayName: c.displayName, trustEmailVerified: "true", discovery: c.discovery };
+      continue;
+    }
     // Nathan's sign-in uses only the redirect flow. Direct ID-token sign-in/linking would
     // accept a leaked provider ID token for Nathan's client id without state, PKCE or nonce.
     const base = { clientId: c.clientId, clientSecret: c.clientSecret, disableIdTokenSignIn: true };

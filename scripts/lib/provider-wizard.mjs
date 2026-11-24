@@ -15,6 +15,7 @@ export function providerGuide(name, hostname) {
     provider: g.id,
     name: g.name,
     consoleUrl: g.consoleUrl,
+    consoleHint: g.consoleHint,
     callback: g.callbackUrl,
     responseMode: g.responseMode,
     scopes: g.scopes,
@@ -29,7 +30,7 @@ export function providerGuide(name, hostname) {
 
 function printGuide(info) {
   console.log("\n" + info.name + " sign-in setup");
-  console.log("Console:  " + info.consoleUrl);
+  console.log("Console:  " + (info.consoleUrl || info.consoleHint));
   console.log("Callback: " + info.callback + (info.responseMode === "form_post" ? "  (Apple posts the response: response_mode=form_post)" : ""));
   console.log("Scopes:   " + info.scopes.join(" "));
   console.log("\n" + info.instructions);
@@ -45,7 +46,8 @@ async function collectCredentials(id) {
       const path = await ask(field.label + " file path (" + field.file + ")");
       values[field.name] = await readFile(path, "utf8");
     } else if (field.secret) values[field.name] = await secretPrompt(field.label + " (masked)");
-    else values[field.name] = await ask(field.label + (field.hint ? " — " + field.hint : ""));
+    else if (field.checkbox) values[field.name] = (await yesNo(field.label + "? " + field.hint)) ? "true" : "";
+    else values[field.name] = await ask(field.label + (field.optional ? " (optional)" : "") + (field.hint ? " — " + field.hint : ""));
   }
   return validateProviderCredentials(id, values);
 }

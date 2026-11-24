@@ -4,7 +4,7 @@ import { verifyOAuthQueryParams } from "@better-auth/oauth-provider";
 import { createAuth } from "./instance";
 import {isRawManagementEndpoint} from "./management-boundary.mjs";
 import { loadSocialCredentials, providerStatus, upsertSocialProvider, setSocialProviderEnabled } from "./provider-store";
-import { enabledProviderIds, beginProviderTest, completeProviderTest } from "./provider-store";
+import { enabledProviderIds, providerLabels, beginProviderTest, completeProviderTest } from "./provider-store";
 import { providerTestResultPage } from "./provider-ui.mjs";
 import {bootstrapStatus,completeBootstrap,mayAdminister} from "./bootstrap";
 import { totpQrResponse } from "./totp-qr";
@@ -88,7 +88,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
       if (session?.user?.id) return Response.redirect(issuer.origin + "/security", 302);
     }
     const providers = enabledProviderIds(socialProviders);
-    return signInPage(providers, env.ENABLE_PASSWORD === "true", env.ENTERPRISE_SSO === "true");
+    return signInPage(providers, env.ENABLE_PASSWORD === "true", env.ENTERPRISE_SSO === "true", providerLabels(socialProviders));
   }
   if (url.pathname === "/consent" && request.method === "GET") {
     const { secret } = await auth.$context;

@@ -21,10 +21,10 @@ import { callbackUrl, installerRegistry } from "../../../shared/providers.mjs";
 
 interface ProviderField {
   name: string; label: string; secret: boolean; min: number; max: number; pattern: string;
-  hint?: string; multiline?: boolean; file?: string;
+  hint?: string; multiline?: boolean; file?: string; optional?: boolean; checkbox?: boolean;
 }
 interface Provider {
-  id: string; name: string; consoleUrl: string; steps: string[]; gotchas: string[]; emailTrust: string; fields: ProviderField[];
+  id: string; name: string; consoleUrl: string | null; consoleHint: string | null; steps: string[]; gotchas: string[]; emailTrust: string; fields: ProviderField[];
 }
 interface Option { id: string; name: string }
 interface JobStep { stage: string; status: string }
@@ -133,6 +133,7 @@ export function InstallerWizard({ initialHostname = "", initialProvider }: Insta
     for (const f of p.fields) {
       const raw = values[f.name] ?? "";
       const v = f.multiline ? raw.replace(/\r\n?/g, "\n").trim() : raw.trim();
+      if (f.optional && v === "") continue;
       if (v.length < f.min || v.length > f.max || !new RegExp(f.pattern).test(v)) bad.push(f.label + (f.hint ? " (" + f.hint + ")" : ""));
       out[f.name] = v;
     }
@@ -290,7 +291,9 @@ export function InstallerWizard({ initialHostname = "", initialProvider }: Insta
             <strong>Provider console guide</strong>
             <ol className="nathan-list">{provider.steps.map(s => <li key={s}>{s}</li>)}</ol>
             <p className="nathan-text">
-              <a className="nathan-link" href={provider.consoleUrl} target="_blank" rel="noopener noreferrer">{"Open the " + provider.name + " developer console"}</a>
+              {provider.consoleUrl
+                ? <a className="nathan-link" href={provider.consoleUrl} target="_blank" rel="noopener noreferrer">{"Open the " + provider.name + " developer console"}</a>
+                : provider.consoleHint}
             </p>
             <p className="nathan-text">Authorized redirect URI:</p>
             <pre className="nathan-pre" data-nathan-callback="">{callback}</pre>
@@ -305,7 +308,10 @@ export function InstallerWizard({ initialHostname = "", initialProvider }: Insta
             const common = { label, placeholder: f.hint || "", autoComplete: "off", spellCheck: false, value: fields[f.name] ?? "" };
             return (
               <div className="nathan-stack" key={provider.id + ":" + f.name}>
-                {f.multiline
+                {f.checkbox
+                  ? <Checkbox label={label} checked={fields[f.name] === "true"} disabled={off}
+                      onCheckedChange={c => setFields(prev => ({ ...prev, [f.name]: c === true ? "true" : "" }))} />
+                  : f.multiline
                   ? <InputArea {...common} rows={6} onChange={e => setFields(prev => ({ ...prev, [f.name]: e.target.value }))} />
                   : <Input {...common} type={f.secret ? "password" : "text"} onChange={e => setFields(prev => ({ ...prev, [f.name]: e.target.value }))} />}
                 {f.file ? <Input label={label + " file"} type="file" accept={f.file} disabled={off}
