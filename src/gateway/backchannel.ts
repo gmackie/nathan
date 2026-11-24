@@ -44,6 +44,8 @@ export async function handleBackchannelLogout(request: Request, env: GatewayEnv)
   }
   if (!payload.events || typeof payload.events !== "object" || !(EVENT in payload.events)) return failed();
   if ("nonce" in payload || typeof payload.jti !== "string" || payload.jti.length > 256 || typeof payload.iat !== "number") return failed();
+  const occurred = payload.toe;
+  if (occurred !== undefined && (typeof occurred !== "number" || !Number.isFinite(occurred) || occurred < 0 || occurred > payload.iat)) return failed();
   if (typeof payload.sid !== "string" && typeof payload.sub !== "string") return failed();
   const now = Math.floor(Date.now()/1000);
   if (Math.abs(now - payload.iat) > MAX_IAT_SKEW) return failed();
@@ -56,8 +58,9 @@ export async function handleBackchannelLogout(request: Request, env: GatewayEnv)
     const revoke = typeof payload.sid === "string"
       ? env.SESSIONS.prepare("DELETE FROM nathan_gateway_sessions WHERE sid=? AND issuer=? AND client_id=?")
           .bind(payload.sid, metadata.issuer, env.OIDC_CLIENT_ID)
-      : env.SESSIONS.prepare("DELETE FROM nathan_gateway_sessions WHERE subject=? AND issuer=? AND client_id=?")
-          .bind(payload.sub, metadata.issuer, env.OIDC_CLIENT_ID);
+      : env.SESSIONS.prepare("DELETE FROM nathan_gateway_sessions WHERE subject=?1 AND issuer=?2 AND client_id=?3 " +
+          "AND (?4 IS NULL OR created_at<=?4)")
+          .bind(payload.sub, metadata.issuer, env.OIDC_CLIENT_ID, occurred ?? null);
     // One D1 batch is one transaction: the JTI is recorded only if revocation committed,
     // so a storage failure leaves the token retryable by the IdP.
     await env.SESSIONS.batch([

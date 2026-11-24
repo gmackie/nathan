@@ -12,6 +12,7 @@ const client = "cc-web", secret = randomKey(), issuerSecret = randomKey(), targe
 const hash = value => createHash("sha256").update(value).digest("base64url");
 let mf, db;
 const backchannel = origin + "/auth/backchannel", deliveries = [];
+let receiverStatus = 204;
 const receiver = new EventEmitter();
 const sql = (statement, ...args) => db.prepare(statement).bind(...args).run();
 const one = (statement, ...args) => db.prepare(statement).bind(...args).first();
@@ -32,7 +33,7 @@ before(async () => {
         assert.equal(request.url, backchannel, "the private issuer resolves its own signing keys locally");
         deliveries.push(new URLSearchParams(await request.text()).get("logout_token"));
         receiver.emit("delivery");
-        return new Response(null, { status: 204 });
+        return new Response(null, { status: receiverStatus });
       },
       bindings: { BETTER_AUTH_SECRET: issuerSecret, NATHAN_CONFIG_KEY: randomKey(), NATHAN_ISSUER: "https://management.example.test",
         NATHAN_APP_ORIGIN: origin, NATHAN_APP_ID: "classcheck", NATHAN_ACCESS_TEAM_DOMAIN: "test.cloudflareaccess.com", NATHAN_ACCESS_AUD: "a".repeat(64),
@@ -360,5 +361,43 @@ test("an offline agent can retry a failed OpenID refresh after browser logout an
     assert.equal(await one("SELECT 1 FROM nathan_app_rp_sessions WHERE user_id=?",late.sub),null);
   } finally {
     await sql("DROP TRIGGER end_agent_during_exchange");
+  }
+});
+
+test("a delayed logout retry preserves the signed event ID and occurrence time", async () => {
+  const auth = await mf.getWorker("auth");
+  const keys = createLocalJWKSet(await (await get("/api/auth/jwks")).json());
+  const occurred = Math.floor(Date.now() / 1000) - 600;
+  const sub = "retry-member";
+  const queue = (id, sid) => sql("INSERT INTO nathan_backchannel_deliveries(id,client_id,user_id,session_id,reason,created_at) " +
+    "VALUES(?,?,?,?,'test-logout',?)",id,client,sub,sid,occurred);
+  const payloads = async since => Promise.all(deliveries.slice(since).map(async token =>
+    (await jwtVerify(token, keys, { issuer, audience: client, typ: "logout+jwt", algorithms: ["EdDSA"] })).payload));
+  const firstAttempt = deliveries.length;
+  await sql("UPDATE oauthClient SET backchannelLogoutUri=? WHERE clientId=?", backchannel, client);
+  try {
+    await queue("first-retry-event",null);
+    receiverStatus = 503;
+    await auth.scheduled({ cron: "* * * * *" });
+    const [first] = (await payloads(firstAttempt)).filter(p => p.sub === sub);
+    assert.equal((await one("SELECT state FROM nathan_backchannel_deliveries WHERE id='first-retry-event'")).state,"pending");
+    const nextAttempt = deliveries.length;
+    receiverStatus = 204;
+    await sql("UPDATE nathan_backchannel_deliveries SET next_attempt_at=0 WHERE id='first-retry-event'");
+    await queue("distinct-retry-event","another-session");
+    await auth.scheduled({ cron: "* * * * *" });
+    const sent = (await payloads(nextAttempt)).filter(p => p.sub === sub);
+    const retry = sent.find(p => p.sid === undefined), distinct = sent.find(p => p.sid === "another-session");
+    assert.ok(first.jti);
+    assert.equal(retry.jti, first.jti);
+    assert.notEqual(distinct.jti, first.jti);
+    for (const event of [first, retry, distinct]) {
+      assert.equal(event.toe, occurred);
+      assert.ok(event.iat > occurred && event.exp > event.iat);
+    }
+    assert.equal((await one("SELECT state FROM nathan_backchannel_deliveries WHERE id='first-retry-event'")).state,"delivered");
+  } finally {
+    receiverStatus = 204;
+    await sql("UPDATE oauthClient SET backchannelLogoutUri=NULL WHERE clientId=?", client);
   }
 });

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readStage } from "../deploy/classcheck-id/bootstrap.mjs";
 import { webLogout } from "../deploy/classcheck-id/web-logout.mjs";
+import { webBackchannel } from "../deploy/classcheck-id/web-backchannel.mjs";
 import { freshInstallation, applyBatch } from "./fixtures/classcheck-install.mjs";
 
 for (const stage of ["staging","production"]) {
@@ -52,3 +53,21 @@ test("a divergent resource policy rolls back the web logout upgrade", async () =
   assert.equal(db.prepare("SELECT count(*) AS n FROM nathan_security_audit WHERE action='classcheck_web_logout'").get().n, 0);
   db.close();
 });
+
+for (const stage of ["staging","production"]) {
+  test("the " + stage + " confidential web client receives signed subject-wide logout", async () => {
+    const spec = await readStage(stage), db = freshInstallation(spec);
+    applyBatch(db, webLogout(spec));
+    const read = () => db.prepare("SELECT backchannelLogoutUri AS uri, backchannelLogoutSessionRequired AS requiresSid " +
+      "FROM oauthClient WHERE clientId=?").get(spec.clientId);
+    db.prepare("UPDATE oauthClient SET backchannelLogoutUri=? WHERE clientId=?").run("https://other.example.test/logout", spec.clientId);
+    assert.throws(() => applyBatch(db, webBackchannel(spec)));
+    assert.equal(read().uri, "https://other.example.test/logout");
+    assert.equal(db.prepare("SELECT count(*) AS n FROM nathan_security_audit WHERE action='classcheck_web_backchannel'").get().n, 0);
+    db.prepare("UPDATE oauthClient SET backchannelLogoutUri=NULL WHERE clientId=?").run(spec.clientId);
+    applyBatch(db, webBackchannel(spec));
+    assert.deepEqual({ ...read() }, { uri: spec.origin + "/auth/backchannel-logout", requiresSid: 0 });
+    assert.equal(db.prepare("SELECT count(*) AS n FROM nathan_security_audit WHERE action='classcheck_web_backchannel' AND outcome='succeeded'").get().n, 1);
+    db.close();
+  });
+}

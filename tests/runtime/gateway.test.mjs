@@ -189,3 +189,14 @@ test("discovery or JWKS outages are retryable; bad tokens are not", async () => 
   assert.equal((await postLogout(token)).status, 204);
   assert.equal(await sessionCount("sid-8"), 0);
 });
+
+test("a delayed subject logout ends only sessions established by the signed event time", async () => {
+  const sub = "delayed-logout-user", occurred = Math.floor(Date.now() / 1000) - 300;
+  await login(sub, "older-sid");
+  await db.prepare("UPDATE nathan_gateway_sessions SET created_at=? WHERE sid=?").bind(occurred,"older-sid").run();
+  await login(sub, "newer-sid");
+  assert.equal((await postLogout(await logoutToken({ sub, toe: "invalid" }))).status, 400);
+  assert.equal((await postLogout(await logoutToken({ sub, toe: occurred }))).status, 204);
+  assert.equal(await sessionCount("older-sid"), 0);
+  assert.equal(await sessionCount("newer-sid"), 1);
+});

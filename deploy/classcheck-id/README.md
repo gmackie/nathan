@@ -35,6 +35,8 @@ The ClassCheck web Worker serves end-user pages and calls its own stage’s name
 
 6. Attach the exact management custom domain to the private Worker after verifying Access. Confirm the host redirects an anonymous request to Cloudflare Access and that its workers.dev and preview endpoints are disabled. Before promoting production, request two staging sign-ins from the ClassCheck origin with the QA mailbox. Verify both messages arrive from `ClassCheck <noreply@classcheck.io>`. Redeem the code from the first and the link from the second, completing each flow through consent, callback, session and sign-out. Check MFA with an enrolled account and confirm session revocation.
 
+   When the ClassCheck web Worker serves the signed POST receiver at `https://beta.classcheck.io/auth/backchannel-logout`, register it with `node deploy/classcheck-id/web-backchannel.mjs staging --apply`. Verify that a signed notification ends the matching ClassCheck session.
+
 7. After staging verification and production release approval, apply the guarded upgrades to the installed production database before verifying its native and web flows.
 
    ```sh
@@ -43,6 +45,8 @@ The ClassCheck web Worker serves end-user pages and calls its own stage’s name
    ```
 
    ClassCheck controls its rollout mode and retains its previous web Worker version for rollback.
+
+   Once `https://classcheck.io/auth/backchannel-logout` is deployed, run `node deploy/classcheck-id/web-backchannel.mjs production --apply` to register the production receiver. The signed logout contract is documented in [ClassCheck tokens, UserInfo and logout](../../docs/app-oidc.md).
 
 ## Management enrollment
 
