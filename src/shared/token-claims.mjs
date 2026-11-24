@@ -18,6 +18,8 @@ export const MAX_ACCESS_TOKEN_SECONDS = 900;
  * plain user delegation through a client that is not marked agent (see apiScopeAllowed).
  */
 export const API_SCOPE = "nathan:api";
+/** Registered API resource scopes. A client's own scopes still constrain every grant. */
+export const AUDIENCE_SCOPES = ["openid", "profile", "email", "offline_access", API_SCOPE];
 /** Values of the `principal_kind` claim. */
 export const PRINCIPAL_KINDS = Object.freeze(["user", "machine", "agent"]);
 /** Admin-set client attribute values (nathan_client_principals.principal_kind). Unset means "classify by grant". */

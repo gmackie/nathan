@@ -8,7 +8,7 @@ import { stripJsonc } from "../../scripts/lib/wrangler.mjs";
 import { normalizeEmail } from "../../src/auth/admission-policy.mjs";
 import { auditStatement } from "../../src/shared/rbac-store.mjs";
 import { planSync, syncStatements, validateManifest } from "../../src/shared/rbac-manifest.mjs";
-import { MAX_ACCESS_TOKEN_SECONDS } from "../../src/shared/token-claims.mjs";
+import { AUDIENCE_SCOPES, MAX_ACCESS_TOKEN_SECONDS } from "../../src/shared/token-claims.mjs";
 
 const rolePermissions = {
   member: ["profile:read"],
@@ -66,7 +66,7 @@ export function installStatements(spec, owner, secret) {
       "'client_secret_basic','web',?,?,1,?,?,?)", randomUUID(), clientId, verifier, scopes, JSON.stringify([origin + "/auth/callback"]),
       JSON.stringify(["authorization_code", "refresh_token"]), JSON.stringify(["code"]), JSON.stringify({appearance:{wordmark:"ClassCheck"}}), now, now),
     sql("INSERT INTO oauthResource(id,identifier,name,accessTokenTtl,allowedScopes,disabled,policyVersion,createdAt,updatedAt) " +
-      "VALUES (?,?,?, ?,?,0,1,?,?)", randomUUID(), resource, resource, MAX_ACCESS_TOKEN_SECONDS, scopes, now, now),
+      "VALUES (?,?,?, ?,?,0,1,?,?)", randomUUID(), resource, resource, MAX_ACCESS_TOKEN_SECONDS, JSON.stringify(AUDIENCE_SCOPES), now, now),
     sql("INSERT INTO nathan_token_audiences(identifier,app_id,created_by) VALUES (?,?,?)", resource, app, actor),
     sql("INSERT INTO oauthClientResource(id,clientId,resourceId,createdAt) VALUES (?,?,?,?)", randomUUID(), clientId, resource, now),
     auditStatement(actor, "client_create", clientId, "succeeded"),

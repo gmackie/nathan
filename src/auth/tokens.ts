@@ -18,11 +18,9 @@ import { APIError } from "better-auth/api";
 import { audit } from "./admin-service";
 import { resolveAccess } from "./rbac";
 import { principalKind, evidenceClaims, rolesClaim, audienceApp, validateAudience, liveSession, userBanned, apiScopeAllowed,
-  MAX_ACCESS_TOKEN_SECONDS, API_SCOPE } from "../shared/token-claims.mjs";
+  MAX_ACCESS_TOKEN_SECONDS, API_SCOPE, AUDIENCE_SCOPES } from "../shared/token-claims.mjs";
 
-export { MAX_ACCESS_TOKEN_SECONDS, API_SCOPE };
-/** Scopes a registered audience accepts: user sign-in scopes plus the machine and agent API scope. */
-export const AUDIENCE_SCOPES = ["openid", "profile", "email", "offline_access", API_SCOPE];
+export { MAX_ACCESS_TOKEN_SECONDS, API_SCOPE, AUDIENCE_SCOPES };
 
 const CLIENT_ID = /^[A-Za-z0-9._-]{1,200}$/;
 const APP_ID = /^[a-z][a-z0-9-]{0,62}$/;

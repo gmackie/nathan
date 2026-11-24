@@ -3,8 +3,9 @@ import { verifyOAuthQueryParams } from "@better-auth/oauth-provider";
 import { createLocalJWKSet, jwtVerify } from "jose";
 import { isAllowedUnsafeRequest } from "../shared/security.mjs";
 import { resolveAccess } from "./rbac";
-import { recordAppRpSession } from "./app-rp-session";
 import { pinnedApplication, type BindingProps } from "./app-binding";
+import { endAppSession, logoutForm } from "./app-logout";
+import { recordAppRpSession } from "./app-rp-session";
 import { readBoundedText } from "./bounded-body.mjs";
 import { emailSignIn } from "./email-sign-in";
 import { normalizeEmail } from "./admission-policy.mjs";
@@ -16,19 +17,30 @@ const prefix = "/api/auth";
 const metadata = prefix + "/.well-known/openid-configuration";
 const authorize = prefix + "/oauth2/authorize", consent = prefix + "/oauth2/consent";
 const token = prefix + "/oauth2/token", revoke = prefix + "/oauth2/revoke", userinfo = prefix + "/oauth2/userinfo";
+const endSession = prefix + "/oauth2/end-session";
 const getRoutes = new Set([metadata, prefix + "/jwks", authorize, userinfo]);
-const postRoutes = new Set([token, revoke, consent, prefix + "/sign-out", "/sign-in/context", "/sign-in/email/request", "/sign-in/email/verify"]);
+const postRoutes = new Set([token, revoke, consent, endSession, prefix + "/sign-out", "/sign-in/context", "/sign-in/email/request", "/sign-in/email/verify"]);
 const json = (body: object, status = 200) => Response.json(body, {status, headers:{"Cache-Control":"no-store"}});
 const error = (status: number, code: string) => json({error:code},status);
 const browserScopes = new Set(["openid","email","profile","offline_access"]);
 const one = (params: URLSearchParams, key: string) => params.getAll(key).length === 1 ? params.get(key) : null;
 
+const linkedClient = ' FROM "oauthClient" c JOIN "oauthClientResource" l ON l.clientId=c.clientId ' +
+  'JOIN "oauthResource" r ON r.identifier=l.resourceId JOIN nathan_token_audiences a ON a.identifier=r.identifier ' +
+  'WHERE r.identifier=? AND a.app_id=? AND COALESCE(c.disabled,0)=0 AND COALESCE(r.disabled,0)=0';
+
 async function clientForResource(env: AuthEnv, app: string, clientId: string | null, resource: string) {
   if (!clientId || clientId.length > 200) return null;
-  return env.DB.prepare('SELECT c.name FROM "oauthClient" c JOIN "oauthClientResource" l ON l.clientId=c.clientId ' +
-    'JOIN "oauthResource" r ON r.identifier=l.resourceId JOIN nathan_token_audiences a ON a.identifier=r.identifier ' +
-    'WHERE c.clientId=? AND r.identifier=? AND a.app_id=? AND COALESCE(c.disabled,0)=0 AND COALESCE(r.disabled,0)=0')
-    .bind(clientId,resource,app).first<{name:string|null}>();
+  return env.DB.prepare('SELECT c.name' + linkedClient + ' AND c.clientId=?')
+    .bind(resource,app,clientId).first<{name:string|null}>();
+}
+
+async function hasLogoutClient(env: AuthEnv, app: string, resource: string, client?: string) {
+  const match = " AND c.enableEndSession=1 AND COALESCE(c.subjectType,'public')='public' " +
+    "AND EXISTS(SELECT 1 FROM json_each(CASE WHEN json_valid(c.postLogoutRedirectUris) THEN c.postLogoutRedirectUris END) " +
+    "WHERE typeof(key)='integer' AND type='text' AND value=?)";
+  return Boolean(await env.DB.prepare("SELECT 1" + linkedClient + match + (client === undefined ? "" : " AND c.clientId=?"))
+    .bind(resource, app, env.NATHAN_ISSUER + "/sign-in", ...(client === undefined ? [] : [client])).first());
 }
 
 /** The exact audience is registered by the operator. Better Auth checks the registered redirect,
@@ -75,12 +87,12 @@ function applicationHeaders(request: Request) {
   return result;
 }
 
-function publicDiscovery(document: Record<string, unknown>) {
+function publicDiscovery(document: Record<string, unknown>, logoutEnabled: boolean) {
   // Advertise only the operations this binding actually serves. ClassCheck owns sign-out UI.
   const {introspection_endpoint, introspection_endpoint_auth_methods_supported, introspection_endpoint_auth_signing_alg_values_supported,
     token_endpoint_auth_signing_alg_values_supported, revocation_endpoint_auth_signing_alg_values_supported,
     end_session_endpoint, registration_endpoint, pushed_authorization_request_endpoint, device_authorization_endpoint, ...supported} = document;
-  return {...supported,scopes_supported:[...browserScopes,"nathan:api"],response_types_supported:["code"],
+  return {...supported,...(logoutEnabled ? {end_session_endpoint} : {}),scopes_supported:[...browserScopes,"nathan:api"],response_types_supported:["code"],
     token_endpoint_auth_methods_supported:["client_secret_basic","client_secret_post","none"],
     revocation_endpoint_auth_methods_supported:["client_secret_basic","client_secret_post","none"],
     code_challenge_methods_supported:["S256"],grant_types_supported:["authorization_code","refresh_token","client_credentials"]};
@@ -114,6 +126,12 @@ async function appFetch(request: Request, env: AuthEnv, ctx: ExecutionContext, a
     headers.delete("Cookie");
   }
   const auth = createAuth(env);
+  if (path === endSession) {
+    if (headers.get("Content-Type")?.split(";")[0] !== "application/x-www-form-urlencoded") return error(415,"invalid_request");
+    const form = !url.search && logoutForm(raw!,env.NATHAN_ISSUER);
+    if (!form || !await hasLogoutClient(env,app,resource,form.client)) return error(400,"invalid_request");
+    return endAppSession(auth,env,ctx,forward(),form);
+  }
   if ((path === authorize || path === consent) && headers.has("Cookie")) {
     const current = await auth.api.getSession({headers});
     if (current && !(await resolveAccess(env,app,current.user.id)).allowed) return error(403,"access_denied");
@@ -148,11 +166,11 @@ async function appFetch(request: Request, env: AuthEnv, ctx: ExecutionContext, a
     } catch { return error(401,"invalid_token"); }
     headers.delete("Cookie");
   }
-  const response = await auth.handler(forward());
+  const response = path === prefix + "/sign-out" ? await endAppSession(auth,env,ctx,forward()) : await auth.handler(forward());
   if (path === token && response.ok) {
     try { await recordAppRpSession(env,response); } catch { return error(503,"temporarily_unavailable"); }
   }
-  if (path === metadata && response.ok) return json(publicDiscovery(await response.json() as Record<string,unknown>));
+  if (path === metadata && response.ok) return json(publicDiscovery(await response.json() as Record<string,unknown>, await hasLogoutClient(env,app,resource)));
   if (response.headers.get("Content-Type")?.includes("text/html")) return error(response.ok ? 400 : response.status,"invalid_request");
   return response;
 }

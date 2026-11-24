@@ -46,6 +46,9 @@ for (const stage of ["staging", "production"]) {
     assert.equal(client.tokenEndpointAuthMethod, "client_secret_basic");
     assert.equal(client.subjectType, "public");
     assert.equal(db.prepare("SELECT app_id FROM nathan_token_audiences WHERE identifier=?").get(spec.origin + "/api").app_id, "classcheck");
+    assert.deepEqual(JSON.parse(db.prepare("SELECT allowedScopes FROM oauthResource WHERE identifier=?").get(spec.origin + "/api").allowedScopes),
+      ["openid", "profile", "email", "offline_access", "nathan:api"]);
+    assert.equal(JSON.parse(client.scopes).includes("nathan:api"), false);
     assert.equal(db.prepare("SELECT count(*) AS n FROM user").get().n, 0);
     assert.equal(db.prepare("SELECT state FROM nathan_bootstrap_status WHERE admin_email=?").get(owner).state, "pending");
     assert.equal(db.prepare("SELECT uses FROM nathan_invitations WHERE email=? AND expires_at>unixepoch()").get(owner).uses, 0);

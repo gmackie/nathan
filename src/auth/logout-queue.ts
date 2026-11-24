@@ -28,6 +28,10 @@ const EVENT = "http://schemas.openid.net/event/backchannel-logout";
 type Due = { id: string; clientId: string; userId: string; sessionId: string | null; issuedSubject: string | null; attempts: number; uri: string | null; disabled: unknown;
   subjectType: string | null; redirectUris: string | null };
 
+// App logout registers its recipients before Better Auth removes the session and clears token FKs.
+// A failed deletion keeps the browser session and its pending notifications together for retry.
+const released = "(d.reason!='app-session-end' OR NOT EXISTS(SELECT 1 FROM session s WHERE s.id=d.session_id))";
+
 /** Subject the client knows the user by: the user id, or Better Auth's pairwise identifier. */
 async function subjectFor(env: AuthEnv, row: Due): Promise<string> {
   if (row.issuedSubject !== null) return row.issuedSubject;
@@ -37,7 +41,8 @@ async function subjectFor(env: AuthEnv, row: Due): Promise<string> {
 }
 export async function nextLogoutDue(env: AuthEnv, connectionId: string | null): Promise<number | null> {
   const row = await env.DB.prepare(
-    "SELECT MIN(next_attempt_at) AS due FROM nathan_backchannel_deliveries WHERE state='pending' AND (?1 IS NULL OR connection_id=?1)"
+    "SELECT MIN(next_attempt_at) AS due FROM nathan_backchannel_deliveries d WHERE state='pending' AND " + released +
+    " AND (?1 IS NULL OR connection_id=?1)"
   ).bind(connectionId).first<{ due: number | null }>();
   return row?.due ?? null;
 }
@@ -46,13 +51,15 @@ export async function nextLogoutDue(env: AuthEnv, connectionId: string | null): 
  * Sends due deliveries (optionally only those a connection enqueued). Never throws for a delivery
  * failure; it records the outcome and schedules the retry. Returns the next due time (seconds).
  */
-export async function deliverLogouts(env: AuthEnv, { connectionId = null, limit = 25 }: { connectionId?: string | null; limit?: number } = {}) {
+export async function deliverLogouts(env: AuthEnv, { connectionId = null, sessionId = null, limit = 25 }:
+    { connectionId?: string | null; sessionId?: string | null; limit?: number } = {}) {
   const due = (await env.DB.prepare(
     'SELECT d.id AS id, d.client_id AS clientId, d.user_id AS userId, d.session_id AS sessionId, d.issued_subject AS issuedSubject, d.attempts AS attempts, c."backchannelLogoutUri" AS uri, ' +
     'c."disabled" AS disabled, c."subjectType" AS subjectType, c."redirectUris" AS redirectUris ' +
     'FROM nathan_backchannel_deliveries d LEFT JOIN "oauthClient" c ON c."clientId"=d.client_id ' +
-    "WHERE d.state='pending' AND d.next_attempt_at<=unixepoch() AND (?1 IS NULL OR d.connection_id=?1) ORDER BY d.next_attempt_at LIMIT ?2"
-  ).bind(connectionId, limit).all<Due>()).results;
+    "WHERE d.state='pending' AND d.next_attempt_at<=unixepoch() AND " + released +
+    " AND (?1 IS NULL OR d.connection_id=?1) AND (?3 IS NULL OR d.session_id=?3) ORDER BY d.next_attempt_at LIMIT ?2"
+  ).bind(connectionId, limit, sessionId).all<Due>()).results;
   let delivered = 0;
   if (due.length) {
     // A standalone installation issues customer tokens at the app's origin.
