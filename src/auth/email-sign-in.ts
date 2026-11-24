@@ -6,7 +6,7 @@ import { normalizeEmail } from "./admission-policy.mjs";
 import { readBoundedText } from "./bounded-body.mjs";
 import { createAuth } from "./instance";
 import { sendSignInEmail, type EmailClient } from "./email";
-import { EMAIL_ATTEMPTS, EMAIL_TTL, emailTarget, type EmailFlow } from "./email-sign-in-policy";
+import { EMAIL_ATTEMPTS, EMAIL_TTL, emailTarget, reserveEmailDelivery, publishEmailDelivery, type EmailDelivery, type EmailFlow } from "./email-sign-in-policy";
 import { consumeAddressLimit, reserveProofAttempt, releaseProofAttempt, auditRefusedProof } from "./email-otp-policy.mjs";
 import { allowRequests } from "./request-limit";
 import type { AuthEnv } from "./env";
@@ -30,28 +30,17 @@ async function oauthClient(env: AuthEnv, query: string): Promise<EmailClient | n
   return env.DB.prepare('SELECT name,metadata FROM "oauthClient" WHERE clientId=? AND COALESCE(disabled,0)=0').bind(ids[0]).first<EmailClient>();
 }
 
-async function issue(env: AuthEnv, browser: string, flowId: string, email: string, query: string | null, client: EmailClient | null) {
-  const eligible = await emailTarget(env.DB, email);
-  const id = await sha256(browser + "." + flowId);
-  const flow: EmailFlow = { id, generation: randomId(), email, invitation_id: eligible?.invitation_id ?? null,
-    subject_id: eligible?.subject_id ?? null, oauth_query: query, second_factor: null };
-  const insert = "INSERT INTO nathan_email_sign_ins(id,generation,subject_id,email,invitation_id,oauth_query,expires_at) VALUES (?,?,?,?,?,?,?) ";
-  const values = [id, flow.generation, flow.subject_id, email, flow.invitation_id, query, Math.floor(Date.now() / 1000) + EMAIL_TTL];
-  // Keep an existing delivered generation usable while its replacement is in flight.
-  const first = await env.DB.prepare(insert + "ON CONFLICT(email) DO NOTHING").bind(...values).run();
+async function issue(env: AuthEnv, browser: string, flowId: string, flow: EmailFlow, client: EmailClient | null, delivery: EmailDelivery) {
   const auth = createAuth(env, undefined, { browser, flow });
-  const proof = await auth.api.createVerificationOTP({ body: { email, type: "sign-in" } });
+  const proof = await auth.api.createVerificationOTP({ body: { email: flow.email, type: "sign-in" } });
+  const eligible = await emailTarget(env.DB, flow.email);
   if (eligible) {
     const digits = proof.slice(-6);
     const link = new URL("/sign-in/email", env.NATHAN_ISSUER);
     link.hash = flowId + "." + digits;
-    await sendSignInEmail(env, email, digits, link.href, client);
+    await sendSignInEmail(env, flow.email, digits, link.href, client);
   }
-  if (!first.meta.changes) {
-    await env.DB.prepare(insert + "ON CONFLICT(email) DO UPDATE SET id=excluded.id,generation=excluded.generation,subject_id=excluded.subject_id," +
-      "invitation_id=excluded.invitation_id,oauth_query=excluded.oauth_query,expires_at=excluded.expires_at,attempts=0,second_factor=NULL")
-      .bind(...values).run();
-  }
+  await publishEmailDelivery(env.DB, { ...flow, ...eligible }, delivery);
 }
 
 async function requestEmail(request: Request, env: AuthEnv, ctx: ExecutionContext, body: Input) {
@@ -69,7 +58,10 @@ async function requestEmail(request: Request, env: AuthEnv, ctx: ExecutionContex
   // have the same shape and behavior for unknown, blocked and eligible addresses.
   const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
   if (await allowRequests(env, "email-send-ip", ip, 10, 600) && email && (await consumeAddressLimit(env.DB, "send", email)).allowed) {
-    ctx.waitUntil(issue(env, browser, flowId, email, query, client).catch(() => {
+    const flow = { id: await sha256(browser + "." + flowId), generation: randomId(), email, invitation_id: null,
+      subject_id: null, oauth_query: query, second_factor: null };
+    const delivery = await reserveEmailDelivery(env.DB, flow);
+    ctx.waitUntil(issue(env, browser, flowId, flow, client, delivery).catch(() => {
       console.error("Hosted email sign-in delivery failed");
     }));
   }
@@ -107,7 +99,14 @@ async function verify(request: Request, env: AuthEnv, body: Input) {
 }
 
 async function redeem(request: Request, env: AuthEnv, flow: EmailFlow, browser: string, digits: string, isFactor: boolean) {
-  const auth = createAuth(env, undefined, { browser, flow });
+  const previousProof = browser + "." + digits;
+  // Earlier drafts used another identifier prefix or hashed only browser + digits. Select
+  // the stored format before asking Better Auth to consume the credential exactly once.
+  const canonical = "nathan-email:" + flow.generation;
+  const record = isFactor ? null : await env.DB.prepare("SELECT identifier,substr(value,1,instr(value,':')-1)=? AS previous " +
+    "FROM verification WHERE identifier IN (?,?) ORDER BY (identifier=?) DESC,createdAt DESC LIMIT 1")
+    .bind(await sha256(previousProof), canonical, "hosted-email-" + flow.generation, canonical).first<{ identifier: string; previous: number }>();
+  const auth = createAuth(env, undefined, { browser, flow, proofIdentifier: record?.identifier });
   const headers = new Headers(request.headers);
   // Complete exactly this pending sign-in, even if a different user is already signed in.
   headers.delete("Cookie");
@@ -125,7 +124,8 @@ async function redeem(request: Request, env: AuthEnv, flow: EmailFlow, browser: 
     const eligible = await emailTarget(env.DB, flow.email);
     // Dummy, revoked and replaced targets take the same credential-verification path. Their
     // proof cannot possibly match, even if someone guesses the digits of an undelivered mail.
-    const otp = eligible && eligible.invitation_id === flow.invitation_id && eligible.subject_id === flow.subject_id ? browser + "." + flow.generation + "." + digits : "unavailable";
+    const proof = record?.previous ? previousProof : browser + "." + flow.generation + "." + digits;
+    const otp = eligible && eligible.invitation_id === flow.invitation_id && eligible.subject_id === flow.subject_id ? proof : "unavailable";
     response = await auth.api.signInEmailOTP({ ...options(), body: { email: flow.email, otp, ...oauth } });
   }
   if (!response.ok) return invalid();

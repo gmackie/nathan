@@ -26,7 +26,7 @@ import { isEmailSession, type EmailFlow } from "./email-sign-in-policy";
 const ADMIN_CREDENTIAL_PATHS = new Set(["/passkey/generate-register-options", "/passkey/verify-registration", "/passkey/delete-passkey",
   "/set-password", "/change-password", "/change-email", "/link-social", "/unlink-account", "/delete-user"]);
 
-export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredentials, email?: { browser: string; flow: EmailFlow }) {
+export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredentials, email?: { browser: string; flow: EmailFlow; proofIdentifier?: string }) {
   const issuer = new URL(env.NATHAN_ISSUER);
   if (issuer.protocol !== "https:" && issuer.hostname !== "localhost")
     throw new Error("Nathan requires an HTTPS identity hostname");
@@ -56,7 +56,7 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
     // Independent OTP records for concurrent browser requests. Every other Better Auth
     // verification identifier retains its existing storage format.
     ...(email ? { verification: { storeIdentifier: { default: "plain" as const, overrides: {
-      "sign-in-otp-": { hash: async () => "nathan-email:" + email.flow.generation }
+      "sign-in-otp-": { hash: async () => email.proofIdentifier ?? "nathan-email:" + email.flow.generation }
     } } } } : {}),
     disabledPaths: ["/token"],
     // SAML sign-in never creates accounts unless the connection allows

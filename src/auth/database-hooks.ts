@@ -1,4 +1,5 @@
 import { APIError } from "better-auth/api";
+import { retireUnverifiedAccess } from "./session-revocation";
 import type { AuthEnv } from "./env";
 import { admissionUserCreateGuard, admissionUserCreated } from "./admission";
 import { scimSessionGuard } from "./scim/session-guard";
@@ -29,8 +30,7 @@ async function promoteEmailSubject(env: AuthEnv, flow: EmailFlow) {
     env.DB.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) " +
       "VALUES (?,'system:admission',?,'email-otp',CASE WHEN changes()=1 THEN ? ELSE NULL END)")
       .bind(crypto.randomUUID(), invited ? "account_admission" : "email_address_verify", invited ? "admitted_invitation" : "verified"),
-    env.DB.prepare("DELETE FROM account WHERE userId=?").bind(subject),
-    env.DB.prepare('DELETE FROM "session" WHERE userId=?').bind(subject)
+    ...retireUnverifiedAccess(env.DB, subject)
   ];
   if (flow.invitation_id) {
     const claim = claimInvitationStatement(flow.invitation_id, "email-otp", subject);

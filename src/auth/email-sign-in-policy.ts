@@ -11,6 +11,40 @@ export type EmailFlow = EmailTarget & {
   issuedSessionId?: string;
 };
 
+export type EmailDelivery = { sequence: number; expires_at: number };
+
+/** Allocate the order at request time, before account lookup or provider delivery. */
+export async function reserveEmailDelivery(db: D1Database, flow: EmailFlow) {
+  const [order] = await db.batch([
+    db.prepare("INSERT INTO nathan_email_delivery_order(email,requested,expires_at) VALUES (?,1,unixepoch()+?) " +
+      "ON CONFLICT(email) DO UPDATE SET requested=requested+1,expires_at=excluded.expires_at RETURNING requested AS sequence,expires_at")
+      .bind(flow.email, EMAIL_TTL),
+    // An initial request has a neutral challenge during mailbox eligibility checks and delivery.
+    // A pending resend leaves the previously delivered challenge usable until publication.
+    db.prepare("INSERT INTO nathan_email_sign_ins(id,generation,email,oauth_query,expires_at) " +
+      "SELECT ?,?,email,?,expires_at FROM nathan_email_delivery_order WHERE email=? ON CONFLICT(email) DO NOTHING")
+      .bind(flow.id, flow.generation, flow.oauth_query, flow.email)
+  ]);
+  const delivery = order.results[0] as EmailDelivery | undefined;
+  if (!delivery) throw Error("Could not reserve email delivery");
+  return delivery;
+}
+
+/** Publish only an accepted delivery. The same transaction prevents an older acceptance
+ * from overwriting a newer generation or reopening its already consumed challenge. */
+export async function publishEmailDelivery(db: D1Database, flow: EmailFlow, delivery: EmailDelivery) {
+  await db.batch([
+    db.prepare("UPDATE nathan_email_delivery_order SET delivered=?1,delivered_generation=?4 " +
+      "WHERE email=?2 AND delivered<?1 AND requested>=?1 AND ?3>unixepoch()")
+      .bind(delivery.sequence, flow.email, delivery.expires_at, flow.generation),
+    db.prepare("INSERT INTO nathan_email_sign_ins(id,generation,subject_id,email,invitation_id,oauth_query,expires_at) " +
+      "SELECT ?,?,?,?,?,?,? WHERE changes()=1 ON CONFLICT(email) DO UPDATE SET id=excluded.id,generation=excluded.generation," +
+      "subject_id=excluded.subject_id,invitation_id=excluded.invitation_id,oauth_query=excluded.oauth_query," +
+      "expires_at=excluded.expires_at,attempts=0,second_factor=NULL")
+      .bind(flow.id, flow.generation, flow.subject_id, flow.email, flow.invitation_id, flow.oauth_query, delivery.expires_at)
+  ]);
+}
+
 /** A verified account, an active SCIM-provisioned account, or this particular open invitation.
  * An arbitrary unverified password signup and an unknown address in self-service mode cannot use
  * this method. A provisional invitee may prove the mailbox while their original invite is open. */

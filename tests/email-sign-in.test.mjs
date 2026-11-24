@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { consumeAddressLimit, reserveProofAttempt, releaseProofAttempt, auditRefusedProof, pruneEmailOtpLimits, FAILURE_BUDGET } from "../src/auth/email-otp-policy.mjs";
 import { d1, migratedDatabase } from "./fixtures/d1-sqlite.mjs";
-import { emailTarget, liveAdminSession } from "../src/auth/email-sign-in-policy.ts";
+import { emailTarget, liveAdminSession, reserveEmailDelivery, publishEmailDelivery } from "../src/auth/email-sign-in-policy.ts";
 import { allowRequests } from "../src/auth/request-limit.ts";
 import { evidenceClaims } from "../src/shared/token-claims.mjs";
 
@@ -57,7 +57,7 @@ test("email evidence is bound to a session and cannot assert admin assurance", (
   assert.deepEqual(evidenceClaims(row, { userId: "another", sessionId: "session-1" }), {});
   assert.deepEqual(evidenceClaims(row, { userId: "member", sessionId: "old-session" }), {});
   for (const script of ["pack-release", "verify-release"])
-    assert.match(readFileSync("scripts/" + script + ".mjs", "utf8"), /0019_email_otp\.sql","0020_hosted_email_sign_in\.sql/);
+    assert.match(readFileSync("scripts/" + script + ".mjs", "utf8"), /0019_email_otp\.sql","0020_hosted_email_sign_in\.sql","0021_email_delivery_order\.sql/);
 });
 
 test("the invitation and new user roll back together and an active directory subject can be admitted", async () => {
@@ -144,6 +144,9 @@ for (const prior of ["code-only", "hosted draft"]) test("email session evidence 
   raw.exec(migration("0019_email_otp.sql"));
   if (prior === "code-only") raw.exec("INSERT INTO nathan_email_otp_sessions(session_id,user_id) VALUES ('sess','member')");
   raw.exec(migration("0020_hosted_email_sign_in.sql"));
+  raw.exec("INSERT INTO verification(id,identifier,value,expiresAt,createdAt,updatedAt) VALUES ('proof','hosted-email-generation','old-hash',unixepoch()+100,0,0)");
+  raw.exec(migration("0021_email_delivery_order.sql"));
+  assert.equal(raw.prepare("SELECT value FROM verification WHERE identifier='hosted-email-generation'").get()?.value, "old-hash");
   assert.deepEqual({ ...raw.prepare("SELECT user_id,hosted FROM nathan_email_otp_sessions WHERE session_id='sess'").get() },
     { user_id: "member", hosted: Number(prior === "hosted draft") });
   raw.close();
@@ -173,5 +176,26 @@ test("an administrator needs the original live non-email session on every profil
   raw.exec("DELETE FROM session WHERE id='s'");
   assert.equal(await liveAdminSession(db, "admin", "s"), false);
   assert.equal(await liveAdminSession(db, "admin"), false);
+  raw.close();
+});
+
+test("an older accepted delivery cannot resurrect its challenge after a newer delivery or redemption", async () => {
+  const raw = migratedDatabase(), db = d1(raw), email = "order@example.test";
+  const flow = generation => ({id: generation, generation, email, subject_id:"member", invitation_id:null, oauth_query:null, second_factor:null});
+  const older = await reserveEmailDelivery(db, flow("stale")), newer = await reserveEmailDelivery(db, flow("latest"));
+  await publishEmailDelivery(db, flow("latest"), newer);
+  await publishEmailDelivery(db, flow("stale"), older);
+  // A Worker already waiting on the mail provider at deploy time still uses this upsert.
+  const publishFromPreviousWorker = raw.prepare("INSERT INTO nathan_email_sign_ins(id,generation,email,expires_at) " +
+    "VALUES ('prior','prior',?,?) ON CONFLICT(email) DO UPDATE SET generation=excluded.generation");
+  publishFromPreviousWorker.run(email, older.expires_at);
+  assert.equal(raw.prepare("SELECT generation FROM nathan_email_sign_ins WHERE email=?").get(email).generation, "latest");
+  raw.exec("DELETE FROM nathan_email_sign_ins");
+  await publishEmailDelivery(db, flow("stale"), older);
+  publishFromPreviousWorker.run(email, older.expires_at);
+  assert.equal(raw.prepare("SELECT count(*) AS n FROM nathan_email_sign_ins").get().n, 0);
+  raw.prepare("UPDATE nathan_email_delivery_order SET expires_at=unixepoch() WHERE email=?").run(email);
+  publishFromPreviousWorker.run(email, newer.expires_at + 1);
+  assert.equal(raw.prepare("SELECT generation FROM nathan_email_sign_ins WHERE email=?").get(email).generation, "prior");
   raw.close();
 });

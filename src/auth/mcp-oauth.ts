@@ -477,10 +477,14 @@ async function authorizePost(request: Request, env: AuthEnv, auth: any) {
     // An empty or invalid selection re-renders the page and keeps the ticket usable.
     return consentPage({ ...built.view, error: e instanceof Error ? e.message : "Invalid scope selection" }, 400);
   }
-  if (!await takeArtifact(env, ticket, "consent")) return mcpErrorPage("Consent expired", "This consent page was already answered.");
   const code = "nmcp_ac_" + randomToken();
-  await putArtifact(env, code, "code", { clientId: data.clientId, redirectUri: data.redirectUri, challenge: data.challenge,
-    resource: data.resource, userId: data.userId, scope: stored }, MCP_CODE_SECONDS);
+  const approval = { clientId: data.clientId, redirectUri: data.redirectUri, challenge: data.challenge,
+    resource: data.resource, userId: data.userId, scope: stored };
+  // A promotion or sign-out during the consent form cannot leave a new code for the retired session.
+  const issued = await env.DB.prepare("UPDATE nathan_mcp_artifacts SET hash=?,kind='code',data=?,expires_at=? " +
+    "WHERE hash=? AND kind='consent' AND expires_at>unixepoch() AND EXISTS(SELECT 1 FROM session WHERE id=? AND userId=?)")
+    .bind(await sha256(code), JSON.stringify(approval), nowSeconds() + MCP_CODE_SECONDS, await sha256(ticket), data.sessionId, data.userId).run();
+  if (!issued.meta.changes) return mcpErrorPage("Consent expired", "This consent page expired or was already answered.");
   await audit(env, data.userId, "mcp_consent", "client=" + data.clientId + " resource=" + data.resource + " scope=" + stored, "succeeded");
   const target = new URL(data.redirectUri);
   target.searchParams.set("code", code);

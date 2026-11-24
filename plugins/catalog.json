@@ -96,7 +96,7 @@
         "default": "false",
         "requires": ["RESEND_API_KEY", "EMAIL_FROM"],
         "routes": ["/sign-in/email/request", "/sign-in/email/verify"],
-        "migrations": ["0019_email_otp.sql", "0020_hosted_email_sign_in.sql"],
+        "migrations": ["0019_email_otp.sql", "0020_hosted_email_sign_in.sql", "0021_email_delivery_order.sql"],
         "docs": "docs/oidc.md#hosted-email-sign-in"
       }
     },

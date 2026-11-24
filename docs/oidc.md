@@ -39,7 +39,11 @@ Eligible users have a verified account, an active directory-provisioned subject,
 
 ### Sender and client branding
 
-Set `ENABLE_EMAIL_OTP=true`, configure `RESEND_API_KEY` and `EMAIL_FROM` on the identity Worker, and apply `0019_email_otp.sql` followed by `0020_hosted_email_sign_in.sql`. Fresh installs and the tracked production configuration default to off. The tracked staging configuration opts in. The signed OIDC client selects the registered name and its validated `appearance` metadata. The protected `POST /studio/api/clients` registration accepts an optional `appearance` object, for example `{"wordmark":"ClassCheck","logo":"classcheck"}`. An operator can supply a parent appearance as a JSON-encoded string in the Worker's `NATHAN_APPEARANCE` variable.
+Set `ENABLE_EMAIL_OTP=true`, configure `RESEND_API_KEY` and `EMAIL_FROM` on the identity Worker, and apply migrations `0019_email_otp.sql`, `0020_hosted_email_sign_in.sql` and `0021_email_delivery_order.sql` in order. Fresh installs and the tracked production configuration default to off. The tracked staging configuration opts in. The signed OIDC client selects the registered name and its validated `appearance` metadata. The protected `POST /studio/api/clients` registration accepts an optional `appearance` object, for example `{"wordmark":"ClassCheck","logo":"classcheck"}`. An operator can supply a parent appearance as a JSON-encoded string in the Worker's `NATHAN_APPEARANCE` variable.
+
+When upgrading an earlier hosted draft, apply the migrations before switching the issuer to the new Worker. Outstanding proofs retain their original storage identifiers. The database ignores delayed sends from an older Worker once the new Worker has published a credential for that address.
+
+To roll back to an earlier draft, pause new email requests and keep verification available through the five-minute lifetime of the last issued proof. Drain pending promotion logouts with the current Worker's scheduled handler before switching traffic. Confirm that `SELECT count(*) FROM nathan_backchannel_deliveries WHERE reason='email-otp-promotion' AND state='pending'` returns zero. Older Workers interpret every queued logout as subject-wide. After switching Workers, resume email requests.
 
 The email logo uses the validated logo ID to select an operator-installed, sanitized PNG from `NATHAN_EMAIL_LOGOS`, a JSON-encoded string mapping IDs to base64 PNG content. Nathan attaches it inline. A missing logo leaves the name in the text and HTML. The From address remains the instance's verified sender.
 

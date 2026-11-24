@@ -17,6 +17,7 @@ const undeliverable = new Set();
 const messages = [], inbox = new EventEmitter();
 const secret = randomKey() + randomKey();
 let mf, db, client, sequence = 0;
+let promotionLogout;
 const sql = (s, ...p) => db.prepare(s).bind(...p).run();
 const one = (s, ...p) => db.prepare(s).bind(...p).first();
 const cookie = (r, name) => {
@@ -97,6 +98,10 @@ before(async () => {
   mf = await authWorker(HOST, { BETTER_AUTH_SECRET: secret, ENABLE_EMAIL_OTP: "true", RESEND_API_KEY: "test-sender", EMAIL_FROM: "nathan@example.test",
     NATHAN_EMAIL_LOGOS: JSON.stringify({ classcheck: PNG }), ENABLE_PASSWORD: "true" }, {
     outboundService: async req => {
+      if (req.url === "https://previous.example.test/logout") {
+        promotionLogout = new URLSearchParams(await req.text()).get("logout_token");
+        return new Response(null, { status: 204 });
+      }
       assert.equal(req.url, "https://api.resend.com/emails");
       const mail = await req.json();
       if (undeliverable.has(mail.to[0])) { inbox.emit("failed:" + mail.to[0]); return new Response(null, {status: 503}); }
@@ -297,15 +302,46 @@ test("an active directory user outside enterprise SSO finishes enrolled TOTP bef
   assert.equal((await one("SELECT count(*) AS n FROM nathan_security_audit WHERE actor='mfa' AND action='email_otp_sign_in' AND outcome='succeeded'")).n, 1);
 });
 
-test("an invitee who proves an address held by a provisional password signup keeps no unproven password", async () => {
+test("an invitee taking over a provisional signup retires its credentials, consent and delegated access", async () => {
   const address = "provisional@example.test", inv = await invite(address);
   const signup = await post("/api/auth/sign-up/email", { name: "Provisional", email: address, password: randomKey() });
   assert.ok(signup.ok, await signup.clone().text());
+  const unproven = await one("SELECT id FROM user WHERE email=?", address);
+  await sql("INSERT INTO oauthClient(id,clientId,name,redirectUris,backchannelLogoutUri) VALUES ('previous','previous','Previous RP','[]','https://previous.example.test/logout')");
+  await sql("INSERT INTO session(id,token,expiresAt,createdAt,updatedAt,userId) VALUES ('unproven','past',9999999999,0,0,?)", unproven.id);
+  for (const table of ["oauthRefreshToken", "oauthAccessToken"]) {
+    await sql('INSERT INTO "' + table + '"(id,token,clientId,sessionId,userId,expiresAt,createdAt,scopes) ' +
+      "VALUES ('old-grant','past','previous','unproven',?,9999999999,0,'[]')", unproven.id);
+  }
+  await sql("INSERT INTO oauthConsent(id,clientId,userId,scopes,createdAt,updatedAt) VALUES ('old-consent','previous',?,'[]',0,0)", unproven.id);
+  await sql("INSERT INTO nathan_applications(id,hostname) VALUES ('pre-proof','previous.example.test')");
+  await sql("INSERT INTO nathan_token_audiences(identifier,app_id,created_by) VALUES ('https://previous.example.test/api','pre-proof','admin')");
+  await sql("INSERT INTO nathan_mcp_resources(identifier,app_id,name,created_by) VALUES ('https://previous.example.test/api','pre-proof','Previous','admin')");
+  await sql("INSERT INTO nathan_mcp_clients(client_id,client_name,redirect_uris,expires_at) VALUES ('old-client','Previous','[]',unixepoch()+300)");
+  await sql("INSERT INTO nathan_mcp_grants(id,user_id,client_id,resource,scope,expires_at) " +
+    "VALUES ('old-grant',?,'old-client','https://previous.example.test/api','read',unixepoch()+300)", unproven.id);
+  for (const kind of ["consent", "code"]) {
+    await sql("INSERT INTO nathan_mcp_artifacts(hash,kind,data,expires_at) VALUES (?,?,?,unixepoch()+300)",
+      "old-" + kind, kind, JSON.stringify({ userId: unproven.id, sessionId: "unproven" }));
+  }
   const idx = messages.filter(m => m.to.includes(address)).length;
   const issued = await requestCode(address), browser = cookie(issued, "__Host-nathan-email");
   const { code } = await mailFor(address, idx);
   assert.equal((await verify(browser, code)).status, 200);
   const user = await one('SELECT id,emailVerified FROM "user" WHERE email=?', address);
+  for (const table of ["oauthRefreshToken", "oauthAccessToken"]) {
+    assert.ok((await one('SELECT revoked FROM "' + table + '" WHERE id=?', "old-grant")).revoked);
+  }
+  assert.equal(await one("SELECT id FROM oauthConsent WHERE id='old-consent'"), null);
+  assert.equal(await one("SELECT id FROM nathan_mcp_grants WHERE id='old-grant'"), null);
+  assert.equal(await one("SELECT hash FROM nathan_mcp_artifacts WHERE hash IN ('old-consent','old-code')"), null);
+  assert.deepEqual(await one("SELECT session_id FROM nathan_backchannel_deliveries WHERE client_id='previous' AND user_id=? AND state='pending'", user.id),
+    { session_id: "unproven" });
+  await (await mf.getWorker()).scheduled({ cron: "0 5 * * *" });
+  const keys = createLocalJWKSet(await (await mf.dispatchFetch(ISSUER + "/jwks")).json());
+  const { payload } = await jwtVerify(promotionLogout, keys, { issuer: ISSUER, audience: "previous" });
+  assert.equal(payload.sub, user.id);
+  assert.equal(payload.sid, "unproven");
   assert.equal(user.emailVerified, 1);
   assert.deepEqual(await one('SELECT name,image FROM "user" WHERE id=?', user.id), { name: "", image: null });
   assert.equal(await one('SELECT id FROM account WHERE userId=? AND providerId=\'credential\'', user.id), null);
@@ -404,6 +440,25 @@ test("promotion cleanup and the invitation roll back on an account write failure
     assert.ok(await one('SELECT a.id FROM account a JOIN user u ON u.id=a.userId WHERE u.email=? AND a.providerId=\'credential\'', address));
     assert.equal((await one("SELECT uses FROM nathan_invitations WHERE id=?", invitation)).uses, 0);
   } finally { await sql("DROP TRIGGER stop_promotion"); }
+});
+
+test("unexpired code-and-link credentials from either hosted draft survive an upgrade", async () => {
+  for (const layout of ["browser-only", "alternate-prefix"]) {
+    const address = layout + "@example.test";
+    await invite(address);
+    const start = await requestCode(address), browser = cookie(start, "__Host-nathan-email");
+    const { code } = await mailFor(address);
+    const { generation } = await one("SELECT generation FROM nathan_email_sign_ins WHERE email=?", address);
+    const id = "nathan-email:" + generation;
+    if (layout === "browser-only") {
+      const previousProof = browser.split("=")[1] + "." + code;
+      await sql("UPDATE verification SET value=? WHERE identifier=?", createHash("sha256").update(previousProof).digest("base64url") + ":0", id);
+    } else {
+      await sql("UPDATE verification SET identifier=? WHERE identifier=?", "hosted-email-" + generation, id);
+    }
+    assert.equal((await verify(browser, code)).status, 200);
+    assert.equal((await verify(browser, code)).status, 400);
+  }
 });
 
 test("a second tab cannot apply its code to another authorization in the same browser", async () => {

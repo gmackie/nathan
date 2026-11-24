@@ -2,10 +2,9 @@
  * NATH-11: OIDC Back-Channel Logout 1.0 delivery queue.
  *
  * Deliveries are enqueued in the same D1 batch as the revocation they announce (see
- * scim/lifecycle.ts), so a committed revocation always has its logout notifications queued. This
- * module sends them: one Logout Token per (client, user) with `sub` only, meaning "every session of
- * this user at the RP" (§2.4), signed with Nathan's ID-token key (Better Auth's JWT plugin) so any RP
- * that validates Nathan ID tokens can validate it. Each attempt signs a fresh token with a new `jti`.
+ * scim/lifecycle.ts and session-revocation.ts). Directory deprovisioning logs out every session
+ * for the subject. Mailbox verification targets the old session IDs at each relying party.
+ * Each attempt signs a fresh token with Nathan's ID-token key and a new `jti`.
  * Failures are retried with backoff; after the last attempt a delivery is marked failed and audited.
  *
  * Back-channel logout accelerates logout at relying parties. It is not what blocks a deprovisioned
@@ -25,7 +24,7 @@ export const LOGOUT_RETRY_DELAYS = [15, 60, 300, 900, 3600, 6 * 3600, 12 * 3600]
 const TIMEOUT_MS = 5000, TOKEN_LIFETIME = 120;
 const EVENT = "http://schemas.openid.net/event/backchannel-logout";
 
-type Due = { id: string; clientId: string; userId: string; attempts: number; uri: string | null; disabled: unknown;
+type Due = { id: string; clientId: string; userId: string; sessionId: string | null; attempts: number; uri: string | null; disabled: unknown;
   subjectType: string | null; redirectUris: string | null };
 
 /** Subject the client knows the user by: the user id, or Better Auth's pairwise identifier. */
@@ -47,7 +46,7 @@ export async function nextLogoutDue(env: AuthEnv, connectionId: string | null): 
  */
 export async function deliverLogouts(env: AuthEnv, { connectionId = null, limit = 25 }: { connectionId?: string | null; limit?: number } = {}) {
   const due = (await env.DB.prepare(
-    'SELECT d.id AS id, d.client_id AS clientId, d.user_id AS userId, d.attempts AS attempts, c."backchannelLogoutUri" AS uri, ' +
+    'SELECT d.id AS id, d.client_id AS clientId, d.user_id AS userId, d.session_id AS sessionId, d.attempts AS attempts, c."backchannelLogoutUri" AS uri, ' +
     'c."disabled" AS disabled, c."subjectType" AS subjectType, c."redirectUris" AS redirectUris ' +
     'FROM nathan_backchannel_deliveries d LEFT JOIN "oauthClient" c ON c."clientId"=d.client_id ' +
     "WHERE d.state='pending' AND d.next_attempt_at<=unixepoch() AND (?1 IS NULL OR d.connection_id=?1) ORDER BY d.next_attempt_at LIMIT ?2"
@@ -63,7 +62,7 @@ export async function deliverLogouts(env: AuthEnv, { connectionId = null, limit 
         const iat = Math.floor(Date.now() / 1000);
         const token = await signJWT({ context } as any, {
           options, header: { typ: "logout+jwt" },
-          payload: { iss, aud: row.clientId, sub: await subjectFor(env, row), iat, exp: iat + TOKEN_LIFETIME, jti: crypto.randomUUID(), events: { [EVENT]: {} } }
+          payload: { iss, aud: row.clientId, sub: await subjectFor(env, row), sid: row.sessionId ?? undefined, iat, exp: iat + TOKEN_LIFETIME, jti: crypto.randomUUID(), events: { [EVENT]: {} } }
         });
         const response = await fetchNoRedirect(row.uri, {
           method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
