@@ -33,7 +33,7 @@ function page(title: string, body: string, script = ""): Response {
   });
 }
 
-export function signInPage(providers: string[], passwordEnabled: boolean, enterpriseSso=false): Response {
+export function signInPage(providers: string[], passwordEnabled: boolean, enterpriseSso=false, emailCode=false): Response {
   const buttons=providers.map(p=>'<button data-provider="'+htmlEscape(p)+'">Continue with '+htmlEscape(displayName(p))+'</button>').join("");
   const password=passwordEnabled?'<h2>Email/password</h2><label>Email<input id="email" type="email" autocomplete="username"></label>'+
     '<label>Password<input id="password" type="password" autocomplete="current-password"></label>'+
@@ -43,9 +43,17 @@ export function signInPage(providers: string[], passwordEnabled: boolean, enterp
   const sso=enterpriseSso?'<h2>Work or school account</h2>'+
     '<label>Corporate email address<input id="sso-email" type="email" autocomplete="email" placeholder="you@company.com"></label>'+
     '<button id="sso-submit">Sign in with SSO</button>':"";
+  // NATH-49: passwordless email sign-in. Two steps on one page: the address, then the emailed code.
+  const otp=emailCode?'<h2>Email code</h2>'+
+    '<form id="otp-request"><label>Email address<input id="otp-email" type="email" autocomplete="email" required></label>'+
+    '<button type="submit">Email me a code</button></form>'+
+    '<form id="otp-verify" hidden><label>6-digit code from the email<input id="otp-code" inputmode="numeric" autocomplete="one-time-code" '+
+    'pattern="[0-9]{6}" maxlength="6" required aria-describedby="otp-help"></label>'+
+    '<small id="otp-help">The code expires in 10 minutes.</small><br>'+
+    '<button type="submit">Sign in</button><button type="button" class="secondary" id="otp-restart">Use a different email</button></form>':"";
   const passkey='<h2>Passkey</h2><button id="passkey-login">Sign in with passkey</button>';
-  return page("Sign in",'<p>Use your configured identity provider, passkey, or approved enterprise account.</p>'+
-    buttons+passkey+sso+password+'<p id="status" role="alert"></p>',String.raw`
+  return page("Sign in",'<p>Use your configured identity provider, passkey'+(emailCode?', a code sent to your email':'')+', or approved enterprise account.</p>'+
+    buttons+passkey+otp+sso+password+'<p id="status" role="alert"></p>',String.raw`
     const status=document.getElementById('status');
     // An app's /oauth2/authorize sent the browser here with a signed query; every sign-in request
     // carries it so Better Auth resumes that authorization (back to the app) instead of landing on "/".
@@ -57,7 +65,8 @@ export function signInPage(providers: string[], passwordEnabled: boolean, enterp
     async function request(path,payload){
       const res=await fetch('/api/auth'+path,{method:'POST',headers:{'Content-Type':'application/json'},
         credentials:'same-origin',body:JSON.stringify(payload)});
-      const body=await res.json().catch(()=>({}));if(!res.ok)throw Error(body.message||body.error||'Authentication failed');
+      const body=await res.json().catch(()=>({}));
+      if(!res.ok)throw Object.assign(Error(body.message||body.error||'Authentication failed'),{code:body.code,status:res.status});
       return unwrap(body);
     }
     // NATH-16/19: a refused sign-in returns here with ?error=<code>; explain known codes with fixed text.
@@ -71,6 +80,34 @@ export function signInPage(providers: string[], passwordEnabled: boolean, enterp
         if(!d.url)throw Error('No OAuth redirect URL');location.assign(d.url);
       }catch(e){status.textContent=e.message}
     });
+    // NATH-49: email sign-in code. The send step answers the same for every address.
+    const otpRequest=document.getElementById('otp-request');
+    if(otpRequest){
+      const otpVerify=document.getElementById('otp-verify'),otpEmail=document.getElementById('otp-email'),otpCode=document.getElementById('otp-code');
+      const otpErrors={INVALID_OTP:'That code is not right. Check the email and try again.',
+        OTP_EXPIRED:'That code has expired. Use a different email or request a new code.',
+        TOO_MANY_ATTEMPTS:'Too many wrong codes. Request a new code.'};
+      const showRequest=()=>{otpVerify.hidden=true;otpRequest.hidden=false;otpCode.value='';otpEmail.focus()};
+      otpRequest.onsubmit=async e=>{
+        e.preventDefault();
+        try{
+          await request('/email-otp/send-verification-otp',{email:otpEmail.value.trim(),type:'sign-in'});
+          otpRequest.hidden=true;otpVerify.hidden=false;
+          status.textContent='If this address can sign in here, a code is on its way to it. Enter it below.';
+          otpCode.focus();
+        }catch(err){status.textContent=err.message}
+      };
+      otpVerify.onsubmit=async e=>{
+        e.preventDefault();
+        try{
+          land(await request('/sign-in/email-otp',withOAuth({email:otpEmail.value.trim(),otp:otpCode.value.replace(/\s/g,'')})));
+        }catch(err){
+          status.textContent=Object.hasOwn(otpErrors,err.code||'')?otpErrors[err.code]:err.message;
+          if(err.code==='TOO_MANY_ATTEMPTS'||err.code==='OTP_EXPIRED')showRequest();
+        }
+      };
+      document.getElementById('otp-restart').onclick=showRequest;
+    }
     const pwd=document.getElementById('password-submit');
     if(pwd)pwd.onclick=async()=>{
       try{

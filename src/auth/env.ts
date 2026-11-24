@@ -18,6 +18,8 @@ export interface AuthEnv {
   NATHAN_REALM_APEX?: string;
   NATHAN_ADMIN_EMAILS: string;
   ENABLE_PASSWORD: string;
+  /** NATH-49: "true" enables passwordless email sign-in codes (off by default; needs RESEND_API_KEY and EMAIL_FROM). */
+  ENABLE_EMAIL_OTP?: string;
   ENTERPRISE_SSO: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;

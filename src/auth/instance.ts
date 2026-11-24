@@ -19,8 +19,11 @@ const OAUTH_SCOPES = ["openid", "profile", "email", "offline_access", "nathan:re
 import {ssoPluginOptions} from "./saml-policy.mjs";
 import { nathanDatabaseHooks } from "./database-hooks";
 import { admissionBeforeEmailVerification, withInviteeSupersession } from "./admission";
+import { emailOtpPlugins, emailOtpRequestGuard, emailOtpAudit, type Background } from "./email-otp";
+import { DISABLED_EMAIL_OTP_PATHS, IP_LIMITS } from "./email-otp-policy.mjs";
 
-export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredentials) {
+/** `background` (ExecutionContext.waitUntil) runs work after the response, such as mailing a sign-in code (NATH-49). */
+export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredentials, background?: Background) {
   const issuer = new URL(env.NATHAN_ISSUER);
   if (issuer.protocol !== "https:" && issuer.hostname !== "localhost")
     throw new Error("Nathan requires an HTTPS identity hostname");
@@ -47,15 +50,24 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
     // NATH-9: implicit account linking only on a provider-verified email matching a verified
     // Nathan user; no provider is trusted by name (see docs/providers.md).
     account: { encryptOAuthTokens: true, storeStateStrategy: "database", accountLinking: { ...ACCOUNT_LINKING, trustedProviders: [...ACCOUNT_LINKING.trustedProviders] } },
-    disabledPaths: ["/token"],
+    // NATH-49: of the emailOTP plugin's routes only sign-in codes exist (send + sign in); the
+    // verification, password-reset, email-change and code-check routes are disabled everywhere.
+    disabledPaths: ["/token", ...DISABLED_EMAIL_OTP_PATHS],
     // SAML sign-in never creates accounts unless the connection allows
     // just-in-time provisioning for its verified domain (NATH-10); no method creates an account the
     // installation's admission policy refuses (NATH-16). Both compose in ./database-hooks.ts.
     databaseHooks: nathanDatabaseHooks(env),
     hooks: {
       // NATH-15: a client not marked agent may not have a user delegate nathan:api.
-      before: createAuthMiddleware(async (ctx) => guardAuthorizationScopes(env, ctx, OAUTH_SCOPES)),
+      before: createAuthMiddleware(async (ctx) => {
+        // NATH-49: email sign-in codes: Resend configured, exact fields, per-address limits.
+        await emailOtpRequestGuard(env, ctx);
+        return guardAuthorizationScopes(env, ctx, OAUTH_SCOPES);
+      }),
       after: createAuthMiddleware(async (ctx) => {
+        // NATH-49: audit email-code sign-ins and refusals (no address, no code). The session carries
+        // no assurance evidence: only a verified passkey writes nathan_admin_assurance below.
+        if (ctx.path==="/sign-in/email-otp"){ await emailOtpAudit(env, ctx); return; }
         // NATH-9: remember which social provider created a session, so a Studio test
         // sign-in can prove the provider round trip.
         if(ctx.path==="/callback/:id"){
@@ -83,7 +95,9 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
       max: 100,
       customRules: {
         "/sign-in/email": { window: 60, max: 5 },
-        "/oauth2/token": { window: 60, max: 30 }
+        "/oauth2/token": { window: 60, max: 30 },
+        // NATH-49: per IP; per-address limits are in emailOtpRequestGuard.
+        ...IP_LIMITS
       }
     },
     trustedOrigins: [issuer.origin],
@@ -151,6 +165,8 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
         },
         ...(env.NATHAN_PAIRWISE_SECRET ? { pairwiseSecret: env.NATHAN_PAIRWISE_SECRET } : {})
       }),
+      // NATH-49: passwordless email sign-in codes, only when ENABLE_EMAIL_OTP=true.
+      ...emailOtpPlugins(env, background),
       // Hardened SAML/OIDC enterprise SSO options: see src/auth/saml-policy.mjs.
       ...(env.ENTERPRISE_SSO === "true" ? [sso(ssoPluginOptions())] : [])
     ]
