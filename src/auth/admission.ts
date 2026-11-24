@@ -15,7 +15,7 @@
  *   "reissue" removes an unverified account for an address and invites it again.
  */
 import { APIError } from "better-auth/api";
-import type { AuthEnv } from "./env";
+import { managementEmail, type AuthEnv } from "./env";
 import { audit } from "./admin-service";
 import { samlUserCreateGuard } from "./saml-policy.mjs";
 import { enterpriseOidcUserCreateGuard } from "./enterprise-oidc-policy.mjs";
@@ -218,7 +218,8 @@ export async function admissionUserCreateGuard(env: AuthEnv, user: any, ctx: any
   const method = creationMethod(ctx);
   let decision: { admitted: boolean; via: string | null };
   try {
-    decision = await decideAdmission(env.DB, env, { email: merged.email, emailVerified: merged.emailVerified === true, method, invitationId });
+    decision = await decideAdmission(env.DB, env, { email: merged.email, emailVerified: merged.emailVerified === true, method, invitationId,
+      requirePasswordInvitation: Boolean(env[managementEmail]) });
     // A password sign-up holds nothing yet: it is provisional until its address is verified.
     if (decision.via === "invitation_pending") await recordPendingAdmission(env.DB, normalizeEmail(merged.email), method);
   } catch {
@@ -248,7 +249,7 @@ export async function admissionUserCreated(env: AuthEnv, user: any) {
 export async function admissionBeforeEmailVerification(env: AuthEnv, user: any) {
   let decision: { pending: boolean; admitted?: boolean; via?: string };
   try {
-    decision = await admitOnVerification(env.DB, env, { userId: user?.id, email: user?.email });
+    decision = await admitOnVerification(env.DB, env, { userId: user?.id, email: user?.email, requirePasswordInvitation: Boolean(env[managementEmail]) });
   } catch {
     refuse();
   }

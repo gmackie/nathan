@@ -1,6 +1,6 @@
 import { APIError } from "better-auth/api";
 import { retireUnverifiedAccess } from "./session-revocation";
-import type { AuthEnv } from "./env";
+import { managementEmail, type AuthEnv } from "./env";
 import { admissionUserCreateGuard, admissionUserCreated } from "./admission";
 import { scimSessionGuard } from "./scim/session-guard";
 import { claimInvitationStatement } from "./admission-policy.mjs";
@@ -12,7 +12,7 @@ const refuseEmail = () => new APIError("FORBIDDEN", { message: "Email sign-in un
  * cleanup, promotion, admission and audit together on D1. A later error rolls them all back. */
 async function promoteEmailSubject(env: AuthEnv, flow: EmailFlow) {
   const subject = flow.subject_id;
-  const current = await emailTarget(env.DB, flow.email);
+  const current = await emailTarget(env.DB, flow.email, env);
   if (!subject || current?.subject_id !== subject || current.invitation_id !== flow.invitation_id) throw refuseEmail();
 
   const invited = flow.invitation_id !== null;
@@ -52,6 +52,8 @@ export function nathanDatabaseHooks(env: AuthEnv, flow?: EmailFlow) {
     user: {
       create: {
         before: async (user: any, ctx: any) => {
+          if (env[managementEmail] && user.email?.toLowerCase() !== env[managementEmail])
+            throw new APIError("FORBIDDEN", { message: "Sign in with the identity verified by Cloudflare Access." });
           const invitation = flow?.invitation_id ?? null;
           const guard = await admissionUserCreateGuard(env, user, ctx, invitation);
           if (guard === false || ctx?.path !== "/sign-in/email-otp") return guard;
@@ -69,6 +71,10 @@ export function nathanDatabaseHooks(env: AuthEnv, flow?: EmailFlow) {
       ...(flow ? { delete: { before: deferCleanup } } : {}),
       create: {
         before: async (session: any) => {
+          const email = env[managementEmail];
+          if (email && !await env.DB.prepare('SELECT 1 FROM "user" WHERE id=? AND lower(email)=? AND emailVerified=1')
+              .bind(session.userId, email).first())
+            throw new APIError("FORBIDDEN", { message: "Sign in with the identity verified by Cloudflare Access." });
           await scimSessionGuard(env, session);
           if (flow && !await emailSessionAllowed(env, flow, session.userId)) throw refuseEmail();
         },

@@ -100,8 +100,8 @@ export function claimInvitationStatement(id, method, userId) {
  * `{ admitted: false }` otherwise. An invitation is claimed only for an address the method proved.
  * Throws on database errors: callers refuse the account.
  */
-/** @param {any} db @param {any} env @param {{email: unknown, emailVerified: boolean, method: string, invitationId?: string|null}} input */
-export async function decideAdmission(db, env, { email, emailVerified, method, invitationId = null }) {
+/** @param {any} db @param {any} env @param {{email: unknown, emailVerified: boolean, method: string, invitationId?: string|null, requirePasswordInvitation?: boolean}} input */
+export async function decideAdmission(db, env, { email, emailVerified, method, invitationId = null, requirePasswordInvitation = false }) {
   const address = normalizeEmail(email);
   if (!address) return { admitted: false, via: null };
   if (method === "email-otp") {
@@ -109,8 +109,10 @@ export async function decideAdmission(db, env, { email, emailVerified, method, i
     const invitation = emailVerified === true && invitationId && await openInvitation(db, address);
     return invitation && invitation.id === invitationId ? { admitted: true, via: "invitation", invitationId } : { admitted: false, via: null };
   }
-  if (await isBootstrapAdmission(db, env, address, emailVerified)) return { admitted: true, via: "bootstrap" };
-  if (await admissionMode(db) === "self-service") return { admitted: true, via: "self-service" };
+  if (!(requirePasswordInvitation && method === "password")) {
+    if (await isBootstrapAdmission(db, env, address, emailVerified)) return { admitted: true, via: "bootstrap" };
+    if (await admissionMode(db) === "self-service") return { admitted: true, via: "self-service" };
+  }
   if (method === "password") return await openInvitation(db, address) ? { admitted: true, via: "invitation_pending" } : { admitted: false, via: null };
   if (emailVerified !== true) return { admitted: false, via: null };
   const invitation = await claimInvitation(db, address, method);
@@ -139,14 +141,14 @@ const PENDING = "SELECT email, method FROM nathan_admission_pending WHERE user_i
  * installation is self-service, or it is the installer's first administrator), else
  * `{ pending: true, admitted: false }` and the caller must refuse the verification.
  */
-export async function admitOnVerification(db, env, { userId, email }) {
+export async function admitOnVerification(db, env, { userId, email, requirePasswordInvitation = false }) {
   const address = normalizeEmail(email);
   const pending = await db.prepare(PENDING).bind(userId, address ?? "").first();
-  if (!pending) return { pending: false };
+  if (!pending) return requirePasswordInvitation ? { pending: true, admitted: false } : { pending: false };
   if (!address) return { pending: true, admitted: false };
   let decision;
-  if (await isBootstrapAdmission(db, env, address, true)) decision = { pending: true, admitted: true, via: "bootstrap" };
-  else if (await admissionMode(db) === "self-service") decision = { pending: true, admitted: true, via: "self-service" };
+  if (!requirePasswordInvitation && await isBootstrapAdmission(db, env, address, true)) decision = { pending: true, admitted: true, via: "bootstrap" };
+  else if (!requirePasswordInvitation && await admissionMode(db) === "self-service") decision = { pending: true, admitted: true, via: "self-service" };
   else {
     const invitation = await claimInvitation(db, address, pending.method, userId);
     decision = invitation ? { pending: true, admitted: true, via: "invitation", invitationId: invitation } : { pending: true, admitted: false };

@@ -33,7 +33,7 @@ async function oauthClient(env: AuthEnv, query: string): Promise<EmailClient | n
 async function issue(env: AuthEnv, browser: string, flowId: string, flow: EmailFlow, client: EmailClient | null, delivery: EmailDelivery) {
   const auth = createAuth(env, undefined, { browser, flow });
   const proof = await auth.api.createVerificationOTP({ body: { email: flow.email, type: "sign-in" } });
-  const eligible = await emailTarget(env.DB, flow.email);
+  const eligible = await emailTarget(env.DB, flow.email, env);
   if (eligible) {
     const digits = proof.slice(-6);
     const link = new URL("/sign-in/email", env.NATHAN_ISSUER);
@@ -69,7 +69,9 @@ async function requestEmail(request: Request, env: AuthEnv, ctx: ExecutionContex
     new Headers({ "Set-Cookie": makeCookie(COOKIE, browser, { maxAge: EMAIL_TTL }) }));
 }
 
-async function verify(request: Request, env: AuthEnv, body: Input) {
+type AuthorizationCheck = (query: string | null) => Promise<boolean>;
+
+async function verify(request: Request, env: AuthEnv, body: Input, authorize?: AuthorizationCheck) {
   const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
   if (!await allowRequests(env, "email-verify-ip", ip, 20, 600)) return invalid();
   const browser = parseCookie(request.headers.get("Cookie"), COOKIE);
@@ -82,6 +84,7 @@ async function verify(request: Request, env: AuthEnv, body: Input) {
     .bind(id, EMAIL_ATTEMPTS).first<EmailFlow>();
   if (!flow || Boolean(flow.second_factor) !== isFactor) return invalid();
   if (!(await consumeAddressLimit(env.DB, "verify", flow.email)).allowed) return invalid();
+  if (authorize && !await authorize(flow.oauth_query)) return invalid();
   if (flow.oauth_query && !await oauthClient(env, flow.oauth_query)) return invalid();
   const start = await reserveProofAttempt(env.DB);
   if (start === null) return invalid();
@@ -121,7 +124,7 @@ async function redeem(request: Request, env: AuthEnv, flow: EmailFlow, browser: 
     headers.set("Cookie", FACTOR_COOKIE + "=" + pending);
     response = await auth.api.verifyTOTP({ ...options(), body: { code: digits, trustDevice: false, ...oauth } });
   } else {
-    const eligible = await emailTarget(env.DB, flow.email);
+    const eligible = await emailTarget(env.DB, flow.email, env);
     // Dummy, revoked and replaced targets take the same credential-verification path. Their
     // proof cannot possibly match, even if someone guesses the digits of an undelivered mail.
     const proof = record?.previous ? previousProof : browser + "." + flow.generation + "." + digits;
@@ -166,7 +169,7 @@ async function redeem(request: Request, env: AuthEnv, flow: EmailFlow, browser: 
   return reply(200, { url: result.url || "/" }, outgoing);
 }
 
-export async function emailSignIn(request: Request, env: AuthEnv, ctx: ExecutionContext, action: "request" | "verify") {
+export async function emailSignIn(request: Request, env: AuthEnv, ctx: ExecutionContext, action: "request" | "verify", authorize?: AuthorizationCheck) {
   if (!emailEnabled(env)) return reply(404, { error: "Email sign-in unavailable" });
   if (request.method !== "POST") return reply(405, { error: "POST required" });
   if (!isAllowedUnsafeRequest(request.method, request.headers.get("Origin"), new URL(env.NATHAN_ISSUER).origin, request.headers.get("Sec-Fetch-Site")))
@@ -177,6 +180,6 @@ export async function emailSignIn(request: Request, env: AuthEnv, ctx: Execution
   let body: Input;
   try { body = JSON.parse(raw); } catch { return invalid(); }
   if (!body || typeof body !== "object" || Array.isArray(body)) return invalid();
-  try { return action === "request" ? await requestEmail(request, env, ctx, body) : await verify(request, env, body); }
+  try { return action === "request" ? await requestEmail(request, env, ctx, body) : await verify(request, env, body, authorize); }
   catch { return invalid(); }
 }

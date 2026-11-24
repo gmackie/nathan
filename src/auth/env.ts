@@ -1,9 +1,15 @@
+/** Request-local, verified Access email. A deployed binding cannot supply this symbol. */
+export const managementEmail = Symbol("managementEmail");
+
 export interface AuthEnv {
+  [managementEmail]?: string;
   DB: D1Database;
   SCIM_DIRECTORY?: DurableObjectNamespace;
   /** NATH-11: SCIM requests per minute per connection (default 600). */
   NATHAN_SCIM_RATE_LIMIT?: string;
   NATHAN_INSTALL_ACTIVE?: string;
+  /** Dedicated application's ID, pinned separately in its service bindings. */
+  NATHAN_APP_ID?: string;
   NATHAN_MCP_WRITE_ENABLED?: string;
   BETTER_AUTH_SECRET: string;
   NATHAN_CONFIG_KEY?: string;
@@ -11,6 +17,10 @@ export interface AuthEnv {
   NATHAN_BOOTSTRAP_REQUIRED?: string;
   NATHAN_ADMIN_STEPUP_REQUIRED?: string;
   NATHAN_ISSUER: string;
+  /** Dedicated installation. NATHAN_ISSUER is the management origin; the named app binding serves NATHAN_APP_ORIGIN. */
+  NATHAN_APP_ORIGIN?: string;
+  NATHAN_ACCESS_TEAM_DOMAIN?: string;
+  NATHAN_ACCESS_AUD?: string;
   /** NATH-43: what users see this identity provider called (TOTP issuer, appName, passkey name); default "Nathan". */
   NATHAN_INSTANCE_NAME?: string;
   /** NATH-43: passkey relying-party display name override (defaults to NATHAN_INSTANCE_NAME); the rpID is the issuer hostname. */

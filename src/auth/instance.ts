@@ -6,11 +6,11 @@ import { passkey } from "@better-auth/passkey";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { sso } from "@better-auth/sso";
 import { sendAuthEmail } from "./email";
-import type { AuthEnv } from "./env";
+import { managementEmail, type AuthEnv } from "./env";
 import type { SocialCredentials } from "./provider-store";
 import { recordProviderSignIn } from "./provider-store";
 import { ACCOUNT_LINKING, buildSocialProviders } from "../shared/providers.mjs";
-import {mayAdminister} from "./bootstrap";
+import {mayAdminister, mayEnrollManagementFactor} from "./bootstrap";
 import {isAdminPrincipal} from "./admin-service";
 import { nathanAccessTokenExtension, guardAuthorizationScopes, MAX_ACCESS_TOKEN_SECONDS, API_SCOPE } from "./tokens";
 
@@ -66,12 +66,19 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
     hooks: {
       // NATH-15: a client not marked agent may not have a user delegate nathan:api.
       before: createAuthMiddleware(async ctx => {
+        const operator = env[managementEmail];
+        if (operator && (ctx.body?.oauth_query !== undefined ||
+          (["/sign-in/email", "/sign-up/email", "/send-verification-email"].includes(ctx.path) &&
+            String(ctx.body?.email ?? "").trim().toLowerCase() !== operator)))
+          throw new APIError("FORBIDDEN", { message: "Management sign-in requires the identity verified by Cloudflare Access." });
         await guardAuthorizationScopes(env, ctx, OAUTH_SCOPES);
         // An email-authenticated administrator needs an existing authenticator before changing
         // credentials, including enrolling the passkey that would grant privileged step-up.
         if (ctx.path.startsWith("/two-factor/") || ADMIN_CREDENTIAL_PATHS.has(ctx.path)) {
           const current = await getSessionFromCtx(ctx);
-          if (current?.user && "role" in current.user && current.user.role === "admin" && await isEmailSession(env.DB, current.session.id))
+          if (current?.user && "role" in current.user && current.user.role === "admin" &&
+              (await isEmailSession(env.DB, current.session.id) ||
+                (operator && !await mayEnrollManagementFactor(env, current.user.id, current.session.id, ctx.path))))
             throw new APIError("FORBIDDEN", { message: "Sign in with an existing authenticator to manage administrator credentials." });
         }
       }),
@@ -116,10 +123,16 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
         sendAuthEmail(env, user.email, "Reset your Nathan password", url)
     },
     emailVerification: {
+      // A pending owner can resend verification by presenting the original management password.
+      sendOnSignIn: Boolean(env[managementEmail]),
       sendVerificationEmail: async ({ user, url }) =>
         sendAuthEmail(env, user.email, "Verify your Nathan email", url),
       // NATH-16: a provisional password sign-up claims its invitation only now, or stays unverified.
-      beforeEmailVerification: async (user) => admissionBeforeEmailVerification(env, user)
+      beforeEmailVerification: async (user) => {
+        if (env[managementEmail] && user.email.toLowerCase() !== env[managementEmail])
+          throw new APIError("FORBIDDEN", { message: "Verify the mailbox belonging to your Cloudflare Access identity." });
+        await admissionBeforeEmailVerification(env, user);
+      }
     },
     advanced: {
       // The IdP's session is strictly host-only on login.<domain>.

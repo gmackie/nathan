@@ -9,6 +9,7 @@ import { signedOAuthQuery } from "./oauth-query.mjs";
 import { normalizeEmail } from "./admission-policy.mjs";
 import { createAuth } from "./instance";
 import {isRawManagementEndpoint} from "./management-boundary.mjs";
+import { managementIngress } from "./management-ingress";
 import { loadSocialCredentials, providerStatus, upsertSocialProvider, setSocialProviderEnabled } from "./provider-store";
 import { enabledProviderIds, beginProviderTest, completeProviderTest } from "./provider-store";
 import { providerTestResultPage } from "./provider-ui.mjs";
@@ -18,6 +19,7 @@ import {effectiveAdminPolicy,tightenAdminPolicy} from "./security-policy";
 import {handleScim} from "./scim/gateway";
 import {listScimConnections,createScimConnection,setScimConnectionEnabled,rotateScimToken} from "./scim/admin";
 import {samlProtocolGate,handleSamlRoutes} from "./saml-routes";
+export { NathanAppAuth } from "./app-auth";
 export {NathanScimDirectory} from "./scim/directory";
 import { signInPage, consentPage, studioPage } from "./ui";
 import { securityPage } from "./security-ui";
@@ -149,7 +151,7 @@ async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Pr
     if (!await isAdmin(session, env) || !await mayAdminister(env,session!.user.id,session!.session.id)) return reject(403, "Admin enrollment incomplete");
     if (url.pathname === "/studio/api/status") {
       return Response.json({
-        issuer: issuer.origin + "/api/auth",
+        issuer: (env.NATHAN_APP_ORIGIN ?? issuer.origin) + "/api/auth",
         providers: Object.fromEntries((await providerStatus(env)).map(p=>[p.id,p.enabled])),
         features: {oidcProvider: true, passkeys: true, totp: true, enterpriseSso: env.ENTERPRISE_SSO === "true", password: env.ENABLE_PASSWORD === "true", scimDirectory: Boolean(env.SCIM_DIRECTORY)},
         note: "Authentication assurance level enforcement and guided plugin installation are not yet available"
@@ -569,7 +571,7 @@ async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Pr
 }
 
 export default {
-  fetch: (request: Request, env: AuthEnv, ctx: ExecutionContext) => handle(request, env, ctx),
+  fetch: (request: Request, env: AuthEnv, ctx: ExecutionContext) => managementIngress(request, env, ctx, handle),
   scheduled: async (_: ScheduledEvent,env:AuthEnv) => {
     await env.DB.prepare("DELETE FROM nathan_mcp_limits WHERE expires_at < unixepoch()").run();
     await pruneEmailOtpLimits(env.DB);
