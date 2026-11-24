@@ -1,0 +1,66 @@
+// Management uses an exact custom domain attached separately after Access and secrets are verified.
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "account_id": "c07a7e704db1808e1fff91bed2b1cd49",
+  "name": "nathan-classcheck-prod-auth",
+  "main": "../../src/auth/worker.ts",
+  "compatibility_date": "2026-10-27",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [],
+  "build": {
+    "command": "node scripts/build-ui.mjs"
+  },
+  "observability": {
+    "enabled": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "nathan-classcheck-prod-auth",
+      "database_id": "3f02ca16-c9c2-4a57-9f45-a9f1b32646c2",
+      "migrations_dir": "../../migrations"
+    }
+  ],
+  "vars": {
+    "NATHAN_ISSUER": "https://id.classcheck.io",
+    "NATHAN_APP_ORIGIN": "https://classcheck.io",
+    "NATHAN_APP_ID": "classcheck",
+    "NATHAN_ACCESS_TEAM_DOMAIN": "gmacko.cloudflareaccess.com",
+    "NATHAN_ACCESS_AUD": "d660026d024d24359ff132541a4451c505799e1e7cae4a952a54c387517244f5",
+    "NATHAN_INSTANCE_NAME": "ClassCheck",
+    "NATHAN_SECURITY_PROFILE": "business",
+    "NATHAN_BOOTSTRAP_REQUIRED": "true",
+    "NATHAN_ADMIN_STEPUP_REQUIRED": "true",
+    "NATHAN_INSTALL_ACTIVE": "true",
+    "NATHAN_MCP_WRITE_ENABLED": "false",
+    "ENABLE_PASSWORD": "true",
+    "ENTERPRISE_SSO": "false",
+    "ENABLE_EMAIL_OTP": "true",
+    "EMAIL_FROM": "ClassCheck <noreply@gmac.io>"
+  },
+  "triggers": {
+    "crons": [
+      "42 5 * * *"
+    ]
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SCIM_DIRECTORY",
+        "class_name": "NathanScimDirectory"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "nathan-scim-v1",
+      "new_sqlite_classes": [
+        "NathanScimDirectory"
+      ]
+    }
+  ]
+}

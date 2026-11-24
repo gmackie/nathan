@@ -1,0 +1,30 @@
+app: classcheck-id
+server: https://forgegraf.com
+deploymentPlatform: cloudflare-workers
+stages:
+  - name: staging
+    sortOrder: 10
+    targets:
+      - name: auth
+        platform: cloudflare-workers
+        config:
+          appDir: .
+          workerName: nathan-classcheck-stg-auth
+          buildCommand: npm ci --no-audit --no-fund
+          deployCommand: >-
+            npx wrangler d1 migrations apply DB --remote --config deploy/classcheck-staging/wrangler.auth.jsonc &&
+            npx wrangler deploy --config deploy/classcheck-staging/wrangler.auth.jsonc
+          syncSecrets: true
+  - name: production
+    sortOrder: 20
+    targets:
+      - name: auth
+        platform: cloudflare-workers
+        config:
+          appDir: .
+          workerName: nathan-classcheck-prod-auth
+          buildCommand: npm ci --no-audit --no-fund
+          deployCommand: >-
+            npx wrangler d1 migrations apply DB --remote --config deploy/classcheck-production/wrangler.auth.jsonc &&
+            npx wrangler deploy --config deploy/classcheck-production/wrangler.auth.jsonc
+          syncSecrets: true
