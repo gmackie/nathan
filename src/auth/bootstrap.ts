@@ -1,4 +1,4 @@
-import { isEmailSession } from "./email-sign-in-policy";
+import { liveAdminSession } from "./email-sign-in-policy";
 import type { AuthEnv } from "./env";
 import { audit } from "./admin-service";
 import {effectiveAdminPolicy} from "./security-policy";
@@ -59,7 +59,7 @@ export async function completeBootstrap(env:AuthEnv,userId:string) {
 }
 /** For any administrator, enrollment is required before privileged UI and MCP. */
 export async function mayAdminister(env:AuthEnv,userId:string,sessionId?:string) {
-  if (await isEmailSession(env.DB, sessionId)) return false;
+  if (!await liveAdminSession(env.DB, userId, sessionId)) return false;
   if(env.NATHAN_BOOTSTRAP_REQUIRED!=="true")return true; // Legacy manual installations
   const b=await row(env);
   if(!b||b.state!=="complete")return false;

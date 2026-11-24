@@ -62,10 +62,6 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
     // SAML sign-in never creates accounts unless the connection allows
     // just-in-time provisioning for its verified domain (NATH-10); no method creates an account the
     // installation's admission policy refuses (NATH-16). Both compose in ./database-hooks.ts.
-    // Isolate a reissued email proof from delayed sends and verification retries for its predecessor.
-    ...(email ? { verification: { storeIdentifier: { default: "plain" as const, overrides: {
-      "sign-in-otp-": { hash: async () => "hosted-email-" + email.flow.generation }
-    } } } } : {}),
     databaseHooks: nathanDatabaseHooks(env, email?.flow),
     hooks: {
       // NATH-15: a client not marked agent may not have a user delegate nathan:api.

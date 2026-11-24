@@ -13,6 +13,7 @@ const HOST = "login.example.test", ORIGIN = "https://" + HOST, ISSUER = ORIGIN +
 const RESOURCE = "https://classcheck.example.test/api";
 const CALLBACK = "https://classcheck.example.test/auth/callback";
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aB9sAAAAASUVORK5CYII=";
+const undeliverable = new Set();
 const messages = [], inbox = new EventEmitter();
 const secret = randomKey() + randomKey();
 let mf, db, client, sequence = 0;
@@ -98,6 +99,7 @@ before(async () => {
     outboundService: async req => {
       assert.equal(req.url, "https://api.resend.com/emails");
       const mail = await req.json();
+      if (undeliverable.has(mail.to[0])) { inbox.emit("failed:" + mail.to[0]); return new Response(null, {status: 503}); }
       messages.push(mail);
       inbox.emit(mail.to[0]);
       return Response.json({ id: crypto.randomUUID() });
@@ -162,6 +164,12 @@ for (const method of ["code", "link"]) test(method + " resumes hosted authorizat
   const keys = createLocalJWKSet(await (await mf.dispatchFetch(ISSUER + "/jwks")).json());
   const id = (await jwtVerify(tokens.id_token, keys, { issuer: ISSUER, audience: client.client_id })).payload;
   assert.equal(id.nonce, flow.nonce);
+  const userInfo = await mf.dispatchFetch(ISSUER + "/oauth2/userinfo", { headers: { Authorization: "Bearer " + tokens.access_token } });
+  assert.equal(userInfo.status, 200);
+  const profile = await userInfo.json();
+  assert.equal(profile.sub, id.sub);
+  assert.equal(profile.email, email);
+  assert.equal(profile.email_verified, true);
   const access = (await jwtVerify(tokens.access_token, keys, { issuer: ISSUER, audience: RESOURCE })).payload;
   assert.deepEqual(access.nathan_amr, ["email"]);
   assert.equal(access.nathan_acr, undefined);
@@ -336,6 +344,66 @@ test("a failed success audit discards the new session and its evidence", async (
     assert.equal(await one('SELECT s.id FROM session s JOIN "user" u ON s.userId=u.id WHERE u.email=?', email), null);
     assert.equal(await one('SELECT e.session_id FROM nathan_email_otp_sessions e JOIN "user" u ON u.id=e.user_id WHERE u.email=?', email), null);
   } finally { await sql("DROP TRIGGER fail_email_sign_in_audit"); }
+});
+
+test("an OAuth error redirect cannot release a hosted email session", async () => {
+  const address = "resource-disabled@example.test";
+  await invite(address);
+  const authorization = await beginAuthorization(address), start = await requestCode(address, authorization.query);
+  const { code } = await mailFor(address);
+  await sql('UPDATE oauthResource SET disabled=1 WHERE identifier=?', RESOURCE);
+  try {
+    const result = await verify(cookie(start, "__Host-nathan-email"), code);
+    assert.equal(result.status, 400);
+    assert.equal(cookie(result, "__Secure-nathan.session_token"), "");
+    assert.equal(await one('SELECT s.id FROM session s JOIN "user" u ON s.userId=u.id WHERE u.email=?', address), null);
+  } finally { await sql("UPDATE oauthResource SET disabled=0 WHERE identifier=?", RESOURCE); }
+});
+
+test("an enrolled authenticator at final session claim requires a completed TOTP", async () => {
+  const address = "new-factor@example.test", now = new Date().toISOString();
+  await sql('INSERT INTO "user"(id,name,email,emailVerified,createdAt,updatedAt) VALUES (\'new-factor\',\'\',?,1,?,?)', address, now, now);
+  const start = await requestCode(address), browser = cookie(start, "__Host-nathan-email");
+  const { code } = await mailFor(address);
+  await sql("CREATE TRIGGER newly_enrolled AFTER INSERT ON nathan_email_otp_sessions WHEN NEW.user_id='new-factor' BEGIN " +
+    "UPDATE user SET twoFactorEnabled=1 WHERE id=NEW.user_id; INSERT INTO twoFactor(id,userId,secret,backupCodes,verified) " +
+    "VALUES ('new-factor-totp',NEW.user_id,'fixture','fixture',1); END");
+  try {
+    const result = await verify(browser, code);
+    assert.equal(result.status, 400);
+    assert.equal(await one('SELECT id FROM session WHERE userId=\'new-factor\''), null);
+    assert.equal(await one("SELECT id FROM nathan_security_audit WHERE actor='new-factor' AND outcome='succeeded'"), null);
+  } finally { await sql("DROP TRIGGER newly_enrolled"); }
+});
+
+test("a failed resend preserves the previous delivered generation", async () => {
+  const address = "resend-failure@example.test";
+  await invite(address);
+  const start = await requestCode(address), browser = cookie(start, "__Host-nathan-email");
+  const { code } = await mailFor(address);
+  undeliverable.add(address);
+  try {
+    const refused = once(inbox, "failed:" + address, { signal: AbortSignal.timeout(5000) });
+    assert.equal((await requestCode(address, undefined, undefined, browser)).status, 202);
+    await refused;
+    assert.equal((await verify(browser, code)).status, 200);
+  } finally { undeliverable.delete(address); }
+});
+
+test("promotion cleanup and the invitation roll back on an account write failure", async () => {
+  const address = "promotion-failure@example.test", invitation = await invite(address);
+  const signup = await post("/api/auth/sign-up/email", { email: address, name: "Provisional", password: randomKey() });
+  assert.ok(signup.ok);
+  const idx = messages.filter(m => m.to.includes(address)).length;
+  const start = await requestCode(address), browser = cookie(start, "__Host-nathan-email");
+  const { code } = await mailFor(address, idx);
+  await sql("CREATE TRIGGER stop_promotion BEFORE UPDATE OF emailVerified ON user WHEN NEW.email='promotion-failure@example.test' " +
+    "AND NEW.emailVerified=1 BEGIN SELECT RAISE(ABORT,'test storage error'); END");
+  try {
+    assert.equal((await verify(browser, code)).status, 400);
+    assert.ok(await one('SELECT a.id FROM account a JOIN user u ON u.id=a.userId WHERE u.email=? AND a.providerId=\'credential\'', address));
+    assert.equal((await one("SELECT uses FROM nathan_invitations WHERE id=?", invitation)).uses, 0);
+  } finally { await sql("DROP TRIGGER stop_promotion"); }
 });
 
 test("a second tab cannot apply its code to another authorization in the same browser", async () => {

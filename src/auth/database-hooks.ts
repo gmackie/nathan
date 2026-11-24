@@ -7,47 +7,46 @@ import { emailTarget, emailSessionAllowed, type EmailFlow } from "./email-sign-i
 
 const refuseEmail = () => new APIError("FORBIDDEN", { message: "Email sign-in unavailable" });
 
-/** Better Auth has verified the OTP and removed unproven account links/sessions. Pin the
- * promotion to the account that received the mail. A provisional signup consumes its exact
- * invitation and becomes verified in one batch, so a failed write can be retried. */
+/** Better Auth calls the update hook once the mailbox is proven. Commit its unproven-access
+ * cleanup, promotion, admission and audit together on D1. A later error rolls them all back. */
 async function promoteEmailSubject(env: AuthEnv, flow: EmailFlow) {
   const subject = flow.subject_id;
   const current = await emailTarget(env.DB, flow.email);
   if (!subject || current?.subject_id !== subject || current.invitation_id !== flow.invitation_id) throw refuseEmail();
-  const live = "EXISTS(SELECT 1 FROM nathan_email_sign_ins WHERE id=? AND generation=? AND subject_id=? " +
-    "AND email=? AND invitation_id IS ? AND expires_at>unixepoch())";
-  const pin = [flow.id, flow.generation, subject, flow.email, flow.invitation_id];
-  if (!flow.invitation_id) {
-    const changed = await env.DB.prepare('UPDATE "user" SET emailVerified=1 WHERE id=? AND email=? AND emailVerified=0 AND ' + live +
-      " AND EXISTS(SELECT 1 FROM nathan_scim_users WHERE user_id=? AND link_state='linked' AND link_method='jit' AND active=1 AND deleted=0)")
-      .bind(subject, flow.email, ...pin, subject).run();
-    if (!changed.meta.changes) throw refuseEmail();
-    return;
-  }
-  const claim = claimInvitationStatement(flow.invitation_id, "email-otp", subject);
-  const promoted = 'SELECT 1 FROM nathan_invitations WHERE id=? AND email=? AND used_by_user=? AND uses=1 AND ' + live;
-  const params = [flow.invitation_id, flow.email, subject, ...pin];
-  const [, changed] = await env.DB.batch([
-    env.DB.prepare(claim.sql + ' AND email=? AND EXISTS(SELECT 1 FROM "user" u JOIN nathan_admission_pending p ON p.email=u.email ' +
-      'WHERE u.id=? AND u.email=? AND u.emailVerified=0 AND (p.user_id=u.id OR p.user_id IS NULL)) AND ' + live)
-      .bind(...claim.params, flow.email, subject, flow.email, ...pin),
-    env.DB.prepare('UPDATE "user" SET emailVerified=1,name=\'\',image=NULL WHERE id=? AND email=? AND EXISTS(' + promoted + ')').bind(subject, flow.email, ...params),
-    env.DB.prepare("DELETE FROM nathan_admission_pending WHERE email=? AND EXISTS(" + promoted + ")").bind(flow.email, ...params),
+
+  const invited = flow.invitation_id !== null;
+  const eligibility = invited
+    ? "EXISTS(SELECT 1 FROM nathan_admission_pending p WHERE p.email=user.email AND (p.user_id=user.id OR p.user_id IS NULL)) " +
+      "AND EXISTS(SELECT 1 FROM nathan_invitations i WHERE i.id=? AND i.email=user.email AND i.uses=0 AND i.revoked_at IS NULL AND i.expires_at>unixepoch())"
+    : "EXISTS(SELECT 1 FROM nathan_scim_users WHERE user_id=user.id AND link_state='linked' AND link_method='jit' AND active=1 AND deleted=0)";
+  const verifySubject = env.DB.prepare('UPDATE "user" SET emailVerified=1' + (invited ? ",name='',image=NULL" : "") +
+    " WHERE id=? AND email=? AND emailVerified=0 AND EXISTS(SELECT 1 FROM nathan_email_sign_ins WHERE id=? AND generation=? " +
+    "AND subject_id=user.id AND email=user.email AND invitation_id IS ? AND expires_at>unixepoch()) AND " + eligibility)
+    .bind(subject, flow.email, flow.id, flow.generation, flow.invitation_id, ...(invited ? [flow.invitation_id] : []));
+  const statements = [
+    verifySubject,
+    // outcome is NOT NULL. If the gated UPDATE matched no row, D1 aborts the batch before any cleanup.
     env.DB.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) " +
-      "SELECT ?,'system:admission','account_admission','email-otp','admitted_invitation' WHERE EXISTS(" + promoted + ")")
-      .bind(crypto.randomUUID(), ...params)
-  ]);
-  if (!changed.meta.changes) throw refuseEmail();
+      "VALUES (?,'system:admission',?,'email-otp',CASE WHEN changes()=1 THEN ? ELSE NULL END)")
+      .bind(crypto.randomUUID(), invited ? "account_admission" : "email_address_verify", invited ? "admitted_invitation" : "verified"),
+    env.DB.prepare("DELETE FROM account WHERE userId=?").bind(subject),
+    env.DB.prepare('DELETE FROM "session" WHERE userId=?').bind(subject)
+  ];
+  if (flow.invitation_id) {
+    const claim = claimInvitationStatement(flow.invitation_id, "email-otp", subject);
+    statements.push(env.DB.prepare(claim.sql).bind(...claim.params),
+      env.DB.prepare("DELETE FROM nathan_admission_pending WHERE email=?").bind(flow.email));
+  }
+  await env.DB.batch(statements);
 }
 
 export function nathanDatabaseHooks(env: AuthEnv, flow?: EmailFlow) {
-  // Better Auth's emailOTP promotion removes unproven credentials. Refuse an operation
-  // touching a replacement subject, including deletion before the verified flag is written.
-  const guardDeletion = async (record: { userId?: string }, ctx: any) => {
-    if (!flow || ctx?.path !== "/sign-in/email-otp") return;
-    if (record.userId !== flow.subject_id || !await env.DB.prepare(
-      "SELECT 1 FROM nathan_email_sign_ins WHERE id=? AND generation=? AND subject_id=? AND expires_at>unixepoch()"
-    ).bind(flow.id, flow.generation, record.userId).first()) throw refuseEmail();
+  // Defer Better Auth's pre-verification deletes to the promotion transaction. Its TOTP
+  // after-hook still deletes the temporary session it just created for this request.
+  const deferCleanup = async (record: { userId?: string; id?: string }, ctx: any) => {
+    if (!flow || ctx?.path !== "/sign-in/email-otp" || (flow.issuedSessionId && record.id === flow.issuedSessionId)) return;
+    if (record.userId !== flow.subject_id) throw refuseEmail();
+    return false as const;
   };
   return {
     user: {
@@ -65,9 +64,9 @@ export function nathanDatabaseHooks(env: AuthEnv, flow?: EmailFlow) {
         if (flow && ctx?.path === "/sign-in/email-otp" && update.emailVerified) await promoteEmailSubject(env, flow);
       } }
     },
-    ...(flow ? { account: { delete: { before: guardDeletion } } } : {}),
+    ...(flow ? { account: { delete: { before: deferCleanup } } } : {}),
     session: {
-      ...(flow ? { delete: { before: guardDeletion } } : {}),
+      ...(flow ? { delete: { before: deferCleanup } } : {}),
       create: {
         before: async (session: any) => {
           await scimSessionGuard(env, session);

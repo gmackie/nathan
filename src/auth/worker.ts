@@ -575,7 +575,7 @@ export default {
     await pruneEmailOtpLimits(env.DB);
     await env.DB.batch([
       env.DB.prepare("DELETE FROM nathan_email_sign_ins WHERE expires_at<=unixepoch()"),
-      env.DB.prepare("DELETE FROM verification WHERE identifier GLOB 'nathan-email:*' AND unixepoch(expiresAt)<=unixepoch()")
+      env.DB.prepare("DELETE FROM verification WHERE (identifier GLOB 'nathan-email:*' OR identifier GLOB 'hosted-email-*') AND unixepoch(expiresAt)<=unixepoch()")
     ]);
     await pruneRbacChanges(env);
     await pruneMcp(env);

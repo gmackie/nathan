@@ -35,16 +35,23 @@ async function issue(env: AuthEnv, browser: string, flowId: string, email: strin
   const id = await sha256(browser + "." + flowId);
   const flow: EmailFlow = { id, generation: randomId(), email, invitation_id: eligible?.invitation_id ?? null,
     subject_id: eligible?.subject_id ?? null, oauth_query: query, second_factor: null };
-  await env.DB.prepare("INSERT INTO nathan_email_sign_ins(id,generation,subject_id,email,invitation_id,oauth_query,expires_at) VALUES (?,?,?,?,?,?,unixepoch()+?) " +
-    "ON CONFLICT(email) DO UPDATE SET id=excluded.id,generation=excluded.generation,subject_id=excluded.subject_id,invitation_id=excluded.invitation_id,oauth_query=excluded.oauth_query," +
-    "expires_at=excluded.expires_at,attempts=0,second_factor=NULL").bind(id, flow.generation, flow.subject_id, email, flow.invitation_id, query, EMAIL_TTL).run();
+  const insert = "INSERT INTO nathan_email_sign_ins(id,generation,subject_id,email,invitation_id,oauth_query,expires_at) VALUES (?,?,?,?,?,?,?) ";
+  const values = [id, flow.generation, flow.subject_id, email, flow.invitation_id, query, Math.floor(Date.now() / 1000) + EMAIL_TTL];
+  // Keep an existing delivered generation usable while its replacement is in flight.
+  const first = await env.DB.prepare(insert + "ON CONFLICT(email) DO NOTHING").bind(...values).run();
   const auth = createAuth(env, undefined, { browser, flow });
   const proof = await auth.api.createVerificationOTP({ body: { email, type: "sign-in" } });
-  if (!eligible) return; // Identical verification work, but no deliverable credential.
-  const digits = proof.slice(-6);
-  const link = new URL("/sign-in/email", env.NATHAN_ISSUER);
-  link.hash = flowId + "." + digits;
-  await sendSignInEmail(env, email, digits, link.href, client);
+  if (eligible) {
+    const digits = proof.slice(-6);
+    const link = new URL("/sign-in/email", env.NATHAN_ISSUER);
+    link.hash = flowId + "." + digits;
+    await sendSignInEmail(env, email, digits, link.href, client);
+  }
+  if (!first.meta.changes) {
+    await env.DB.prepare(insert + "ON CONFLICT(email) DO UPDATE SET id=excluded.id,generation=excluded.generation,subject_id=excluded.subject_id," +
+      "invitation_id=excluded.invitation_id,oauth_query=excluded.oauth_query,expires_at=excluded.expires_at,attempts=0,second_factor=NULL")
+      .bind(...values).run();
+  }
 }
 
 async function requestEmail(request: Request, env: AuthEnv, ctx: ExecutionContext, body: Input) {
@@ -136,10 +143,19 @@ async function redeem(request: Request, env: AuthEnv, flow: EmailFlow, browser: 
     return reply(200, { twoFactorRedirect: true }, outgoing);
   }
   // Return a session only after winning the final claim, including for simultaneous TOTP submissions.
+  if (flow.oauth_query) {
+    if (!result.url) return invalid();
+    const continuation = new URL(result.url, env.NATHAN_ISSUER);
+    if (continuation.searchParams.has("error") ||
+        (continuation.origin === new URL(env.NATHAN_ISSUER).origin && continuation.pathname === "/error")) return invalid();
+  }
   const sessionId = flow.issuedSessionId;
   if (!sessionId) return invalid();
   const [, audit] = await env.DB.batch([
-    env.DB.prepare("DELETE FROM nathan_email_sign_ins WHERE id=? AND generation=? AND expires_at>unixepoch()").bind(flow.id, flow.generation),
+    env.DB.prepare("DELETE FROM nathan_email_sign_ins WHERE id=? AND generation=? AND expires_at>unixepoch() " +
+      'AND EXISTS(SELECT 1 FROM session s JOIN "user" u ON u.id=s.userId WHERE s.id=? AND u.email=nathan_email_sign_ins.email ' +
+      "AND COALESCE(u.twoFactorEnabled,0)=EXISTS(SELECT 1 FROM twoFactor WHERE userId=u.id AND COALESCE(verified,1)=1) " +
+      "AND (COALESCE(u.twoFactorEnabled,0)=0 OR (?=1 AND second_factor IS NOT NULL)))").bind(flow.id, flow.generation, sessionId, Number(isFactor)),
     env.DB.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) " +
       "SELECT ?,user_id,'email_otp_sign_in',session_id,'succeeded' FROM nathan_email_otp_sessions WHERE session_id=? AND changes()=1")
       .bind(crypto.randomUUID(), sessionId)

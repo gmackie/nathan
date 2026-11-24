@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { consumeAddressLimit, reserveProofAttempt, releaseProofAttempt, auditRefusedProof, pruneEmailOtpLimits, FAILURE_BUDGET } from "../src/auth/email-otp-policy.mjs";
 import { d1, migratedDatabase } from "./fixtures/d1-sqlite.mjs";
-import { emailTarget } from "../src/auth/email-sign-in-policy.ts";
+import { emailTarget, liveAdminSession } from "../src/auth/email-sign-in-policy.ts";
 import { allowRequests } from "../src/auth/request-limit.ts";
 import { evidenceClaims } from "../src/shared/token-claims.mjs";
 
@@ -159,5 +159,19 @@ test("legacy authenticator enrollment and noncanonical imported addresses fail c
   raw.exec(`UPDATE "user" SET email='Member@Example.test';
     INSERT INTO nathan_invitations(id,email,created_by,expires_at) VALUES ('i','member@example.test','owner',unixepoch()+300);`);
   assert.equal(await emailTarget(db, "member@example.test"), null);
+  raw.close();
+});
+
+test("an administrator needs the original live non-email session on every profile", async () => {
+  const raw = migratedDatabase(), db = d1(raw);
+  raw.exec(`INSERT INTO user(id,name,email,emailVerified,createdAt,updatedAt) VALUES ('admin','','admin@example.test',1,0,0);
+    INSERT INTO session(id,token,userId,expiresAt,createdAt,updatedAt) VALUES ('s','fixture','admin',unixepoch()+300,0,0);`);
+  assert.equal(await liveAdminSession(db, "admin", "s"), true);
+  assert.equal(await liveAdminSession(db, "another", "s"), false);
+  raw.exec("INSERT INTO nathan_email_otp_sessions(session_id,user_id) VALUES ('s','admin')");
+  assert.equal(await liveAdminSession(db, "admin", "s"), false);
+  raw.exec("DELETE FROM session WHERE id='s'");
+  assert.equal(await liveAdminSession(db, "admin", "s"), false);
+  assert.equal(await liveAdminSession(db, "admin"), false);
   raw.close();
 });

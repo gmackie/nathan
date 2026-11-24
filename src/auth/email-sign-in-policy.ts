@@ -1,4 +1,4 @@
-import { userBanned } from "../shared/token-claims.mjs";
+import { liveSession, userBanned } from "../shared/token-claims.mjs";
 import { openInvitation } from "./admission-policy.mjs";
 import { inVerifiedSsoDomain } from "./email-otp-policy.mjs";
 import type { AuthEnv } from "./env";
@@ -61,4 +61,12 @@ export async function emailSessionAllowed(env: AuthEnv, flow: EmailFlow, userId:
 
 export async function isEmailSession(db: D1Database, sessionId: string | undefined) {
   return Boolean(sessionId && await db.prepare("SELECT 1 FROM nathan_email_otp_sessions WHERE session_id=?").bind(sessionId).first());
+}
+
+/** A signed admin token must still reference its original live, non-email session. */
+export async function liveAdminSession(db: D1Database, userId: string, sessionId?: string) {
+  if (!sessionId || sessionId.length > 256) return false;
+  const row = await db.prepare('SELECT s.id,s.userId,s.expiresAt FROM "session" s WHERE s.id=? AND s.userId=? ' +
+    'AND NOT EXISTS(SELECT 1 FROM nathan_email_otp_sessions e WHERE e.session_id=s.id)').bind(sessionId, userId).first();
+  return liveSession(row, { userId, sessionId });
 }
