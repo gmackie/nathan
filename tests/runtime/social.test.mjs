@@ -12,7 +12,7 @@ import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { createHash } from "node:crypto";
 import { SignJWT, jwtVerify, generateKeyPair, exportJWK } from "jose";
-import { authWorker, bundle, migrate, start, randomKey } from "./helpers.mjs";
+import { authWorker, browserRedirect, bundle, migrate, start, randomKey } from "./helpers.mjs";
 import { sealProviderCredentials } from "../../src/auth/config-crypto.mjs";
 import { PROVIDER_IDS } from "../../src/shared/providers.mjs";
 import { providerGuide as cliGuide } from "../../scripts/lib/provider-wizard.mjs";
@@ -508,9 +508,7 @@ test("a signed-in browser landing on / or /sign-in goes to its account page, not
 
 // "Sign in with gmacko": an app sends the browser to /oauth2/authorize; Nathan sends it to /sign-in with a
 // signed query; after the social round trip Better Auth must resume that authorization, not land on "/".
-// NATH-44: the signed query reaches the OAuth state (serverContext), but the callback still lands on "/";
-// Better Auth's post-login authorize hook does not resume yet. Tracked until fixed; blocks the app pilot.
-test("an app's authorization resumes after a social sign-in that carries the signed oauth_query", { todo: "NATH-44" }, async () => {
+test("an app's authorization resumes after a social sign-in that carries the signed oauth_query", async () => {
   const CLIENT = "app-" + randomKey().slice(0, 8), REDIRECT = "https://app.example.test/api/auth/callback/nathan";
   await db.prepare('INSERT INTO "oauthClient"("id","clientId","redirectUris","disabled","skipConsent","tokenEndpointAuthMethod","requirePKCE","subjectType","createdAt","updatedAt") VALUES (?,?,?,0,1,\'none\',1,\'public\',?,?)')
     .bind("oc-" + CLIENT, CLIENT, JSON.stringify([REDIRECT]), Date.now(), Date.now()).run();
@@ -518,10 +516,7 @@ test("an app's authorization resumes after a social sign-in that carries the sig
   const query = new URLSearchParams({ response_type: "code", client_id: CLIENT, redirect_uri: REDIRECT, scope: "openid profile email",
     state, code_challenge: createHash("sha256").update(randomKey()).digest("base64url"), code_challenge_method: "S256" });
   const jar = jarOf();
-  const authorize = await mf.dispatchFetch(ORIGIN + "/api/auth/oauth2/authorize?" + query, { redirect: "manual",
-    headers: { Accept: "text/html", "Sec-Fetch-Mode": "navigate", Cookie: cookieHeader(jar) } });
-  merge(jar, authorize);
-  const login = new URL(authorize.headers.get("Location") ?? (await authorize.json()).url, ORIGIN);
+  const login = await browserRedirect(mf, ORIGIN + "/api/auth/oauth2/authorize?" + query);
   assert.equal(login.pathname, "/sign-in");
   assert.ok(login.searchParams.has("sig"), "Nathan signs the query it hands the sign-in page");
 
@@ -531,12 +526,10 @@ test("an app's authorization resumes after a social sign-in that carries the sig
   assert.ok(oauthQuery, "the page URL carries a signed query");
   const started = await begin("discord", jar, "/", { oauth_query: oauthQuery });
   codes.set("dc-app", { id: "100000000000000010", email: "app-user@example.test", verified: true });
-  // A real browser follows the provider's redirect as a top-level navigation.
-  const back = await callback("discord", "dc-app", started.authorize.searchParams.get("state"), jar,
-    { Accept: "text/html", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "cross-site" });
-  assert.equal(back.status, 302, await back.clone().text());
-  const resumed = new URL(back.headers.get("Location"), ORIGIN);
-  assert.equal(resumed.origin + resumed.pathname, REDIRECT, "the browser returns to the app, not to Nathan's /: " + resumed.href);
+  const callbackUrl = new URL("/api/auth/callback/discord", ORIGIN);
+  callbackUrl.search = new URLSearchParams({ code: "dc-app", state: started.authorize.searchParams.get("state") }).toString();
+  const resumed = await browserRedirect(mf, callbackUrl, cookieHeader(jar, "cross-site-get"));
+  assert.equal(resumed.origin + resumed.pathname, REDIRECT);
   assert.ok(resumed.searchParams.get("code"), "with an authorization code");
   assert.equal(resumed.searchParams.get("state"), state);
 });

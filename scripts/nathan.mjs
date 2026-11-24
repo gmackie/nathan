@@ -9,7 +9,7 @@ import { providerCommand } from "./lib/provider-wizard.mjs";
 import { PROVIDER_IDS } from "../src/shared/providers.mjs";
 import { protectCommand } from "./lib/protect-wizard.mjs";
 import { rbacCommand } from "./lib/rbac-wizard.mjs";
-import { adminCommand } from "./lib/admin-wizard.mjs";
+import { adminCommand, initializeBootstrapOwner } from "./lib/admin-wizard.mjs";
 import { domainCommand } from "./lib/domain-wizard.mjs";
 import { realmForLoginHostname } from "../src/shared/realm.mjs";
 
@@ -136,14 +136,7 @@ async function provision(forceApply=false) {
   // sign in and enroll authenticators before privileged UI access is enabled.
   if(cfg.adminEmails?.length){
     const email=cfg.adminEmails[0].trim().toLowerCase();
-    const caller="cli:"+cfg.accountId;
-    await client.queryDatabase(dbId,
-      "INSERT OR IGNORE INTO nathan_bootstrap_status(id,cloudflare_user_id,admin_email,state) VALUES('primary',?,?,'pending')",
-      [caller,email]);
-    const rows=await client.queryDatabase(dbId,
-      "SELECT cloudflare_user_id,admin_email FROM nathan_bootstrap_status WHERE id='primary' LIMIT 1",[]);
-    if(rows.length!==1 || rows[0].cloudflare_user_id!==caller || rows[0].admin_email!==email)
-      throw Error("Admin bootstrap ownership mismatch; refusing to publish identity Worker");
+    await initializeBootstrapOwner(client,dbId,cfg.accountId,email);
   }
 
   if (cfg.realm) {

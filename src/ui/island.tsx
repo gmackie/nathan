@@ -5,15 +5,14 @@
  * renderPage refuses a page whose markup and `islands` option disagree.
  *
  * NATH-40: the component is rendered in its own React root, exactly as hydrateIslands() hydrates
- * it (hydrateRoot(container, <Component {...props} />)). React's useId values depend on the
- * position in the tree, so rendering it inside the page tree gave ids (Base UI's label/control,
- * aria-* wiring) that the browser-side root never reproduces. The inner markup is React's own
- * escaped output; renderPage still moves its style attributes to nonce'd classes and runs its
- * CSP checks over the whole document. The inner root has no CSPProvider nonce, so a component
- * that would emit a <style> element fails renderPage's check (closed) instead of shipping it.
+ * it. React uses the position in the tree to assign the ids for controls and labels, so both
+ * sides use the same root and keep Base UI's accessibility attributes in sync. Both roots disable Base UI's
+ * inline stylesheet in favor of the scroll area rule in layout.css. renderPage validates the
+ * content of this island along with the rest of the page.
  */
 import type { ComponentType } from "react";
 import { renderToString } from "react-dom/server";
+import { CSPProvider } from "@cloudflare/kumo/primitives/csp-provider";
 import type { IslandId } from "./island-ids.ts";
 
 export interface IslandProps<P extends object> {
@@ -24,6 +23,6 @@ export interface IslandProps<P extends object> {
 }
 
 export function Island<P extends object>({ id, component: Component, props }: IslandProps<P>) {
-  const markup = renderToString(<Component {...props} />);
+  const markup = renderToString(<CSPProvider disableStyleElements><Component {...props} /></CSPProvider>);
   return <div data-nathan-island={id} data-props={JSON.stringify(props)} dangerouslySetInnerHTML={{ __html: markup }} />;
 }

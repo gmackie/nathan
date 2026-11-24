@@ -69,7 +69,9 @@ export async function createOAuthClient(auth:any,env:AuthEnv,headers:Headers,inp
   if(input.publicClient && input.kind==="gateway")throw Error("Gateway must be confidential");
   let redirect:URL;
   try{redirect=new URL(input.redirectUri);}catch{throw Error("Invalid redirect URI");}
-  if(redirect.protocol!=="https:" || redirect.username || redirect.password || redirect.hash || redirect.origin==="null")
+  // Exact DNS hostname only: no "*" (the invariants forbid wildcard redirect URIs), no "_" or IP-literal oddities.
+  if(typeof input.redirectUri!=="string" || redirect.protocol!=="https:" || redirect.username || redirect.password || redirect.hash || redirect.origin==="null"
+    || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/i.test(redirect.hostname))
     throw Error("Clients require an exact HTTPS redirect URL");
   if(input.kind==="gateway" && redirect.pathname!=="/__nathan/callback")throw Error("Gateway callback must use /__nathan/callback");
   const extras=input.kind==="gateway" ? {backchannel_logout_uri:redirect.origin+"/__nathan/backchannel",enable_end_session:true} : {};
@@ -80,6 +82,7 @@ export async function createOAuthClient(auth:any,env:AuthEnv,headers:Headers,inp
       headers,body:{
         client_name:input.name.trim(),
         redirect_uris:[redirect.href],
+        metadata:{nathan_registration_kind:"independent"},
         token_endpoint_auth_method:input.publicClient?"none":"client_secret_basic",
         application_type:"web",
         grant_types:["authorization_code","refresh_token"],

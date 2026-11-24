@@ -37,7 +37,7 @@ import {
 } from "./saml-idp-protocol.mjs";
 import { autoPostPage, idpErrorPage, idpInitiatedPage, ssoConfirmPage } from "./saml-idp-ui.mjs";
 
-const RESUME_COOKIE = "__Host-nathan-saml-idp";
+export const SAML_RESUME_COOKIE = "__Host-nathan-saml-idp";
 const PENDING_SECONDS = 600;
 /** How long the "Continue to <SP> as <user>?" page stays valid. */
 const CONFIRM_SECONDS = 300;
@@ -46,7 +46,7 @@ const REPLAY_SECONDS = 900;
 /** A next key must be published this long before it may sign (SPs cache metadata). */
 export const ROTATION_OVERLAP_SECONDS = 86400;
 const noStore = { "Cache-Control": "no-store" };
-const STUDIO_MAX_BYTES = 160_000;
+export const STUDIO_MAX_BYTES = 160_000;
 
 type Attribute = { name: string; source: string };
 type Certificate = { der: string; sha256: string; notAfter: string };
@@ -208,7 +208,7 @@ async function sso(request: Request, env: AuthEnv, url: URL): Promise<Response> 
       .bind(await sha256Hex(handle), sp.id, parsed.id, acsUrl, relayState, parsed.forceAuthn ? 1 : 0, parsed.isPassive ? 1 : 0, signedForNathan ? 1 : 0,
         Date.now(), PENDING_SECONDS).run();
     return redirectWithCookies(origin(env) + "/saml/idp/continue", 303,
-      [makeCookie(RESUME_COOKIE, handle + await hmac(env, handle), { maxAge: PENDING_SECONDS })]);
+      [makeCookie(SAML_RESUME_COOKIE, handle + await hmac(env, handle), { maxAge: PENDING_SECONDS })]);
   } catch (e) {
     if (!(e instanceof SamlRequestError)) throw e;
     await auditRejection(env, spId, e.code);
@@ -221,13 +221,13 @@ async function sso(request: Request, env: AuthEnv, url: URL): Promise<Response> 
  * reason: no cookie, or a cookie that is malformed, of the wrong length or not signed by Nathan.
  */
 async function resumeHandle(env: AuthEnv, request: Request): Promise<{ handle: string } | { error: "saml_resume_missing" | "saml_resume_invalid" }> {
-  const value = parseCookie(request.headers.get("Cookie"), RESUME_COOKIE);
+  const value = parseCookie(request.headers.get("Cookie"), SAML_RESUME_COOKIE);
   if (!value) return { error: "saml_resume_missing" };
   if (!/^[A-Za-z0-9_-]{86}$/.test(value)) return { error: "saml_resume_invalid" };
   const handle = value.slice(0, 43);
   return constantTimeEqual(value.slice(43), await hmac(env, handle)) ? { handle } : { error: "saml_resume_invalid" };
 }
-const clearResume = () => makeCookie(RESUME_COOKIE, "", { deleteCookie: true });
+const clearResume = () => makeCookie(SAML_RESUME_COOKIE, "", { deleteCookie: true });
 function withClearedResume(response: Response) { response.headers.append("Set-Cookie", clearResume()); return response; }
 
 /** After any sign-in Nathan lands on "/": continue a pending SAML request if this browser has one. */
@@ -574,7 +574,7 @@ export async function applySamlIdpOperation(env: AuthEnv, body: any, actor: stri
 }
 
 /** Admin-readable refusals only; never database internals. */
-function publicMessage(e: unknown) {
+export function publicMessage(e: unknown) {
   if (e instanceof AdminRefusal) return e.message;
   const m = e instanceof Error ? e.message : "";
   return m && m.length <= 300 && !/D1_|SQLITE|SQL|constraint|stack/i.test(m) ? m : "SAML application change rejected";

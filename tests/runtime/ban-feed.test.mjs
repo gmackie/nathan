@@ -49,7 +49,7 @@ const signIn = () => mf.dispatchFetch(ORIGIN + "/api/auth/sign-in/email", {
 const asAdmin = () => new Headers({ Cookie: adminCookie });
 
 test("the 0011 change-feed and 0016 SCIM ban triggers exist in D1", async () => {
-  const triggers = (await db.prepare("SELECT name, tbl_name AS tbl FROM sqlite_master WHERE type='trigger' ORDER BY name").all()).results;
+  const triggers = (await db.prepare("SELECT name, tbl_name AS tbl FROM sqlite_master WHERE type='trigger' AND tbl_name='user' ORDER BY name").all()).results;
   assert.deepEqual(triggers.filter(t => t.name.startsWith("nathan_")).map(t => t.name + " ON " + t.tbl),
     ["nathan_rbac_feed_user_ban ON user", "nathan_rbac_feed_user_delete ON user", "nathan_scim_ban_changed ON user"]);
 });

@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
-import { signInPage, consentPage, studioPage } from "../src/auth/ui.ts";
+import { signInPage, consentPage } from "../src/auth/ui.ts";
 
 // NATH-38 /security and NATH-40 installer are TSX pages now (node can't import TSX), so bundle them
 // like ui-render.test.mjs does.
@@ -29,9 +29,9 @@ function assertScriptsParse(name, html) {
   return scripts.length;
 }
 
-test("Identity Studio, sign-in, consent and installer scripts parse", async () => {
+// The Kumo Studio shell and its security headers are covered by studio-ui.test.mjs.
+test("sign-in, consent, security and installer scripts parse", async () => {
   const pages = {
-    studio: await studioPage("admin@example.com").text(),
     signIn: await signInPage(["google", "github"], true, true).text(),
     consent: await consentPage(true, "Example app", "openid profile email").text(),
     security: await securityPage("admin@example.com").text(),
@@ -71,7 +71,6 @@ test("security page scripts parse: only its import map and the SRI-pinned securi
 test("interactive pages keep the same-origin Origin header (no no-referrer)", async () => {
   const pages = {
     installer: installerPage(),
-    studio: studioPage("admin@example.com"),
     signIn: signInPage(["google"], true, true),
     consent: consentPage(true, "Example app", "openid"),
     security: securityPage("admin@example.com")

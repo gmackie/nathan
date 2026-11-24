@@ -1,10 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import {
   realmForLoginHostname,realmIssuerHostname,isHostnameWithinRealm,
   assertRealmClientHost,realmCallback,validateDomainName,validateCallbackPath,
   discoverRealmHostCandidates,domainWideRoutingPreview,parseRealmHostSelection
 } from "../src/shared/realm.mjs";
+
+test("domain onboarding prints the OIDC discovery URL for the configured issuer", () => {
+  const output = execFileSync(process.execPath, ["scripts/nathan.mjs", "domains", "overview", "nathan.config.example.json"], { encoding: "utf8" });
+  const { issuer, discovery } = JSON.parse(output);
+  assert.equal(discovery, issuer + "/.well-known/openid-configuration");
+});
 
 test("one login issuer covers root and nested subdomains",()=>{
   assert.deepEqual(realmForLoginHostname("login.example.com"),{

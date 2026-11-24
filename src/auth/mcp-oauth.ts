@@ -40,7 +40,7 @@ import { consentPage, connectionsPage, mcpErrorPage } from "./mcp-ui";
 
 export const MCP_AS_PATH = "/mcp-oauth";
 const METADATA_PATH = "/.well-known/oauth-authorization-server" + MCP_AS_PATH;
-const RETURN_COOKIE = "__Host-nathan-mcp-return";
+export const MCP_RETURN_COOKIE = "__Host-nathan-mcp-return";
 const JSON_HEADERS = { "Cache-Control": "no-store", Pragma: "no-cache", "X-Content-Type-Options": "nosniff" };
 
 type Catalog = ReturnType<typeof buildCatalog>;
@@ -382,17 +382,17 @@ function errorRedirect(env: AuthEnv, redirectUri: string, state: string | null, 
 }
 function encodeReturn(path: string) { return btoa(path).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, ""); }
 function signInRedirect(env: AuthEnv, returnPath: string) {
-  return redirectWithCookies(originOf(env) + "/sign-in", 302, [makeCookie(RETURN_COOKIE, encodeReturn(returnPath), { maxAge: 600 })]);
+  return redirectWithCookies(originOf(env) + "/sign-in", 302, [makeCookie(MCP_RETURN_COOKIE, encodeReturn(returnPath), { maxAge: 600 })]);
 }
 /** After sign-in Nathan lands on `/`: continue a pending MCP authorization or the connections page. */
 export async function mcpReturnRedirect(request: Request, env: AuthEnv, auth: any): Promise<Response | null> {
-  const value = parseCookie(request.headers.get("Cookie"), RETURN_COOKIE);
+  const value = parseCookie(request.headers.get("Cookie"), MCP_RETURN_COOKIE);
   if (!value || !/^[A-Za-z0-9_-]{1,3000}$/.test(value)) return null;
   const session = await auth.api.getSession({ headers: request.headers });
   if (!session?.user?.id) return null;
   let path = "/";
   try { path = safeReturnPath(atob(value.replaceAll("-", "+").replaceAll("_", "/"))); } catch { path = "/"; }
-  const clear = makeCookie(RETURN_COOKIE, "", { deleteCookie: true });
+  const clear = makeCookie(MCP_RETURN_COOKIE, "", { deleteCookie: true });
   if (!path.startsWith(MCP_AS_PATH + "/authorize?") && path !== "/connections") return redirectWithCookies(originOf(env) + "/sign-in", 302, [clear]);
   return redirectWithCookies(originOf(env) + path, 302, [clear]);
 }

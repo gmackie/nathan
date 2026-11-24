@@ -70,9 +70,10 @@ export async function registerRealmClient(auth:any,env:AuthEnv,headers:Headers,i
   const realm=await loadVerifiedRealm(env);
   if(!realm)throw Error("Domain-wide realm was not installed or verified");
   const client=validateRealmRegistration(input,realm);
+  const registrationId=crypto.randomUUID();
   const claimed=await env.DB.prepare(
-    "INSERT OR IGNORE INTO nathan_realm_clients(hostname,realm_apex,kind,callback_uri,status,requested_by) VALUES (?,?,?,?,?,?)"
-  ).bind(client.hostname,realm.apex,client.kind,client.callbackUri,"creating",actor).run();
+    "INSERT OR IGNORE INTO nathan_realm_clients(hostname,realm_apex,kind,callback_uri,status,requested_by,registration_id) VALUES (?,?,?,?,?,?,?)"
+  ).bind(client.hostname,realm.apex,client.kind,client.callbackUri,"creating",actor,registrationId).run();
   if(claimed.meta?.changes!==1)throw Error("Hostname already registered or pending reconciliation; inspect existing client before retrying");
 
   await audit(env,actor,"realm_client_create",client.hostname,"attempted");
@@ -87,7 +88,7 @@ export async function registerRealmClient(auth:any,env:AuthEnv,headers:Headers,i
         grant_types:["authorization_code","refresh_token"],
         require_pkce:true,
         skip_consent:false,
-        disabled:true,
+        metadata:{nathan_realm_registration:registrationId},
         ...(client.kind==="gateway" ? {
           backchannel_logout_uri:"https://"+client.hostname+"/__nathan/backchannel",
           enable_end_session:true
@@ -97,21 +98,23 @@ export async function registerRealmClient(auth:any,env:AuthEnv,headers:Headers,i
     const id=raw?.client_id||raw?.clientId;
     if(typeof id!=="string"||id.length<1||id.length>200)
       throw Error("OIDC provider returned no client_id; manual reconciliation required");
-    const saved=await env.DB.prepare(
-      "UPDATE nathan_realm_clients SET oauth_client_id=?,status='disabled',updated_at=unixepoch() WHERE hostname=? AND status='creating'"
-    ).bind(id,client.hostname).run();
-    if(saved.meta?.changes!==1)
+    const linkedClientId=await env.DB.prepare(
+      "UPDATE nathan_realm_clients SET oauth_client_id=?,status='disabled',updated_at=unixepoch() WHERE registration_id=? AND status='creating' " +
+      "AND EXISTS (SELECT 1 FROM oauthClient WHERE clientId=? AND disabled=1) RETURNING oauth_client_id"
+    ).bind(id,registrationId,id).first<string>("oauth_client_id");
+    if(linkedClientId!==id)
       throw Error("OIDC client exists but realm link was not saved; manual reconciliation required");
     await audit(env,actor,"realm_client_create",client.hostname,"succeeded");
     return {
       ...raw,
+      disabled:true,
       realm:realm.apex,
       hostname:client.hostname,
       callback_uri:client.callbackUri,
       enabled:false,
       oidcConfig:{
         issuer:realm.issuer,
-        discovery:"https://"+realm.issuerHostname+"/.well-known/openid-configuration",
+        discovery:realm.issuer+"/.well-known/openid-configuration",
         clientId:id,
         redirectUri:client.callbackUri,
         scopes:["openid","profile","email"],

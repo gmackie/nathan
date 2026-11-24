@@ -11,9 +11,10 @@ export async function domainCommand(args,file) {
   const action=args[0]||"overview";
   const base=cfg.realm.apex,issuer=cfg.hostname;
   if(action==="overview") {
+    const issuerUrl="https://"+issuer+"/api/auth";
     console.log(JSON.stringify({
-      issuer:"https://"+issuer+"/api/auth",
-      discovery:"https://"+issuer+"/.well-known/openid-configuration",
+      issuer:issuerUrl,
+      discovery:issuerUrl+"/.well-known/openid-configuration",
       coverage:[base,"*."+base],
       onboarding:"Each exact relying-party hostname needs its own approved OAuth client and callback",
       crossDomainCookies:false,automaticGateway:false

@@ -6,6 +6,15 @@ Nathan is an independent, developer-first open-source blueprint built on [Better
 
 The static Cloudflare Pages marketing site is in [`site/`](site/README.md). Run `npm run build:site` to generate `dist/site/`, or `npm run verify:site` to check the page, public cost report and selectable cost scenarios. This site build is separate from the authentication Workers.
 
+## Choose where users sign in
+
+| Deployment | Identity data | Application integration |
+| --- | --- | --- |
+| Standalone IdP | One Nathan Worker and identity D1 serve many registered applications. | Each app runs an OIDC authorization-code flow with S256, an exact callback and its own client ID. [Connect an OIDC app](docs/oidc.md) |
+| Built-in auth | Each app mounts Nathan in its own Cloudflare Worker, with a dedicated identity D1 and Kumo Studio at `/studio`. | Install the Worker tarball, wrap the app with `withNathan`, and read a session with `getAppPrincipal`. [Mount Nathan in a Worker](docs/embedded-worker.md) |
+
+Both modes expose Nathan's protocol and Studio routes to peer Workers through `NathanService.handle(request)`. The named RPC entrypoint enforces the same credentials and administrator policy as HTTPS. Use the app-pinned `NathanVerifier` binding for a gateway or API that only needs access decisions.
+
 > [!WARNING]
 > **Experimental, not production-ready.** The identity Worker, gateway, CLI, and SDK have initial implementations, but the complete OAuth flow, D1 migration, registration UI, MFA/SSO, and gateway origin isolation have **not yet passed live integration and security tests**. Do not use Nathan as your production IdP until the release gates in [the roadmap](docs/roadmap.md) pass.
 
@@ -38,9 +47,10 @@ flowchart TB
 
 | Area | Status |
 | --- | --- |
-| Better Auth Worker and OIDC provider configuration | **Code present; unverified** |
+| Better Auth Worker and OIDC provider configuration | Local Worker tests cover discovery, S256 code exchange, JWKS, and audience isolation across clients. |
 | Social OAuth, passkeys, two-factor, organizations, admin, optional enterprise SSO plugins | **Configured; integration tests pending** |
-| Identity Studio sign-in, consent, and OIDC client registration | **Initial UI; validation pending** |
+| Kumo Identity Studio, sign-in, consent, and OIDC client registration | Local Worker tests cover client registration, hosted sign-in, per-client consent, and audited Studio writes. |
+| Built-in auth and service-binding RPC | The packaged Worker has a clean-install test with a dedicated identity D1, a host application, and an RPC peer. |
 | OIDC gateway, encrypted state, PKCE, opaque D1 sessions, back-channel logout | **Code present; staging tests pending** |
 | JWT verification SDK for protected APIs | **Initial implementation** |
 | Cloudflare account/zone/Worker/DNS discovery | **Initial CLI implementation** |

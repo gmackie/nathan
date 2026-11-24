@@ -9,50 +9,48 @@ export function validateAdminPromotion(email, cfg) {
   if (!allowed.has(candidate)) throw Error("Email is not in NATHAN_ADMIN_EMAILS; update and deploy the allowlist first");
   return candidate;
 }
-// The same identity and ownership predicates guard both writes and the final read.
+export async function initializeBootstrapOwner(api, dbId, accountId, email) {
+  const actor = "cli:" + accountId;
+  await api.queryDatabase(dbId,
+    "INSERT OR IGNORE INTO nathan_bootstrap_status(id,cloudflare_user_id,admin_email,state) VALUES('primary',?,?,'pending')",
+    [actor, email]);
+  const [owner] = await api.queryDatabase(dbId,
+    "SELECT cloudflare_user_id,admin_email FROM nathan_bootstrap_status WHERE id='primary'");
+  if (owner?.cloudflare_user_id !== actor || owner.admin_email !== email)
+    throw Error("Admin bootstrap ownership mismatch");
+}
+
 export async function promoteBootstrapOwner(api, dbId, accountId, email, userId) {
-  const params = [userId, email, "cli:" + accountId];
-  const eligible = `SELECT u.id
-    FROM "user" u JOIN nathan_bootstrap_status b ON b.id = 'primary'
-    WHERE u.id = ? AND lower(u.email) = ? AND b.cloudflare_user_id = ?
-      AND b.admin_email = lower(u.email) AND u.emailVerified = 1 AND coalesce(u.banned, 0) = 0
-      AND (b.admin_user_id IS NULL OR b.admin_user_id = u.id)
-      AND b.state IN ('pending', 'identity_verified', 'authenticators_enrolled', 'complete')
-      AND (SELECT count(*) FROM "user" other WHERE lower(other.email) = lower(u.email)) = 1`;
-  const bound = eligible + " AND b.admin_user_id = u.id AND b.state <> 'pending'";
-  const statements = [
-    {sql: `INSERT INTO nathan_security_audit (id,actor,action,target,outcome)
-      SELECT ?, ?, 'admin_bootstrap', ?, 'succeeded'
-      WHERE EXISTS (${eligible} AND (u.role IS NOT 'admin' OR b.admin_user_id IS NULL OR b.state = 'pending'))`,
-      params: [crypto.randomUUID(), "cli:" + accountId, userId, ...params]},
-    {sql: `UPDATE nathan_bootstrap_status SET admin_user_id = ?,
-      state = CASE WHEN state = 'pending' THEN 'identity_verified' ELSE state END,
-      updated_at = unixepoch()
-      WHERE id = 'primary' AND (admin_user_id IS NULL OR state = 'pending') AND EXISTS (${eligible})`,
-      params: [userId, ...params]},
-    {sql: `UPDATE "user" SET role = 'admin' WHERE id IN (${bound}) AND role IS NOT 'admin'`, params},
-    {sql: bound + " AND u.role = 'admin'", params}
-  ];
-  const results = await api.batchDatabase(dbId, statements);
-  const verified = results.at(-1);
-  if (verified.length !== 1 || verified[0].id !== userId) {
-    throw Error("The verified account does not match the CLI installation's bootstrap owner");
-  }
+  await api.queryDatabase(dbId, "INSERT INTO nathan_cli_owner_claim(actor,email,user_id) VALUES (?,?,?)",
+    ["cli:" + accountId, email, userId]);
 }
 
 export async function adminCommand(args, file, apply) {
-  const cfg = await loadConfig(file);
-  if (args[0] !== "promote") {
-    console.log("Usage: node scripts/nathan.mjs admin promote --apply\nPromotes an existing verified allowlisted user via a privileged Cloudflare D1 operation.");
+  const operation = args[0];
+  if (operation !== "init" && operation !== "promote") {
+    console.log("Usage: admin init|promote [--apply]");
     return;
   }
-  if (!apply) throw Error("Admin role promotion requires explicit --apply");
+  const cfg = await loadConfig(file);
   if (!cfg.accountId) throw Error("accountId required");
-  const email = validateAdminPromotion(await ask("Verified administrator email"), cfg);
+  if (!apply) {
+    console.log(operation === "init"
+      ? "Reserve the first allowed administrator in " + cfg.database.name + " (" + cfg.hostname + "). Use --apply to initialize."
+      : "Bind a verified, allowlisted user in " + cfg.database.name + " (" + cfg.hostname + "). Use --apply to promote.");
+    return;
+  }
+  const email = validateAdminPromotion(operation === "init" ? cfg.adminEmails?.[0] : await ask("Verified administrator email"), cfg);
   const api = new CloudflareClient(process.env.CLOUDFLARE_API_TOKEN, cfg.accountId);
   const database = await api.databaseNamed(cfg.database.name);
   if (!database) throw Error("Nathan D1 database not found");
   const dbId = database.uuid || database.id;
+  if (operation === "init") {
+    if (!await yesNo("Reserve " + email + " as the first administrator for " + cfg.hostname + " in " + cfg.database.name + "?"))
+      throw Error("Cancelled");
+    await initializeBootstrapOwner(api, dbId, cfg.accountId, email);
+    console.log("Owner reserved. Sign in on your Worker with the verified email, then run admin promote.");
+    return;
+  }
   const rows = await api.queryDatabase(dbId,
     'SELECT "id", "email", "emailVerified", "role" FROM "user" WHERE lower("email") = lower(?) LIMIT 2',
     [email]
