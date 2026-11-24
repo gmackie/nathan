@@ -2,6 +2,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { verifyOAuthQueryParams } from "@better-auth/oauth-provider";
 import { createLocalJWKSet, jwtVerify } from "jose";
 import { isAllowedUnsafeRequest } from "../shared/security.mjs";
+import { allowedCustomerSubject } from "./app-operator";
 import { pinnedApplication, type BindingProps } from "./app-binding";
 import { readBoundedText } from "./bounded-body.mjs";
 import { emailSignIn } from "./email-sign-in";
@@ -76,8 +77,11 @@ function applicationHeaders(request: Request) {
 function publicDiscovery(document: Record<string, unknown>) {
   // Advertise only the operations this binding actually serves. ClassCheck owns sign-out UI.
   const {introspection_endpoint, introspection_endpoint_auth_methods_supported, introspection_endpoint_auth_signing_alg_values_supported,
+    token_endpoint_auth_signing_alg_values_supported, revocation_endpoint_auth_signing_alg_values_supported,
     end_session_endpoint, registration_endpoint, pushed_authorization_request_endpoint, device_authorization_endpoint, ...supported} = document;
   return {...supported,scopes_supported:[...browserScopes,"nathan:api"],response_types_supported:["code"],
+    token_endpoint_auth_methods_supported:["client_secret_basic","client_secret_post","none"],
+    revocation_endpoint_auth_methods_supported:["client_secret_basic","client_secret_post","none"],
     code_challenge_methods_supported:["S256"],grant_types_supported:["authorization_code","refresh_token","client_credentials"]};
 }
 
@@ -108,6 +112,11 @@ async function appFetch(request: Request, env: AuthEnv, ctx: ExecutionContext, a
     if (!await clientForResource(env,app,credentialsClient(request,params),resource)) return error(401,"invalid_client");
     headers.delete("Cookie");
   }
+  const auth = createAuth(env);
+  if ((path === authorize || path === consent) && headers.has("Cookie")) {
+    const current = await auth.api.getSession({headers});
+    if (current && !await allowedCustomerSubject(env,current.user.id)) return error(403,"access_denied");
+  }
   if (path === authorize && !await authorizationContext(env,app,url.searchParams)) return error(400,"invalid_request");
   if (path === consent || path.startsWith("/sign-in/")) {
     if (headers.get("Content-Type")?.split(";")[0] !== "application/json") return error(415,"invalid_request");
@@ -123,9 +132,8 @@ async function appFetch(request: Request, env: AuthEnv, ctx: ExecutionContext, a
       return emailSignIn(forward(),env,ctx,path.endsWith("/request") ? "request" : "verify",
         async query => Boolean(await signedContext(env,app,query)));
   }
-  const auth = createAuth(env);
   if (path === userinfo) {
-    const bearer = headers.get("Authorization")?.match(/^Bearer (\S+)$/i)?.[1];
+    const bearer = headers.get("Authorization")?.match(/^(?:Bearer|DPoP) (\S+)$/i)?.[1];
     if (!bearer || bearer.length > 16384) return error(401,"invalid_token");
     // Management and the app share one installation, including its key store. Scope UserInfo to an
     // app-issued resource token and a currently registered client before Better Auth releases claims.
@@ -133,7 +141,7 @@ async function appFetch(request: Request, env: AuthEnv, ctx: ExecutionContext, a
     try {
       const {payload} = await jwtVerify(bearer,keys,{issuer:env.NATHAN_ISSUER + prefix,audience:resource,
         algorithms:["EdDSA"],typ:"at+jwt",requiredClaims:["exp","sub","client_id"]});
-      if (payload.principal_kind !== "user" || typeof payload.client_id !== "string" ||
+      if (payload.principal_kind !== "user" || typeof payload.sub !== "string" || !await allowedCustomerSubject(env,payload.sub) || typeof payload.client_id !== "string" ||
           !await clientForResource(env,app,payload.client_id,resource)) return error(401,"invalid_token");
     } catch { return error(401,"invalid_token"); }
     headers.delete("Cookie");

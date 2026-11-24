@@ -141,14 +141,14 @@ const PENDING = "SELECT email, method FROM nathan_admission_pending WHERE user_i
  * installation is self-service, or it is the installer's first administrator), else
  * `{ pending: true, admitted: false }` and the caller must refuse the verification.
  */
-export async function admitOnVerification(db, env, { userId, email, requirePasswordInvitation = false }) {
+export async function admitOnVerification(db, env, { userId, email }) {
   const address = normalizeEmail(email);
   const pending = await db.prepare(PENDING).bind(userId, address ?? "").first();
-  if (!pending) return requirePasswordInvitation ? { pending: true, admitted: false } : { pending: false };
+  if (!pending) return { pending: false };
   if (!address) return { pending: true, admitted: false };
   let decision;
-  if (!requirePasswordInvitation && await isBootstrapAdmission(db, env, address, true)) decision = { pending: true, admitted: true, via: "bootstrap" };
-  else if (!requirePasswordInvitation && await admissionMode(db) === "self-service") decision = { pending: true, admitted: true, via: "self-service" };
+  if (await isBootstrapAdmission(db, env, address, true)) decision = { pending: true, admitted: true, via: "bootstrap" };
+  else if (await admissionMode(db) === "self-service") decision = { pending: true, admitted: true, via: "self-service" };
   else {
     const invitation = await claimInvitation(db, address, pending.method, userId);
     decision = invitation ? { pending: true, admitted: true, via: "invitation", invitationId: invitation } : { pending: true, admitted: false };

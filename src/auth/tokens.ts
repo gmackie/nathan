@@ -15,6 +15,7 @@
  */
 import type { AuthEnv } from "./env";
 import { APIError } from "better-auth/api";
+import { allowedCustomerSubject } from "./app-operator";
 import { audit } from "./admin-service";
 import { resolveAccess } from "./rbac";
 import { principalKind, evidenceClaims, rolesClaim, audienceApp, validateAudience, liveSession, userBanned, apiScopeAllowed,
@@ -80,6 +81,8 @@ export async function accessTokenClaims(env: AuthEnv, input: ClaimInput): Promis
   const kind = principalKind({ hasUser: userId !== null, clientKind });
   const claims: Record<string, unknown> = { principal_kind: kind };
   if (!userId) return claims;
+  if (env.NATHAN_APP_ORIGIN === env.NATHAN_ISSUER && !await allowedCustomerSubject(env,userId))
+    throw tokenError("invalid_grant", "This account cannot use the application");
 
   const now = Date.now();
   if (userBanned(userRows[0], now)) throw tokenError("invalid_grant", "The user is banned");

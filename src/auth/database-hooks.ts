@@ -63,6 +63,9 @@ export function nathanDatabaseHooks(env: AuthEnv, flow?: EmailFlow) {
         after: (user: any) => admissionUserCreated(env, user)
       },
       update: { before: async (update: any, ctx: any) => {
+        // The management mailbox hook already committed verification for the exact subject.
+        // Skip Better Auth's second write by email, which could otherwise touch a replaced user.
+        if (env[managementEmail] && ctx?.path === "/verify-email" && update.emailVerified) return false as const;
         if (flow && ctx?.path === "/sign-in/email-otp" && update.emailVerified) await promoteEmailSubject(env, flow);
       } }
     },

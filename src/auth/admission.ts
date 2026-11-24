@@ -249,7 +249,7 @@ export async function admissionUserCreated(env: AuthEnv, user: any) {
 export async function admissionBeforeEmailVerification(env: AuthEnv, user: any) {
   let decision: { pending: boolean; admitted?: boolean; via?: string };
   try {
-    decision = await admitOnVerification(env.DB, env, { userId: user?.id, email: user?.email, requirePasswordInvitation: Boolean(env[managementEmail]) });
+    decision = await admitOnVerification(env.DB, env, { userId: user?.id, email: user?.email });
   } catch {
     refuse();
   }

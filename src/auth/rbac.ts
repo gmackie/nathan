@@ -1,3 +1,4 @@
+import { allowedCustomerSubject } from "./app-operator";
 /**
  * NATH-13: roles and minimal RBAC in the identity Worker. Reads go through the one evaluator in
  * src/shared/policy.mjs; every Identity Studio write is admin-only (checked by the caller), audited
@@ -29,6 +30,8 @@ export async function resolveAccess(env: AuthEnv, applicationId: unknown, subjec
   const observedAt = new Date().toISOString();
   if (!isAppId(applicationId) || !isSubjectId(subject))
     return { allowed: false, reason: "invalid_input", roles: [], permissions: [], email: null, observedAt };
+  if (env.NATHAN_APP_ORIGIN && env.NATHAN_APP_ID === applicationId && !await allowedCustomerSubject(env,subject as string))
+    return { allowed: false, reason: "application_denied", roles: [], permissions: [], email: null, observedAt };
   const rows = await read(env, accessQueries(applicationId as string, subject as string));
   const decision = decideFromRows(rows as any);
   return { ...decision, email: decision.allowed ? rows[1][0]?.email ?? null : null, observedAt };

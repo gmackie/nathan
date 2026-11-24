@@ -6,7 +6,8 @@ import { passkey } from "@better-auth/passkey";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { sso } from "@better-auth/sso";
 import { sendAuthEmail } from "./email";
-import { managementEmail, type AuthEnv } from "./env";
+import { managementEmail, ownerInvitation, type AuthEnv } from "./env";
+import { sendOwnerVerification, verifyOwnerMailbox } from "./owner-verification";
 import type { SocialCredentials } from "./provider-store";
 import { recordProviderSignIn } from "./provider-store";
 import { ACCOUNT_LINKING, buildSocialProviders } from "../shared/providers.mjs";
@@ -124,15 +125,12 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
     },
     emailVerification: {
       // A pending owner can resend verification by presenting the original management password.
-      sendOnSignIn: Boolean(env[managementEmail]),
+      sendOnSignIn: Boolean(env[ownerInvitation]),
       sendVerificationEmail: async ({ user, url }) =>
-        sendAuthEmail(env, user.email, "Verify your Nathan email", url),
+        env[managementEmail] ? sendOwnerVerification(env, user, url) : sendAuthEmail(env, user.email, "Verify your Nathan email", url),
       // NATH-16: a provisional password sign-up claims its invitation only now, or stays unverified.
-      beforeEmailVerification: async (user) => {
-        if (env[managementEmail] && user.email.toLowerCase() !== env[managementEmail])
-          throw new APIError("FORBIDDEN", { message: "Verify the mailbox belonging to your Cloudflare Access identity." });
-        await admissionBeforeEmailVerification(env, user);
-      }
+      beforeEmailVerification: (user, request) => env[managementEmail]
+        ? verifyOwnerMailbox(env, user, request) : admissionBeforeEmailVerification(env, user)
     },
     advanced: {
       // The IdP's session is strictly host-only on login.<domain>.
