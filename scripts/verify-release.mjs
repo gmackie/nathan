@@ -18,7 +18,7 @@ for(const file of manifest.files){
   if(hash!==file.sha256||bytes.length!==file.size)throw Error("Release file integrity mismatch: "+file.name);
   total+=bytes.length;
 }
-for(const name of ["0001_nathan_registry.sql","0002_better_auth.sql","0003_security_audit.sql","0004_mcp_limits.sql","0005_domain_realm.sql","0006_control_plane.sql","0007_scim_registry.sql","0008_admin_assurance.sql","0009_admin_grants.sql","0010_security_overrides.sql","0011_rbac.sql","0012_social_providers.sql","0013_saml.sql","0014_token_profile.sql","0015_remote_mcp.sql","0016_scim_lifecycle.sql","0017_admission_provider_health.sql","0018_saml_idp.sql"]){
+for(const name of ["0001_nathan_registry.sql","0002_better_auth.sql","0003_security_audit.sql","0004_mcp_limits.sql","0005_domain_realm.sql","0006_control_plane.sql","0007_scim_registry.sql","0008_admin_assurance.sql","0009_admin_grants.sql","0010_security_overrides.sql","0011_rbac.sql","0012_social_providers.sql","0013_saml.sql","0014_token_profile.sql","0015_remote_mcp.sql","0016_scim_lifecycle.sql","0017_admission_provider_health.sql","0018_saml_idp.sql","0019_email_otp.sql"]){
   if(!manifest.files.some(f=>f.type==="migration"&&f.name===name))
     throw Error("Missing security migration: "+name);
 }

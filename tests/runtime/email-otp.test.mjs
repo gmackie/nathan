@@ -40,7 +40,7 @@ after(async () => { await mf?.dispose(); await off?.dispose(); await noMail?.dis
 let clients = 0;
 const ip = () => "203.0.113." + (++clients % 250);
 const one = (sql, ...params) => db.prepare(sql).bind(...params).first();
-const resetLimits = () => db.prepare('DELETE FROM "rateLimit"').run();
+const resetLimits = async () => { await db.prepare('DELETE FROM "rateLimit"').run(); await db.prepare("DELETE FROM nathan_email_otp_limits").run(); };
 const post = (worker, path, body, { from = ip(), headers = {} } = {}) => worker.dispatchFetch(ORIGIN + "/api/auth" + path, {
   method: "POST", redirect: "manual",
   headers: { "Content-Type": "application/json", Origin: ORIGIN, "cf-connecting-ip": from, ...headers },
@@ -203,8 +203,8 @@ test("per-address limits on sending and verifying, across IPs", async () => {
   for (let i = 0; i < 5; i++) assert.ok([400, 403].includes((await verify("limited@example.test", "000000")).status));
   assert.equal((await verify("limited@example.test", "000000")).status, 429);
   assert.ok(await one("SELECT 1 AS x FROM nathan_security_audit WHERE action='email_otp_rate_limited' AND outcome='refused'"));
-  const keys = (await db.prepare('SELECT "key" FROM "rateLimit"').all()).results.map(r => r.key);
-  assert.ok(keys.every(k => !k.includes("limited@example.test")), "no address in the rate-limit table");
+  const keys = [...(await db.prepare('SELECT "key" AS key FROM "rateLimit"').all()).results, ...(await db.prepare("SELECT key FROM nathan_email_otp_limits").all()).results].map(r => r.key);
+  assert.ok(keys.length > 0 && keys.every(k => !k.includes("limited@example.test")), "no address in the limit tables");
 });
 
 test("per-IP limits on sending and verifying, across addresses", async () => {
@@ -337,21 +337,94 @@ test("an app's OIDC authorization resumes after an email-code sign-in", async ()
   assert.equal(resumed.searchParams.get("state"), state);
 });
 
-test("an administrator account gets no code, and a code attempt fails like a wrong code", async () => {
+/** Plants a known code for an address (as if the attacker had guessed it). */
+async function plant(email, code) {
+  const hash = createHash("sha256").update(code).digest("base64url");
+  await db.prepare('UPDATE "verification" SET "value"=? WHERE "identifier"=?').bind(hash + ":0", "sign-in-otp-" + email).run();
+}
+/** Status codes of a send followed by four wrong guesses: the code-state signature an attacker sees. */
+async function guessSignature(email) {
   await resetLimits();
+  await send(email);
+  const statuses = [];
+  for (let i = 0; i < 4; i++) statuses.push((await verify(email, "000002")).status);
+  return statuses.join(",");
+}
+
+test("accounts with something stronger get no code, and look exactly like everyone else", async () => {
   const adminId = await existingUser("boss@example.test");
   await db.prepare('UPDATE "user" SET "role"=\'admin\' WHERE "id"=?').bind(adminId).run();
-  const sent = await send("boss@example.test");
-  assert.equal(sent.status, 200);
-  assert.deepEqual(await sent.json(), { success: true });
-  await settle(); await settle();
-  assert.equal(mailCount("boss@example.test"), 0);
-  // Plant a valid code: the administrator is still refused, with the same answer as a wrong code.
-  const hash = createHash("sha256").update("515151").digest("base64url");
-  await db.prepare('UPDATE "verification" SET "value"=? WHERE "identifier"=?').bind(hash + ":0", "sign-in-otp-boss@example.test").run();
-  const refused = await verify("boss@example.test", "515151");
-  const wrong = await verify("member@example.test", "000001");
-  assert.equal(refused.status, wrong.status);
-  assert.deepEqual(await refused.json(), await wrong.json());
-  assert.equal(await one('SELECT 1 AS x FROM "session" WHERE "userId"=?', adminId), null);
+  const totpId = await existingUser("totp@example.test");
+  await db.prepare('UPDATE "user" SET "twoFactorEnabled"=1 WHERE "id"=?').bind(totpId).run();
+  const passkeyId = await existingUser("pk@example.test");
+  await db.prepare('INSERT INTO "passkey"("id","publicKey","userId","credentialID","counter","deviceType","backedUp") VALUES (?,\'x\',?,?,0,\'singleDevice\',0)').bind("pk-" + passkeyId, passkeyId, "cred-" + passkeyId).run();
+  const reference = await guessSignature("member@example.test");
+  assert.equal(reference, "400,400,400,403");
+  assert.equal(await guessSignature("nobody@example.test"), reference);
+  for (const [email, id] of [["boss@example.test", adminId], ["totp@example.test", totpId], ["pk@example.test", passkeyId]]) {
+    const before = mailCount(email);
+    assert.equal(await guessSignature(email), reference, email);
+    await settle(); await settle();
+    assert.equal(mailCount(email), before, "no mail to " + email);
+    // Even a correct (guessed) code gets the wrong-code answer and no session.
+    await resetLimits();
+    await send(email);
+    await settle();
+    await plant(email, "515151");
+    const refused = await verify(email, "515151");
+    assert.equal(refused.status, 400, email);
+    assert.deepEqual(await refused.json(), { code: "INVALID_OTP", message: "Invalid OTP" });
+    assert.equal(await one('SELECT 1 AS x FROM "session" WHERE "userId"=?', id), null, email);
+  }
+  assert.ok(await one("SELECT 1 AS x FROM nathan_security_audit WHERE action='email_otp_sign_in' AND target LIKE 'refused:%'"));
+});
+
+test("an address in a verified enterprise SSO domain gets no account by code", async () => {
+  await resetLimits();
+  await db.prepare('INSERT INTO "ssoProvider"("id","issuer","userId","providerId","domain","domainVerified") VALUES (\'sso-1\',\'https://idp.acme.example\',?,\'acme-oidc\',\'acme.example\',1)')
+    .bind((await userByEmail("member@example.test")).id).run();
+  await db.prepare("INSERT INTO nathan_admission_settings(id,mode,updated_by) VALUES ('primary','self-service','admin') ON CONFLICT(id) DO UPDATE SET mode='self-service'").run();
+  try {
+    const before = mailCount("worker@acme.example");
+    assert.equal((await send("worker@acme.example")).status, 200);
+    await settle(); await settle();
+    assert.equal(mailCount("worker@acme.example"), before, "no mail");
+    await plant("worker@acme.example", "616161");
+    const refused = await verify("worker@acme.example", "616161");
+    assert.equal(refused.status, 400);
+    assert.equal(await userByEmail("worker@acme.example"), null);
+  } finally {
+    await db.prepare("UPDATE nathan_admission_settings SET mode='invitation-only' WHERE id='primary'").run();
+  }
+});
+
+test("cross-origin requests are refused", async () => {
+  await resetLimits();
+  const response = await post(mf, "/sign-in/email-otp", { email: "member@example.test", otp: "123456" }, { headers: { Origin: "https://evil.example" } });
+  assert.equal(response.status, 403);
+  const site = await post(mf, "/email-otp/send-verification-otp", { email: "member@example.test", type: "sign-in" }, { headers: { "Sec-Fetch-Site": "cross-site" } });
+  assert.equal(site.status, 403);
+});
+
+test("an email-code session never administers, even with passkey evidence", async () => {
+  await resetLimits();
+  await send("member@example.test");
+  const signedIn = await verify("member@example.test", await codeFor("member@example.test"));
+  assert.equal(signedIn.status, 200);
+  const cookie = "__Secure-nathan.session_token=" + cookiesOf(signedIn)["__Secure-nathan.session_token"].value;
+  const user = await userByEmail("member@example.test");
+  const session = await one('SELECT "id" AS id FROM "session" WHERE "userId"=? ORDER BY "createdAt" DESC LIMIT 1', user.id);
+  assert.ok(await one("SELECT 1 AS x FROM nathan_email_otp_sessions WHERE session_id=? AND user_id=?", session.id, user.id));
+  // Make this user a fully enrolled, granted administrator with a fresh passkey step-up on this session.
+  await db.prepare("UPDATE nathan_bootstrap_status SET state='complete' WHERE id='primary'").run();
+  await db.prepare('UPDATE "user" SET "role"=\'admin\' WHERE "id"=?').bind(user.id).run();
+  await db.prepare("INSERT INTO nathan_admin_grants(user_id,email,granted_by) VALUES (?,?,'test')").bind(user.id, "member@example.test").run();
+  await db.prepare('INSERT INTO "passkey"("id","publicKey","userId","credentialID","counter","deviceType","backedUp") VALUES (?,\'x\',?,?,0,\'singleDevice\',0)').bind("pk-m", user.id, "cred-m").run();
+  await db.prepare('INSERT INTO "twoFactor"("id","secret","backupCodes","userId","verified") VALUES (?,\'x\',\'x\',?,1)').bind("tf-m", user.id).run();
+  await db.prepare("INSERT INTO nathan_admin_assurance(session_id,user_id,method) VALUES (?,?,'passkey')").bind(session.id, user.id).run();
+  const studio = () => mf.dispatchFetch(ORIGIN + "/studio", { redirect: "manual", headers: { Cookie: cookie } });
+  assert.notEqual((await studio()).status, 200, "an email-code session does not open Studio");
+  // Control: the same session without the email-code record would.
+  await db.prepare("DELETE FROM nathan_email_otp_sessions WHERE session_id=?").bind(session.id).run();
+  assert.equal((await studio()).status, 200);
 });

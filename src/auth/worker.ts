@@ -34,7 +34,7 @@ import { admissionOverview, applyAdmissionOperation, ADMISSION_ERRORS } from "./
 import { healthResponse } from "./health";
 import { handleSamlIdp, samlIdpReturnRedirect, pruneSamlIdp } from "./saml-idp";
 import type { Background } from "./email-otp";
-import { emailOtpOffered } from "./email-otp-policy.mjs";
+import { emailOtpOffered, pruneEmailOtpLimits } from "./email-otp-policy.mjs";
 
 function reject(status: number, reason: string) {
   return Response.json({ error: reason }, { status, headers: { "Cache-Control": "no-store" } });
@@ -562,6 +562,7 @@ export default {
     await pruneRbacChanges(env);
     await pruneMcp(env);
     await pruneSamlIdp(env);
+    await pruneEmailOtpLimits(env.DB);
     // NATH-11: retry due back-channel logouts (connection Durable Objects also retry their own).
     await deliverLogouts(env,{limit:100}).catch(()=>{});
   }
