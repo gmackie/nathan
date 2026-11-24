@@ -1,7 +1,7 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { SignJWT, exportJWK, generateKeyPair } from "jose";
-import { bundle, migrate, randomKey, cookiesOf, start, COMPAT } from "./helpers.mjs";
+import { bundle, migrateGateway, randomKey, cookiesOf, start, COMPAT } from "./helpers.mjs";
 
 const ISSUER = "https://login.example.test/api/auth";
 const ORIGIN = "https://app.example.test";
@@ -28,10 +28,12 @@ async function idp(request) {
     const form = new URLSearchParams(await request.text());
     const grant = issued.get(form.get("code"));
     if (!grant) return Response.json({ error: "invalid_grant" }, { status: 400 });
-    const idToken = await new SignJWT({ nonce: grant.nonce, email: "user@example.test", email_verified: true, sid: grant.sid })
+    const claims = new SignJWT({ nonce: grant.nonce, email: "user@example.test", email_verified: true, sid: grant.sid })
       .setProtectedHeader({ alg: "ES256", kid: "k1" })
-      .setIssuer(ISSUER).setAudience(CLIENT).setSubject(grant.sub)
-      .setIssuedAt().setExpirationTime("5m").sign(privateKey);
+      .setIssuer(ISSUER).setAudience(CLIENT).setSubject(grant.sub).setExpirationTime("5m");
+    if (grant.iat !== null) claims.setIssuedAt(grant.iat);
+    const idToken = await claims.sign(privateKey);
+    if (grant.afterIssue) await grant.afterIssue();
     return Response.json({ id_token: idToken, access_token: "x", token_type: "Bearer" });
   }
   return new Response("unexpected outbound " + url.href, { status: 599 });
@@ -61,11 +63,11 @@ before(async () => {
     }]
   });
   db = await mf.getD1Database("SESSIONS", "gateway");
-  await migrate(db, "migrations/gateway/0001_sessions.sql");
+  await migrateGateway(db);
 });
 after(() => mf?.dispose());
 
-async function login(sub, sid) {
+async function startLogin(sub, sid, iat = Math.floor(Date.now() / 1000), afterIssue) {
   const begin = await mf.dispatchFetch(ORIGIN + "/__nathan/login?returnTo=/reports", { redirect: "manual" });
   assert.equal(begin.status, 302, "login must redirect to the IdP, got " + begin.status + " " + await begin.clone().text());
   const flow = cookiesOf(begin)["__Host-nathan-flow"];
@@ -74,10 +76,14 @@ async function login(sub, sid) {
   const authorize = new URL(begin.headers.get("Location"));
   assert.equal(authorize.origin + authorize.pathname, ISSUER + "/oauth2/authorize");
   const code = "code-" + crypto.randomUUID();
-  issued.set(code, { nonce: authorize.searchParams.get("nonce"), sub, sid });
-  const callback = await mf.dispatchFetch(
+  issued.set(code, { nonce: authorize.searchParams.get("nonce"), sub, sid, iat, afterIssue });
+  return () => mf.dispatchFetch(
     ORIGIN + "/__nathan/callback?code=" + code + "&state=" + authorize.searchParams.get("state"),
     { redirect: "manual", headers: { Cookie: "__Host-nathan-flow=" + flow.value } });
+}
+async function login(sub, sid, iat) {
+  const complete = await startLogin(sub, sid, iat);
+  const callback = await complete();
   assert.equal(callback.status, 303, "callback must complete, got " + callback.status + " " + await callback.clone().text());
   assert.equal(callback.headers.get("Location"), ORIGIN + "/reports");
   const jar = cookiesOf(callback);
@@ -96,10 +102,10 @@ test("gateway login round trip sets flow and session cookies and proxies upstrea
   assert.equal(page.headers.get("Referrer-Policy"), "same-origin");
 });
 
-async function logoutToken(claims, iat = Math.floor(Date.now() / 1000)) {
+async function logoutToken(claims, iat = Math.floor(Date.now() / 1000), jti = crypto.randomUUID()) {
   return new SignJWT({ events: { "http://schemas.openid.net/event/backchannel-logout": {} }, ...claims })
     .setProtectedHeader({ alg: "ES256", kid: "k1", typ: "logout+jwt" })
-    .setIssuer(ISSUER).setAudience(CLIENT).setIssuedAt(iat).setJti(crypto.randomUUID())
+    .setIssuer(ISSUER).setAudience(CLIENT).setIssuedAt(iat).setJti(jti)
     .setExpirationTime("2m").sign(privateKey);
 }
 const postLogout = token => mf.dispatchFetch(ORIGIN + "/__nathan/backchannel", {
@@ -108,6 +114,78 @@ const postLogout = token => mf.dispatchFetch(ORIGIN + "/__nathan/backchannel", {
 });
 const sessionCount = async sid =>
   (await db.prepare("SELECT count(*) AS n FROM nathan_gateway_sessions WHERE sid=?").bind(sid).first()).n;
+
+async function assertLoginEnded(complete, sid) {
+  const response = await complete();
+  assert.equal(response.status, 401);
+  assert.equal(cookiesOf(response)["__Host-nathan-session"], undefined);
+  assert.match(cookiesOf(response)["__Host-nathan-flow"].raw, /Max-Age=0/);
+  assert.equal(await sessionCount(sid), 0);
+}
+
+test("a signed SID logout received during an in-flight token exchange applies at callback", async () => {
+  const sub = "sid-cutoff-user", sid = "sid-before-callback";
+  const signed = Promise.withResolvers(), deliver = Promise.withResolvers();
+  const complete = await startLogin(sub, sid, undefined, async () => {
+    signed.resolve();
+    await deliver.promise;
+  });
+  const callback = complete();
+  try {
+    await Promise.race([signed.promise, callback.then(() => assert.fail("callback ended before token exchange"))]);
+    assert.equal((await postLogout(await logoutToken({ sub, sid }))).status, 204);
+  } finally { deliver.resolve(); }
+  await assertLoginEnded(() => callback, sid);
+  await login(sub, "sid-after-logout");
+});
+
+test("an issuer omitting ID-token iat uses the encrypted flow start for subject cutoffs", async () => {
+  const sub = "no-iat-person", sid = "no-iat-sid";
+  const complete = await startLogin(sub, sid, null);
+  assert.equal((await postLogout(await logoutToken({ sub, toe: Math.floor(Date.now() / 1000) }))).status, 204);
+  await assertLoginEnded(complete, sid);
+  await login("other-no-iat-person", "allowed-no-iat", null);
+});
+
+test("a subject receipt compares the signed ID-token time to the original event second at callback", async () => {
+  const sub = "subject-cutoff-user", toe = Math.floor(Date.now() / 1000) - 30;
+  const complete = await startLogin(sub, "at-subject-cutoff", toe);
+  const later = await startLogin(sub, "after-subject-cutoff", toe + 1);
+  assert.equal((await postLogout(await logoutToken({ sub, toe }))).status, 204);
+  assert.equal((await postLogout(await logoutToken({ sub, toe: toe - 10 }))).status, 204);
+  await assertLoginEnded(complete, "at-subject-cutoff");
+  assert.equal((await later()).status, 303);
+  await login("other-subject", "other-subject-sid", toe);
+});
+
+test("a retained pre-upgrade JTI acknowledges a replay without revoking a fresh session", async () => {
+  const jti = crypto.randomUUID(), now = Math.floor(Date.now() / 1000);
+  await db.prepare("INSERT INTO nathan_gateway_logout_jti(jti,exp) VALUES (?,?)").bind(jti,now + 120).run();
+  await login("legacy-jti-person", "legacy-jti-fresh");
+  assert.equal((await postLogout(await logoutToken({ sub: "legacy-jti-person" }, now, jti))).status, 204);
+  assert.equal(await sessionCount("legacy-jti-fresh"), 1);
+});
+
+test("receipts and event IDs belong to the verified issuer and client", async () => {
+  const jti = crypto.randomUUID(), sid = "scoped-sid", sub = "scoped-person";
+  for (const [iss, client] of [[ISSUER, "other-client"], ["https://other.example.test/api/auth", CLIENT]])
+    await db.prepare("INSERT INTO nathan_gateway_logout_receipts(issuer,client_id,jti,sid,exp) VALUES (?,?,?,?,unixepoch()+3600)")
+      .bind(iss,client,jti,sid).run();
+  await login(sub, sid);
+  assert.equal((await postLogout(await logoutToken({ sid }, Math.floor(Date.now() / 1000), jti))).status, 204);
+  assert.equal(await sessionCount(sid), 0);
+  assert.equal((await db.prepare("SELECT count(*) AS n FROM nathan_gateway_logout_receipts WHERE jti=?").bind(jti).first()).n, 3);
+});
+
+test("a subject logout without toe ends an in-flight login and admits an immediate new one", async () => {
+  const sub = "legacy-cutoff-user", issuedAt = Math.floor(Date.now() / 1000);
+  const complete = await startLogin(sub, "pending-legacy", issuedAt), jti = crypto.randomUUID();
+  assert.equal((await postLogout(await logoutToken({ sub }, issuedAt, jti))).status, 204);
+  await assertLoginEnded(complete, "pending-legacy");
+  await login(sub, "fresh-legacy", issuedAt);
+  assert.equal((await postLogout(await logoutToken({ sub }, issuedAt + 1, jti))).status, 204);
+  assert.equal(await sessionCount("fresh-legacy"), 1);
+});
 
 test("back-channel logout deletes the matching session", async () => {
   await login("user-2", "sid-2");
@@ -144,10 +222,9 @@ test("replayed logout token does not revoke a newer session", async () => {
 test("revocation rolls back when the replay record cannot be written, so the retry still revokes", async () => {
   await login("user-5", "sid-5");
   const token = await logoutToken({ sid: "sid-5" });
-  // Fail the batch's second statement: the delete must not commit on its own.
-  await db.prepare("ALTER TABLE nathan_gateway_logout_jti RENAME TO hidden_jti").run();
+  await db.prepare("ALTER TABLE nathan_gateway_logout_receipts RENAME TO hidden_receipts").run();
   const failed = await postLogout(token);
-  await db.prepare("ALTER TABLE hidden_jti RENAME TO nathan_gateway_logout_jti").run();
+  await db.prepare("ALTER TABLE hidden_receipts RENAME TO nathan_gateway_logout_receipts").run();
   assert.equal(failed.status, 503);
   assert.equal(await sessionCount("sid-5"), 1, "the batch must be all-or-nothing");
   assert.equal((await postLogout(token)).status, 204);
@@ -160,18 +237,25 @@ test("concurrent deliveries of one logout token both succeed and revoke once", a
   const responses = await Promise.all([postLogout(token), postLogout(token)]);
   assert.deepEqual(responses.map(r => r.status), [204, 204]);
   assert.equal(await sessionCount("sid-6"), 0);
-  const rows = await db.prepare("SELECT count(*) AS n FROM nathan_gateway_logout_jti").first();
-  assert.ok(rows.n >= 1);
+  const rows = await db.prepare("SELECT count(*) AS n FROM nathan_gateway_logout_receipts WHERE sid=?").bind("sid-6").first();
+  assert.equal(rows.n, 1);
 });
 
-test("a future-dated token's replay record outlives its acceptance window", async () => {
+test("replay receipts cover the sender retry schedule and the gateway prunes expired receipts", async () => {
   await login("user-7", "sid-7");
   const iat = Math.floor(Date.now() / 1000) + 170;
   const token = await logoutToken({ sid: "sid-7" }, iat);
   assert.equal((await postLogout(token)).status, 204);
   const jti = JSON.parse(Buffer.from(token.split(".")[1], "base64url")).jti;
-  const row = await db.prepare("SELECT exp FROM nathan_gateway_logout_jti WHERE jti=?").bind(jti).first();
-  assert.ok(row.exp >= iat + 180 + 30, "replay record must last until iat + skew + tolerance, got exp-iat=" + (row.exp - iat));
+  const row = await db.prepare("SELECT exp FROM nathan_gateway_logout_receipts WHERE jti=?").bind(jti).first();
+  assert.ok(row.exp >= iat + 48 * 3600, "receipt must span retries as well as the signed token's lifetime");
+  const expired = "expired-" + crypto.randomUUID();
+  await db.prepare("INSERT INTO nathan_gateway_logout_receipts(issuer,client_id,jti,subject,exp) VALUES (?,?,?,?,unixepoch()-1)")
+    .bind(ISSUER,CLIENT,expired,"stale-subject").run();
+  const gateway = await mf.getWorker("gateway");
+  await gateway.scheduled({ cron: "*/5 * * * *" });
+  const receipts = await db.prepare("SELECT jti FROM nathan_gateway_logout_receipts WHERE jti IN (?,?)").bind(expired,jti).all();
+  assert.deepEqual(receipts.results, [{ jti }]);
 });
 
 test("discovery or JWKS outages are retryable; bad tokens are not", async () => {
@@ -192,8 +276,7 @@ test("discovery or JWKS outages are retryable; bad tokens are not", async () => 
 
 test("a delayed subject logout ends only sessions established by the signed event time", async () => {
   const sub = "delayed-logout-user", occurred = Math.floor(Date.now() / 1000) - 300;
-  await login(sub, "older-sid");
-  await db.prepare("UPDATE nathan_gateway_sessions SET created_at=? WHERE sid=?").bind(occurred,"older-sid").run();
+  await login(sub, "older-sid", occurred);
   await login(sub, "newer-sid");
   assert.equal((await postLogout(await logoutToken({ sub, toe: "invalid" }))).status, 400);
   assert.equal((await postLogout(await logoutToken({ sub, toe: occurred }))).status, 204);

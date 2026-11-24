@@ -6,7 +6,7 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { SignJWT, exportJWK, generateKeyPair } from "jose";
-import { bundle, migrate, randomKey, cookiesOf, start, COMPAT } from "./helpers.mjs";
+import { bundle, migrateGateway, randomKey, cookiesOf, start, COMPAT } from "./helpers.mjs";
 
 const AUTH_HOST = "login.example.test";
 const ISSUER = "https://" + AUTH_HOST + "/api/auth";
@@ -88,7 +88,7 @@ before(async () => {
       }
     ]
   });
-  await migrate(await mf.getD1Database("SESSIONS", "g-control"), "migrations/gateway/0001_sessions.sql");
+  await migrateGateway(await mf.getD1Database("SESSIONS", "g-control"));
   const control = await mf.getWorker("g-control");
   const begin = await control.fetch(ORIGIN + "/__nathan/login?returnTo=/", { redirect: "manual" });
   const authorize = new URL(begin.headers.get("Location"));

@@ -10,7 +10,7 @@ import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { COMPAT, bundle, cookiesOf, migrate, randomKey, start } from "./helpers.mjs";
+import { COMPAT, bundle, cookiesOf, migrateGateway, randomKey, start } from "./helpers.mjs";
 
 const manifest = JSON.parse(readFileSync("src/ui/generated/ui-manifest.json", "utf8"));
 const sri = bytes => "sha384-" + createHash("sha384").update(bytes).digest("base64");
@@ -89,7 +89,7 @@ async function gateway() {
     }]
   });
   instances.push(mf);
-  await migrate(await mf.getD1Database("SESSIONS", "gateway"), "migrations/gateway/0001_sessions.sql");
+  await migrateGateway(await mf.getD1Database("SESSIONS", "gateway"));
   return { mf, upstreamRequests };
 }
 
