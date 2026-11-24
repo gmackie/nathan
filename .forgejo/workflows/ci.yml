@@ -17,7 +17,8 @@ jobs:
     # `apps`: the fleet's app-CI label (container runners with the
     # /npm-cache and other fleet cache mounts).
     runs-on: apps
-    timeout-minutes: 20
+    # The shared runner executes the full workerd suite serially.
+    timeout-minutes: 45
     steps:
       # Push to main: skip the heavy steps (and stay green) when main already
       # has a newer commit, whose own run verifies it. PRs always run.

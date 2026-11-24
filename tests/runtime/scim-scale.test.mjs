@@ -7,12 +7,13 @@
  */
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
-import { authWorker, enrollAdmin, studioPost } from "./helpers.mjs";
+import { authFixtureModules, authWorker, enrollAdmin, studioPost } from "./helpers.mjs";
 
 const HOST = "login.scale.test", ORIGIN = "https://" + HOST, SECRET = "s".repeat(32) + "t".repeat(32);
 const USERS = 1200, GROUPS = [[0, 1000], [200, 1200], [100, 1100]];
 let mf, db, auth, admin, token;
 const ids = [], groups = [];
+let holdAlarm, alarms = 0;
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const count = async (sql, ...params) => Number(Object.values(await db.prepare(sql).bind(...params).first())[0]);
@@ -27,16 +28,14 @@ async function ok(response, status = 200) {
   return text ? JSON.parse(text) : null;
 }
 const outbox = async () => ok(await auth.fetch(ORIGIN + "/studio/api/scim/outbox?id=big", { headers: { Cookie: admin.cookie } }));
-/** Waits for the connection's alarms to drain the outbox; returns how many polls saw work left. */
+/** Waits for the connection's alarms to drain the outbox. */
 async function drained(limitMs = 180_000) {
   const deadline = Date.now() + limitMs;
-  let polls = 0;
   for (;;) {
     const view = await outbox();
-    if (view.pending === 0) return polls;
+    if (view.pending === 0) return;
     if (view.head[0]?.attempts > 0) throw Error("reconciliation failed: " + JSON.stringify(view.head[0]));
     if (Date.now() > deadline) throw Error("outbox not drained: " + JSON.stringify(view).slice(0, 300));
-    polls++;
     await sleep(100);
   }
 }
@@ -45,7 +44,14 @@ async function inBatches(items, size, fn) {
 }
 
 before(async () => {
-  mf = await authWorker(HOST, { BETTER_AUTH_SECRET: SECRET, NATHAN_ADMIN_EMAILS: "admin@example.test", NATHAN_SCIM_RATE_LIMIT: "100000" });
+  mf = await authWorker(HOST, { BETTER_AUTH_SECRET: SECRET, NATHAN_ADMIN_EMAILS: "admin@example.test", NATHAN_SCIM_RATE_LIMIT: "100000" }, {
+    modules: authFixtureModules(),
+    serviceBindings: { TEST_ALARM: async () => {
+      alarms++;
+      await holdAlarm;
+      return new Response(null, { status: 204 });
+    } }
+  });
   db = await mf.getD1Database("DB");
   // NATH-16: just-in-time creation at scale, in a self-service installation.
   await db.prepare("INSERT INTO nathan_admission_settings(id,mode,updated_by) VALUES ('primary','self-service','test')").run();
@@ -84,14 +90,22 @@ test("one resync creates 1,200 accounts just in time over many bounded invocatio
 test("3,000 mapped memberships are added in bounded batches, each exactly once", async () => {
   for (const [i, [from, to]] of GROUPS.entries()) {
     const members = ids.slice(from, to).map(value => ({ value }));
-    // Additions may finish in the background, so the directory gets its answer at once.
-    const group = await ok(await scim("POST", "/Groups", { schemas: ["urn:ietf:params:scim:schemas:core:2.0:Group"], displayName: "Group " + i,
-      externalId: "g-" + i, members }), 201);
-    groups.push(group);
-    const applied = await count("SELECT count(*) FROM nathan_group_members WHERE group_id=?", "team-" + i);
-    assert.ok(applied < 1000, "the request applied only part of a 1,000-member group itself (" + applied + ")");
-    const polls = await drained();
-    assert.ok(polls >= 1, "the connection's alarm finished the group");
+    // Observe exactly the work done by POST before allowing the real alarm to continue it.
+    const before = alarms;
+    const gate = Promise.withResolvers();
+    holdAlarm = gate.promise;
+    try {
+      const group = await ok(await scim("POST", "/Groups", { schemas: ["urn:ietf:params:scim:schemas:core:2.0:Group"], displayName: "Group " + i,
+        externalId: "g-" + i, members }), 201);
+      groups.push(group);
+      const applied = await count("SELECT count(*) FROM nathan_group_members WHERE group_id=?", "team-" + i);
+      assert.ok(applied > 0 && applied < 1000, "memberships committed by the request: " + applied);
+    } finally {
+      holdAlarm = undefined;
+      gate.resolve();
+    }
+    await drained();
+    assert.ok(alarms > before, "the connection's alarm finished the group");
     assert.equal(await count("SELECT count(*) FROM nathan_group_members WHERE group_id=?", "team-" + i), 1000);
   }
   assert.equal(await count("SELECT count(*) FROM nathan_group_members WHERE group_id LIKE 'team-%'"), 3000);
