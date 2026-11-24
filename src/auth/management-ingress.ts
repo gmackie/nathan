@@ -1,6 +1,7 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { sha256 } from "../gateway/crypto";
 import { isAppId } from "../shared/policy.mjs";
+import { userBanned } from "../shared/token-claims.mjs";
 import { normalizeEmail } from "./admission-policy.mjs";
 import { openConfigSecret, sealConfigSecret } from "./config-crypto.mjs";
 import { managementEmail, type AuthEnv } from "./env";
@@ -46,6 +47,22 @@ async function accessIdentity(request: Request, env: AuthEnv) {
     if (payload.type !== "app" || !email || typeof payload.sub !== "string" || !payload.sub || payload.sub.length > 256) return null;
     return { email, binding: JSON.stringify([env.NATHAN_ISSUER, issuer, env.NATHAN_ACCESS_AUD, payload.sub, email]) };
   } catch { return null; }
+}
+
+/** Access controls the host. Nathan independently admits the installer-designated owner
+ * and explicitly granted, currently enabled administrators, including before serving HTML. */
+async function currentCustodian(env: AuthEnv, email: string) {
+  const allowlistedOwner = env.NATHAN_ADMIN_EMAILS?.split(",").map(normalizeEmail).includes(email);
+  const result = await env.DB.prepare(
+    'SELECT u.banned,u.banExpires FROM nathan_bootstrap_status b LEFT JOIN "user" u ON u.email=?1 COLLATE NOCASE ' +
+    "WHERE b.id='primary' " +
+    'AND (SELECT COUNT(*) FROM "user" WHERE email=?1 COLLATE NOCASE)<=1 ' +
+    "AND NOT EXISTS(SELECT 1 FROM nathan_scim_users d WHERE d.user_id=u.id AND d.link_state='deprovisioned' AND d.override_cause IS NULL) " +
+    "AND ((b.state='pending' AND b.admin_user_id IS NULL AND b.admin_email=?1 AND ?2=1) " +
+    "OR (u.emailVerified=1 AND u.role='admin' AND ((b.state<>'pending' AND b.admin_user_id=u.id AND b.admin_email=?1 AND ?2=1) " +
+    "OR (b.state='complete' AND EXISTS(SELECT 1 FROM nathan_admin_grants g WHERE g.user_id=u.id AND g.email=?1 AND g.enabled=1)))))"
+  ).bind(email, Number(Boolean(allowlistedOwner))).first();
+  return !userBanned(result);
 }
 
 // Only the Studio and its operator sign-in, enrollment and account pages run on this host.
@@ -119,6 +136,9 @@ export async function managementIngress(request: Request, env: AuthEnv, ctx: Exe
   if (url.origin !== origins.management) return denied(421, "Misdirected request");
   const identity = await accessIdentity(request, env);
   if (!identity) return denied(403, "Cloudflare Access required");
+  try {
+    if (!await currentCustodian(env, identity.email)) return denied(403, "Administrator access required");
+  } catch { return denied(503, "Management unavailable"); }
   if (!managementPath(url.pathname)) return denied(404, "Not found");
   const key = env.NATHAN_CONFIG_KEY!;
   const inner = await openManagementCookies(request, identity.binding, key);

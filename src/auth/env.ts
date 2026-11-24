@@ -1,8 +1,10 @@
 /** Request-local, verified Access email. A deployed binding cannot supply this symbol. */
 export const managementEmail = Symbol("managementEmail");
+export const ownerInvitation = Symbol("ownerInvitation");
 
 export interface AuthEnv {
   [managementEmail]?: string;
+  [ownerInvitation]?: string;
   DB: D1Database;
   SCIM_DIRECTORY?: DurableObjectNamespace;
   /** NATH-11: SCIM requests per minute per connection (default 600). */

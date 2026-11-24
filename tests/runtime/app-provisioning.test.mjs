@@ -2,7 +2,8 @@ import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync } from "node:fs";
 import { createLocalJWKSet, jwtVerify } from "jose";
-import { bundle, COMPAT, migrate, randomKey, start } from "./helpers.mjs";
+import { authWorker, bundle, COMPAT, enrollAdmin, migrate, randomKey, start, studioPost } from "./helpers.mjs";
+import { supersedeUnprovenAccount } from "../../src/auth/admission-policy.mjs";
 
 const app = "classcheck";
 const makeCaller = (name, applicationId) => ({
@@ -190,4 +191,120 @@ test("ban, revocation and deletion survive a stale provisioning retry", async ()
   await sql('DELETE FROM "user" WHERE id=?', sub);
   assert.deepEqual(await provision(input), { error: "identity_conflict" });
   assert.equal((await first('SELECT count(*) AS n FROM "user" WHERE email=?', input.email)).n, 0);
+});
+
+test("a source can suspend its banned member and a later unban keeps the newer withdrawal", async () => {
+  const identity = { externalId: "ban-suspension", email: "suspend-banned@example.test" };
+  const { sub } = await provision(identity);
+  const grant = { externalId: identity.externalId, sub, revision: 1, roles: ["member","guardian"] };
+  assert.deepEqual(await sync(grant), { sub, revision: 1, applied: true });
+  await sql("UPDATE user SET banned=1 WHERE id=?", sub);
+  const withdrawal = { ...grant, roles: [], revision: 3 };
+  assert.deepEqual(await sync({ ...withdrawal, sub: "other" }), { error: "identity_conflict" });
+  assert.deepEqual(await sync({ ...withdrawal, roles: ["member"] }), { error: "identity_conflict" });
+  await sql("UPDATE user SET role='admin' WHERE id=?", sub);
+  assert.deepEqual(await sync(withdrawal), { error: "identity_conflict" });
+  await sql("UPDATE user SET role='user' WHERE id=?", sub);
+  assert.deepEqual(await sync(withdrawal), { sub, revision: 3, applied: true });
+  assert.deepEqual(await sync(withdrawal), { sub, revision: 3, applied: false });
+  await sql("UPDATE user SET banned=0 WHERE id=?", sub);
+  assert.deepEqual(await sync(grant), { error: "stale_revision" });
+  assert.equal((await call("/access", { subject: sub })).allowed, false);
+  assert.equal((await first("SELECT COUNT(*) AS n FROM nathan_rbac_grants WHERE principal_id=?", sub)).n, 0);
+
+  assert.deepEqual(await sync({ ...grant, revision: 4 }), { sub, revision: 4, applied: true });
+  await sql("INSERT INTO nathan_scim_connections(id,domain,created_by) VALUES ('suspension-directory','school.test','owner')");
+  await sql("INSERT INTO nathan_scim_users(connection_id,scim_id,external_id,user_name,active,user_id,link_state) " +
+    "VALUES ('suspension-directory','app-member','cc-staff',?,0,?,'deprovisioned')", identity.email, sub);
+  await sql("UPDATE user SET banned=1 WHERE id=?", sub);
+  assert.deepEqual(await sync({ ...withdrawal, revision: 5 }), { sub, revision: 5, applied: true });
+  assert.deepEqual(await sync({ ...grant, revision: 6 }), { error: "identity_conflict" });
+  assert.equal((await first("SELECT link_state FROM nathan_scim_users WHERE user_id=?", sub)).link_state, "deprovisioned");
+});
+
+test("an erasure tombstone classifies an older grant only for the exact app, source ID and old subject", async () => {
+  const identity = { externalId: "terminal-revision", email: "terminal-revision@example.test" };
+  const { sub } = await provision(identity);
+  const input = { externalId: identity.externalId, sub, revision: 7 };
+  assert.deepEqual(await erase(input), { sub, revision: 7, applied: true });
+  for (const roles of [[], ["member"]]) {
+    assert.deepEqual(await sync({ ...input, roles, revision: 6 }), { error: "stale_revision" });
+    assert.deepEqual(await sync({ ...input, roles }), { error: "identity_conflict" });
+    assert.deepEqual(await sync({ ...input, roles, revision: 8 }), { error: "identity_conflict" });
+  }
+  assert.deepEqual(await sync({ ...input, roles: [], revision: 6, sub: "other" }), { error: "identity_conflict" });
+  assert.deepEqual(await sync({ ...input, roles: [], revision: 6, externalId: "other" }), { error: "identity_conflict" });
+  assert.deepEqual(await sync({ ...input, roles: [], revision: 6 }, "other-web"), { error: "not_configured" });
+});
+
+test("app erasure preserves independent Better Auth organization ownership", async () => {
+  const identity = { externalId: "organization-owner", email: "org-owner@example.test" };
+  const { sub } = await provision(identity);
+  const input = { externalId: identity.externalId, sub, revision: 2 };
+  await sql("INSERT INTO organization(id,name,slug,createdAt) VALUES ('owned','Independent','independent',0)");
+  await sql("INSERT INTO member(id,organizationId,userId,role,createdAt) VALUES ('owner','owned',?,'admin, owner',0)", sub);
+  assert.deepEqual(await erase(input), { error: "identity_conflict" });
+  assert.equal((await first("SELECT userId FROM member WHERE id='owner'")).userId, sub);
+  assert.equal((await first("SELECT grant_revision FROM nathan_app_provisions WHERE user_id=?", sub)).grant_revision, 0);
+  await sql("UPDATE member SET role='member' WHERE id='owner'");
+  assert.deepEqual(await erase(input), { sub, revision: 2, applied: true });
+});
+
+test("a verified enterprise domain returns a reconciliation outcome before reserving a mailbox", async () => {
+  const { sub } = await provision({ externalId: "sso-provider-admin", email: "sso-admin@example.test" });
+  await sql("INSERT INTO ssoProvider(id,issuer,userId,providerId,domain,domainVerified) VALUES ('schools','https://idp.test',?,'schools','other.test, District.Test',1)", sub);
+  for (const email of ["staff@district.test", "staff@school.district.test"]) {
+    assert.deepEqual(await provision({ externalId: email, email }), { error: "identity_conflict", reason: "verified_enterprise_domain" });
+    assert.equal(await first("SELECT id FROM user WHERE email=?", email), null);
+    assert.equal(await first("SELECT user_id FROM nathan_app_provisions WHERE email=?", email), null);
+  }
+  assert.ok((await provision({ externalId: "unrelated-domain", email: "staff@notdistrict.test" })).sub);
+  await sql("UPDATE ssoProvider SET domainVerified=0 WHERE id='schools'");
+  assert.ok((await provision({ externalId: "unverified-domain", email: "unverified@district.test" })).sub);
+});
+
+test("Studio and verified-provider invitation recovery preserve a source-owned unverified subject", async () => {
+  const host = "studio-provision.example.test", secret = randomKey(), email = "reserved@example.test";
+  const worker = await authWorker(host, { BETTER_AUTH_SECRET: secret });
+  try {
+    const local = await worker.getD1Database("DB"), admin = await enrollAdmin(local, secret);
+    await local.prepare("INSERT INTO user(id,name,email,emailVerified,createdAt,updatedAt) VALUES ('reserved','',?,0,0,0)").bind(email).run();
+    await local.prepare("INSERT INTO nathan_app_provisions(app_id,external_id_hash,subject_hash,user_id,email) VALUES ('classcheck','local','subject','reserved',?)").bind(email).run();
+    const visit = body => studioPost({ fetch: (...args) => worker.dispatchFetch(...args) }, "https://" + host, "/studio/api/admission", body, admin.cookie);
+    const invite = await visit({ op: "invite", email });
+    assert.equal(invite.status, 409);
+    assert.match((await invite.json()).error, /application/i);
+    const recovery = await visit({ op: "reissue", email, confirm: "CONFIRM REISSUE INVITATION " + email });
+    assert.equal(recovery.status, 409);
+    assert.match((await recovery.json()).error, /application/i);
+    await local.prepare("INSERT INTO nathan_invitations(id,email,created_by,expires_at) VALUES ('later',?,'studio',unixepoch()+3600)").bind(email).run();
+    await local.prepare("INSERT INTO nathan_admission_pending(email,user_id,method) VALUES (?,'reserved','password')").bind(email).run();
+    assert.equal(await supersedeUnprovenAccount(local, email, "github"), null);
+    assert.equal(await local.prepare("SELECT user_id FROM nathan_app_provisions WHERE email=?").bind(email).first("user_id"), "reserved");
+  } finally { await worker.dispose(); }
+});
+
+test("failed provisioning transactions produce a bounded failure audit outside the rollback", async () => {
+  const identity = { externalId: "failed-audit", email: "failed-audit@example.test" };
+  const { sub } = await provision(identity);
+  const removal = { externalId: identity.externalId, sub, revision: 5 };
+  const grant = { ...removal, roles: ["member","staff"] };
+  const failed = { externalId: "rollback-create", email: "rollback-create@example.test" };
+  const requests = [
+    ["app_user_provision", () => provision(failed)],
+    ["app_grants_sync", () => sync(grant)],
+    ["app_user_erase", () => erase(removal)]
+  ];
+  for (const [action, request] of requests) {
+    await sql("CREATE TRIGGER interrupt_privileged_op BEFORE INSERT ON nathan_security_audit " +
+      "WHEN NEW.action='" + action + "' AND NEW.outcome IN ('created','applied','erased') BEGIN SELECT RAISE(ABORT,'interrupted'); END");
+    try {
+      await assert.rejects(request(), /temporarily unavailable/);
+      await assert.rejects(request(), /temporarily unavailable/);
+      assert.deepEqual(await first("SELECT COUNT(*) AS n,MIN(target) AS target FROM nathan_security_audit " +
+        "WHERE actor='app-provision:classcheck' AND action=? AND outcome='failed' AND created_at>=unixepoch()-60", action), { n: 1, target: "unmatched" });
+    } finally { await sql("DROP TRIGGER interrupt_privileged_op"); }
+  }
+  assert.equal(await first("SELECT id FROM user WHERE email=?", failed.email), null);
+  assert.equal((await first("SELECT grant_revision FROM nathan_app_provisions WHERE user_id=?", sub)).grant_revision, 0);
 });

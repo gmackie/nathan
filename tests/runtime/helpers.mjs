@@ -10,6 +10,13 @@ export function bundle(name) {
   return path;
 }
 
+export function authFixtureModules() {
+  return [
+    { type: "ESModule", path: "tests/runtime/fixtures/auth-worker.mjs" },
+    { type: "ESModule", path: bundle("auth") }
+  ];
+}
+
 /** Applies a migration file statement by statement; D1's exec() rejects multi-line statements.
  * A CREATE TRIGGER ... BEGIN ...; END statement is kept whole. */
 export async function migrate(db, file) {

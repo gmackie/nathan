@@ -40,7 +40,7 @@
     "ENABLE_PASSWORD": "true",
     "ENTERPRISE_SSO": "false",
     "ENABLE_EMAIL_OTP": "true",
-    "EMAIL_FROM": "ClassCheck <noreply@gmac.io>"
+    "EMAIL_FROM": "ClassCheck <noreply@classcheck.io>"
   },
   "triggers": {
     "crons": [

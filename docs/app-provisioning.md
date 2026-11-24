@@ -42,6 +42,12 @@ operator address, changed identity, suspended membership or deleted subject
 requires reconciliation. ClassCheck can retry transport failures with the same
 inputs. The provisioning operations share a 120-call per-minute app limit.
 
+For new reservations in a verified enterprise SSO domain or one of its subdomains,
+Nathan returns `{error: "identity_conflict", reason: "verified_enterprise_domain"}`.
+Have the organization establish the identity through its configured SSO provider
+and reconcile the verified issuer and subject with the durable ClassCheck user ID.
+Studio directs invitation recovery for a source-owned subject back to the application.
+
 ## Reconcile grants
 
 Persist each desired role set and its positive, increasing safe-integer revision
@@ -66,11 +72,18 @@ audits the operation in one transaction. An identical replay returns
 can throw. The caller acknowledges only its matching successful revision, or a
 stale delivery for which it can account for the later state.
 
-Sending `roles: []` suspends app access. The live verifier denies it even when
+Apply migrations through `0024_app_membership_changes.sql` before enabling app-scoped provisioning.
+
+Sending `roles: []` suspends app access. While suspended, token exchange and refresh return `invalid_grant`, UserInfo rejects existing access tokens, and the directory reports the current denial. The live verifier denies it even when
 the subject also has a grant from another source. A subsequent provision call
 cannot undo the suspension. A higher revision may explicitly reinstate the
 member. Other principals' grants, independently owned grants and Nathan
 administrator privileges remain under their existing owners.
+The source can record a newer suspension during an account ban or directory
+deactivation. Lifting the ban or reactivating the directory identity preserves
+the application's suspension and its revision. After an erasure, delivery of
+an older role revision for the exact external ID and subject returns
+`stale_revision`. An equal or newer role revision returns `identity_conflict`.
 
 ## Erase a verified account
 
@@ -85,8 +98,19 @@ ID, subject and revision.
 
 Nathan removes the user, sessions, credentials, app grants, outstanding email
 proofs and OAuth tokens in one transaction. It queues logout for registered
-relying parties before their session references disappear. The source record
+relying parties before their session references disappear. The private issuer
+records the client and actual ID-token subject for each issued app session.
+An RP that accepts subject-wide logout receives one logout per issued subject.
+A session-required RP receives its issued session IDs, including when the
+corresponding Nathan session has already expired. Historical stored grants
+and consents identify additional participating clients. A historical
+JWT-only session issued before migration 0023 with neither a consent nor
+a stored token requires reconciliation from the relying party's records.
+The source record
 retains hashes of the identifiers and the final revision for idempotence. The
 source mailbox is cleared. Account erasure is terminal for that external ID.
 An administrator, a directory-linked subject, or a subject with independent
 ownership or grants in another application needs operator reconciliation.
+Better Auth organization owners must transfer their ownership before erasure.
+When a privileged transaction rolls back, Nathan attempts to record one failure
+per application and operation per minute without including the submitted identity.

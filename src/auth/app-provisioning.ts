@@ -7,7 +7,7 @@ import type { AuthEnv } from "./env";
 import { standaloneOrigins } from "./management-ingress";
 import { allowRequests } from "./request-limit";
 
-type Failure = { error: "invalid_input" | "not_configured" | "identity_conflict" | "stale_revision" | "rate_limited" };
+type Failure = { error: "invalid_input" | "not_configured" | "identity_conflict" | "stale_revision" | "rate_limited"; reason?: "verified_enterprise_domain" };
 type ProvisionResult = { sub: string } | Failure;
 type GrantsResult = { sub: string; revision: number; applied: boolean } | Failure;
 const grantRoles = new Set(["member", "guardian", "staff", "driver", "platform_admin"]);
@@ -32,13 +32,33 @@ async function refuse(env: AuthEnv, app: string, action: string, error: Failure[
   return { error };
 }
 
+/** A transaction rollback removes its success audit too. Bound the separate failure
+ * receipt to one per application, operation and minute while storage is available. */
+async function auditedBatch(db: D1Database, app: string, action: string, statements: D1PreparedStatement[]) {
+  try {
+    return await db.batch(statements);
+  } catch (error) {
+    await db.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) " +
+      "SELECT ?1,?2,?3,'unmatched','failed' WHERE NOT EXISTS(SELECT 1 FROM nathan_security_audit " +
+      "WHERE actor=?2 AND action=?3 AND outcome='failed' AND created_at>=unixepoch()-60)")
+      .bind(crypto.randomUUID(), "app-provision:" + app, action).run().catch(() => {});
+    throw error;
+  }
+}
+
 async function admit(env: AuthEnv, app: string, hostname: string, key: string, email: string): Promise<ProvisionResult> {
   const db = env.DB, candidate = crypto.randomUUID(), actor = "app-provision:" + app;
   const now = new Date().toISOString();
+  const labels = email.slice(email.lastIndexOf("@") + 1).split(".");
+  const suffixes = JSON.stringify(labels.map((_, index) => labels.slice(index).join(".")));
+  // Better Auth permits a comma-separated domain list. Match complete labels, including
+  // inherited subdomains, within the same transaction that reserves the new subject.
+  const enterprise = `SELECT 1 FROM ssoProvider s, json_each('[' || replace(json_quote(s.domain), ',', '","') || ']') d
+    JOIN json_each(?) suffix ON suffix.value=lower(trim(d.value,char(9,10,11,12,13,32))) WHERE s.domainVerified=1`;
   // A fresh subject ID distinguishes this creation from a concurrent provision
   // or an existing account. Every dependent write uses that same candidate in
   // this batch. A retry reads its mapping without re-creating a removed grant.
-  const [configuration, , , , , audit] = await db.batch([
+  const [configuration, , , , , audit] = await auditedBatch(db, app, "app_user_provision", [
     db.prepare(configuredApp).bind(app, hostname),
     db.prepare('INSERT INTO "user"(id,name,email,emailVerified,createdAt,updatedAt,role,banned) ' +
       "SELECT ?,'',?,0,?,?,'user',0 WHERE EXISTS(" + configuredApp + ") " +
@@ -48,8 +68,9 @@ async function admit(env: AuthEnv, app: string, hostname: string, key: string, e
       "AND NOT EXISTS(SELECT 1 FROM nathan_admin_grants WHERE enabled=1 AND email=? COLLATE NOCASE) " +
       "AND NOT EXISTS(SELECT 1 FROM nathan_admission_pending WHERE email=?) " +
       "AND NOT EXISTS(SELECT 1 FROM nathan_invitations WHERE email=? AND uses=0) " +
-      "AND NOT EXISTS(SELECT 1 FROM nathan_scim_users WHERE linked_email=? COLLATE NOCASE OR user_name=? COLLATE NOCASE)")
-      .bind(candidate,email,now,now,app,hostname,app,key,email,email,email,email,email,email,email),
+      "AND NOT EXISTS(SELECT 1 FROM nathan_scim_users WHERE linked_email=? COLLATE NOCASE OR user_name=? COLLATE NOCASE) " +
+      "AND NOT EXISTS(" + enterprise + ")")
+      .bind(candidate,email,now,now,app,hostname,app,key,email,email,email,email,email,email,email,suffixes),
     db.prepare("INSERT INTO nathan_app_provisions(app_id,external_id_hash,subject_hash,user_id,email) " +
       'SELECT ?,?,?,id,email FROM "user" WHERE id=?').bind(app,key,await subjectKey(key,candidate),candidate),
     db.prepare("INSERT INTO nathan_rbac_grants(id,app_id,role_key,principal_type,principal_id,created_by) " +
@@ -60,29 +81,41 @@ async function admit(env: AuthEnv, app: string, hostname: string, key: string, e
       .bind(actor,candidate),
     db.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) " +
       "SELECT ?,?,'app_user_provision',COALESCE(p.user_id,'unmatched')," +
-      "CASE WHEN p.user_id=? THEN 'created' WHEN p.user_id IS NOT NULL THEN 'existing' ELSE 'refused' END " +
+      "CASE WHEN p.user_id=? THEN 'created' WHEN p.user_id IS NOT NULL THEN 'existing' " +
+      "WHEN NOT EXISTS(SELECT 1 FROM nathan_app_provisions WHERE app_id=? AND external_id_hash=?) " +
+      "AND EXISTS(" + enterprise + ") THEN 'verified_enterprise_domain' ELSE 'refused' END " +
       "FROM (SELECT 1) LEFT JOIN nathan_active_app_provisions p ON p.app_id=? AND p.external_id_hash=? AND p.email=? " +
       "AND EXISTS(" + configuredApp + ") RETURNING target,outcome")
-      .bind(crypto.randomUUID(),actor,candidate,app,key,email,app,hostname)
+      .bind(crypto.randomUUID(),actor,candidate,app,key,suffixes,app,key,email,app,hostname)
   ]);
   if (!configuration.results.length) return { error: "not_configured" };
   const row = audit.results[0] as { target: string; outcome: string };
+  if (row.outcome === "verified_enterprise_domain")
+    return { error: "identity_conflict", reason: "verified_enterprise_domain" };
   return row.outcome === "refused" ? { error: "identity_conflict" } : { sub: row.target };
 }
 
 async function reconcile(env: AuthEnv, app: string, hostname: string, key: string, sub: string, revision: number, roles: string): Promise<GrantsResult> {
   const db = env.DB;
-  // Scope the stable external ID and subject together. Revoked members may be
-  // explicitly reinstated; administrator, directory or ban decisions still win.
-  const target = "FROM nathan_app_provision_subjects WHERE app_id=? AND hostname=? AND external_id_hash=? AND user_id=? " +
-    "AND email NOT IN (SELECT value FROM json_each(?))";
-  const targetArgs = [app,hostname,key,sub,JSON.stringify(adminEmails(env))];
+  // A ban prevents granting access. It must still be possible to withdraw
+  // the source's existing roles so that lifting the ban cannot restore them.
+  const target = "FROM nathan_app_provisions p JOIN user u ON u.id=p.user_id AND u.email=p.email " +
+    "JOIN nathan_provisionable_apps a ON a.id=p.app_id WHERE p.app_id=? AND a.hostname=? AND p.external_id_hash=? " +
+    "AND p.user_id=? AND p.erased_revision IS NULL AND COALESCE(u.role,'user')='user' " +
+    "AND (?='[]' OR (COALESCE(u.banned,0)=0 AND NOT EXISTS(SELECT 1 FROM nathan_scim_users " +
+    "WHERE user_id=u.id AND link_state='deprovisioned' AND override_cause IS NULL))) " +
+    "AND u.email NOT IN (SELECT value FROM json_each(?)) " +
+    "AND NOT EXISTS(SELECT 1 FROM nathan_admin_grants WHERE enabled=1 AND (user_id=u.id OR email=u.email COLLATE NOCASE)) " +
+    "AND NOT EXISTS(SELECT 1 FROM nathan_bootstrap_status WHERE admin_user_id=u.id OR admin_email=u.email COLLATE NOCASE)";
+  const targetArgs = [app,hostname,key,sub,roles,JSON.stringify(adminEmails(env))];
   const manifest = "SELECT 1 WHERE EXISTS(" + configuredApp + ") AND NOT EXISTS(SELECT 1 FROM json_each(?) wanted " +
     "WHERE NOT EXISTS(SELECT 1 FROM nathan_rbac_roles WHERE app_id=? AND key=wanted.value))";
   const manifestArgs = [app,hostname,roles,app];
-  const [configured, previous, update] = await db.batch([
+  const [configured, previous, update] = await auditedBatch(db, app, "app_grants_sync", [
     db.prepare(manifest).bind(...manifestArgs),
-    db.prepare("SELECT grant_revision,desired_roles " + target).bind(...targetArgs),
+    db.prepare("SELECT grant_revision,desired_roles " + target +
+      " UNION ALL SELECT erased_revision,NULL FROM nathan_app_provisions WHERE app_id=? AND external_id_hash=? AND subject_hash=? " +
+      "AND user_id IS NULL AND erased_revision IS NOT NULL").bind(...targetArgs,app,key,await subjectKey(key,sub)),
     db.prepare("UPDATE nathan_app_provisions SET grant_revision=?1, desired_roles=?2 WHERE grant_revision<?1 " +
       "AND user_id=(SELECT user_id " + target + ") AND EXISTS(" + manifest + ") RETURNING grant_revision")
       .bind(revision,roles,...targetArgs,...manifestArgs),
@@ -112,10 +145,12 @@ async function eraseMember(env: AuthEnv, app: string, hostname: string, key: str
     "AND NOT EXISTS(SELECT 1 FROM nathan_admin_grants WHERE enabled=1 AND (user_id=u.id OR email=u.email COLLATE NOCASE)) " +
     "AND NOT EXISTS(SELECT 1 FROM nathan_scim_users WHERE user_id=u.id) " +
     "AND NOT EXISTS(SELECT 1 FROM oauthClient WHERE userId=u.id) AND NOT EXISTS(SELECT 1 FROM ssoProvider WHERE userId=u.id) " +
+    "AND NOT EXISTS(SELECT 1 FROM member m WHERE m.userId=u.id " +
+    `AND EXISTS(SELECT 1 FROM json_each('[' || replace(json_quote(m.role), ',', '","') || ']') r WHERE trim(r.value,char(9,10,11,12,13,32))='owner')) ` +
     "AND NOT EXISTS(SELECT 1 FROM nathan_rbac_grants g WHERE g.app_id<>p.app_id AND ((g.principal_type='user' AND g.principal_id=u.id) " +
     "OR (g.principal_type='group' AND g.principal_id IN (SELECT group_id FROM nathan_group_members WHERE user_id=u.id))))))";
   const args = [app, key, await subjectKey(key,sub), sub, JSON.stringify(adminEmails(env))];
-  const [configured, previous, claimed, deleted] = await db.batch([
+  const [configured, previous, claimed, deleted] = await auditedBatch(db, app, "app_user_erase", [
     db.prepare(registered).bind(app,hostname),
     db.prepare("SELECT p.user_id,p.grant_revision,p.erased_revision " + target).bind(...args),
     db.prepare("UPDATE nathan_app_provisions SET erased_revision=?1, grant_revision=?1, desired_roles='[]' " +
