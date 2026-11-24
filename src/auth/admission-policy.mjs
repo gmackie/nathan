@@ -141,14 +141,14 @@ const PENDING = "SELECT email, method FROM nathan_admission_pending WHERE user_i
  * installation is self-service, or it is the installer's first administrator), else
  * `{ pending: true, admitted: false }` and the caller must refuse the verification.
  */
-export async function admitOnVerification(db, env, { userId, email, requirePasswordInvitation = false }) {
+export async function admitOnVerification(db, env, { userId, email }) {
   const address = normalizeEmail(email);
   const pending = await db.prepare(PENDING).bind(userId, address ?? "").first();
-  if (!pending) return requirePasswordInvitation ? { pending: true, admitted: false } : { pending: false };
+  if (!pending) return { pending: false };
   if (!address) return { pending: true, admitted: false };
   let decision;
-  if (!requirePasswordInvitation && await isBootstrapAdmission(db, env, address, true)) decision = { pending: true, admitted: true, via: "bootstrap" };
-  else if (!requirePasswordInvitation && await admissionMode(db) === "self-service") decision = { pending: true, admitted: true, via: "self-service" };
+  if (await isBootstrapAdmission(db, env, address, true)) decision = { pending: true, admitted: true, via: "bootstrap" };
+  else if (await admissionMode(db) === "self-service") decision = { pending: true, admitted: true, via: "self-service" };
   else {
     const invitation = await claimInvitation(db, address, pending.method, userId);
     decision = invitation ? { pending: true, admitted: true, via: "invitation", invitationId: invitation } : { pending: true, admitted: false };
@@ -166,19 +166,18 @@ export async function admitOnVerification(db, env, { userId, email, requirePassw
 export async function supersedeUnprovenAccount(db, email, provider = "unknown") {
   const address = normalizeEmail(email);
   if (!address) return null;
-  const row = await db.prepare(
+  const deleted = await db.prepare('DELETE FROM "user" WHERE id IN (' +
     'SELECT u."id" AS id FROM nathan_admission_pending p JOIN "user" u ON u."id"=p.user_id ' +
     'WHERE p.email=? AND lower(u."email")=? AND u."emailVerified"=0 ' +
     'AND NOT EXISTS (SELECT 1 FROM "session" s WHERE s."userId"=u."id") AND NOT EXISTS (SELECT 1 FROM "passkey" k WHERE k."userId"=u."id") ' +
-    "AND EXISTS (SELECT 1 FROM nathan_invitations i WHERE i.email=p.email AND i.uses=0 AND i.revoked_at IS NULL AND i.expires_at>unixepoch()) LIMIT 1"
+    "AND NOT EXISTS (SELECT 1 FROM nathan_app_provisions source WHERE source.user_id=u.id) " +
+    "AND EXISTS (SELECT 1 FROM nathan_invitations i WHERE i.email=p.email AND i.uses=0 AND i.revoked_at IS NULL AND i.expires_at>unixepoch()) LIMIT 1) RETURNING id"
   ).bind(address, address).first();
-  if (!row) return null;
-  const deleted = await db.prepare('DELETE FROM "user" WHERE "id"=? AND "emailVerified"=0 RETURNING "id" AS id').bind(row.id).first();
   if (!deleted) return null;
   const via = /^[a-z][a-z0-9-]{0,62}$/.test(String(provider)) ? provider : "unknown";
   await db.prepare(AUDIT + "VALUES (?,'system:admission','account_superseded',?,'succeeded')")
-    .bind(crypto.randomUUID(), row.id + " email=" + address + " provider=" + via).run();
-  return row.id;
+    .bind(crypto.randomUUID(), deleted.id + " email=" + address + " provider=" + via).run();
+  return deleted.id;
 }
 
 /** Audits an admission decision. Refusals are kept to one row per method and minute (sign-up floods). */

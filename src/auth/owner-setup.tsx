@@ -5,13 +5,14 @@ import { Link } from "@cloudflare/kumo/components/link";
 import { AuthLayout } from "../ui/layouts/AuthLayout";
 import { renderPage } from "../ui/render";
 import { isAllowedUnsafeRequest } from "../shared/security.mjs";
+import { userBanned } from "../shared/token-claims.mjs";
 import { normalizeEmail } from "./admission-policy.mjs";
 import { readBoundedText } from "./bounded-body.mjs";
-import { managementEmail, type AuthEnv } from "./env";
+import { managementEmail, ownerInvitation, type AuthEnv } from "./env";
 import { createAuth } from "./instance";
 
 const path = "/security/setup-owner";
-type Owner = { id: string | null; verified: number | null };
+type Owner = { id: string | null; verified: number | null; invitation: string | null };
 function form(email: string, owner: Owner, error?: string, status = 200) {
   const title = owner.verified ? "Management email verified" : owner.id ? "Verify your management email" : "Set up your administrator account";
   return renderPage(<AuthLayout title={title}>
@@ -43,11 +44,12 @@ export async function ownerSetup(request: Request, env: AuthEnv): Promise<Respon
   const allowed = env.ENABLE_PASSWORD === "true" && env.NATHAN_INSTALL_ACTIVE !== "false" && email &&
     env.NATHAN_ADMIN_EMAILS?.split(",").map(normalizeEmail).includes(email);
   const owner = allowed && await env.DB.prepare(
-    'SELECT u.id,u.emailVerified AS verified FROM nathan_bootstrap_status b LEFT JOIN "user" u ON lower(u.email)=b.admin_email ' +
-    "WHERE b.id='primary' AND b.state='pending' AND b.admin_user_id IS NULL AND b.admin_email=? AND COALESCE(u.banned,0)=0 " +
-    "AND (u.emailVerified=1 OR EXISTS (SELECT 1 FROM nathan_invitations i WHERE i.email=b.admin_email AND i.uses=0 AND i.revoked_at IS NULL AND i.expires_at>unixepoch()))"
+    'SELECT u.id,u.emailVerified AS verified,u.banned,u.banExpires,i.id AS invitation FROM nathan_bootstrap_status b LEFT JOIN "user" u ON lower(u.email)=b.admin_email ' +
+    "LEFT JOIN nathan_invitations i ON i.email=b.admin_email AND i.uses=0 AND i.revoked_at IS NULL AND i.expires_at>unixepoch() " +
+    "WHERE b.id='primary' AND b.state='pending' AND b.admin_user_id IS NULL AND b.admin_email=? " +
+    "AND (u.emailVerified=1 OR i.id IS NOT NULL)"
   ).bind(email).first<Owner>();
-  if (!email || !owner) return onSetup ? new Response("Setup unavailable", { status: 404 }) : null;
+  if (!email || !owner || userBanned(owner)) return onSetup ? new Response("Setup unavailable", { status: 404 }) : null;
   if (entry) return owner.verified && url.pathname === "/sign-in" ? null : Response.redirect(url.origin + path, 302);
   if (request.method === "GET") return form(email, owner);
   if (request.method !== "POST") return new Response("Method not allowed", { status: 405, headers: { Allow: "GET, POST" } });
@@ -63,7 +65,7 @@ export async function ownerSetup(request: Request, env: AuthEnv): Promise<Respon
   const ip = request.headers.get("cf-connecting-ip");
   if (ip) headers.set("cf-connecting-ip", ip);
   const endpoint = owner.id ? "/api/auth/sign-in/email" : "/api/auth/sign-up/email";
-  const response = await createAuth(env).handler(new Request(url.origin + endpoint, {
+  const response = await createAuth({ ...env, [ownerInvitation]: owner.invitation! }).handler(new Request(url.origin + endpoint, {
     method: "POST", headers, body: JSON.stringify({ name: email, email, password, callbackURL: url.origin + path })
   }));
   if (response.ok || (owner.id && response.status === 403 && (await response.json() as { code?: string }).code === "EMAIL_NOT_VERIFIED")) {
