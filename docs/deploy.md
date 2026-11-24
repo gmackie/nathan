@@ -102,13 +102,29 @@ The `node scripts/nathan.mjs protect <application-id>` CLI previews the hostname
 
 ### Upgrade or roll back an existing stock gateway
 
-Apply this procedure to the stock gateway Worker and its sessions database. ClassCheck uses its own relying party and stays online throughout a stock gateway upgrade.
+Use this procedure for a stock gateway on schema 0001 or later. Run the commands from the repository root with the generated Wrangler config for that gateway. Its `SESSIONS` binding must point to the gateway's D1. ClassCheck uses its own relying party and stays online throughout a stock gateway upgrade.
 
-1. Put the stock gateway in maintenance on every ingress, keeping the upstream private. Return HTTP 503 with `Retry-After` on the back-channel endpoint so Nathan queues delivery. Pause the gateway's scheduled cleanup and wait for in-flight requests and scheduled executions on the old version to finish. Keep Nathan's issuer delivery scheduler running.
-2. Apply every pending gateway migration through `0003_legacy_logout_retention.sql` to the gateway's D1 database. Older Workers recorded only the event ID. The upgrade preserves every remaining legacy receipt and extends its retention, including entries still awaiting cleanup.
-3. Route 100% of gateway traffic to the upgraded Worker. Confirm it is the only serving version before reopening the back-channel endpoint. Check that queued deliveries have been acknowledged, restore the gateway cleanup schedule, then reopen browser traffic. Verify a new login and a logout. Browsers with an unfinished pre-upgrade login must start it again. Unrelated established sessions keep their existing cookies.
+1. **Hold session creation before closing ingress.** Run the following against the serving gateway database and confirm it succeeded. When the trigger commits, D1 rejects every later session insert, including a callback already in flight. Existing sessions and logout writes remain available.
 
-For rollback, drain the gateway again and retain the migrated D1 database, receipts and session keys. Deploy a single tested version that checks the receipt sequence on login callbacks and records scoped logout events. If the prior version predates those checks, keep the stock gateway in maintenance while applying the corrective build. Restoring a database snapshot taken before a logout could revive the ended session.
+   ```sh
+   npx wrangler d1 execute SESSIONS --remote --config "$GATEWAY_CONFIG" --file scripts/gateway-maintenance/hold-session-creation.sql
+   ```
+
+2. Put every stock gateway ingress in maintenance and keep the upstream private. Return HTTP 503 with `Retry-After` on the back-channel endpoint. Pause the gateway's scheduled cleanup and wait for old requests and scheduled executions to finish. Keep Nathan's issuer delivery scheduler running.
+3. Apply the pending gateway migrations through `0003_legacy_logout_retention.sql`, then route 100% of traffic to the upgraded Worker. Keep browser traffic closed and keep the database hold in place. Confirm only the new version can receive requests.
+
+   ```sh
+   npx wrangler d1 migrations apply SESSIONS --remote --config "$GATEWAY_CONFIG"
+   ```
+
+4. Reopen only the back-channel endpoint. Have the issuer retry outstanding logout notifications for this client. If cleanup already removed a legacy event ID and a pending subject-only token omits `toe`, its original cutoff cannot be recovered. Deliver that signed token while the hold is active. The receiver conservatively ends the subject's existing gateway sessions and records a scoped receipt. Confirm the issuer received the acknowledgement and marked the event delivered. For Nathan, check that client’s outstanding entries in `nathan_backchannel_deliveries`. If an old event failed or the sender cannot confirm its disposition, keep the hold and browser maintenance in place until the sender can redeliver and confirm completion.
+5. Wait until the backlog is acknowledged and the full five-minute flow-cookie lifetime has elapsed since the last old login request finished. This also expires flows from a prior 0002 Worker that already included a sequence. Release the hold, restore scheduled cleanup and reopen browser traffic. Verify a new login and a signed logout. Users with an interrupted sign-in start again. Unrelated established sessions keep their existing cookies.
+
+   ```sh
+   npx wrangler d1 execute SESSIONS --remote --config "$GATEWAY_CONFIG" --file scripts/gateway-maintenance/resume-session-creation.sql
+   ```
+
+For rollback, repeat the same hold, drain and backlog checks. Retain the migrated D1 database, receipts and session keys. The rollback build must reject an absent flow receipt sequence **before exchanging the authorization code**, check scoped receipts when it creates a session, and record signed logout events atomically. Revision `14f838fe` defaults an absent sequence to zero and fails this requirement. Keep the gateway in maintenance until a qualifying build is available. Restoring an earlier database snapshot could revive ended sessions.
 
 ## 8. Rollback and incident recovery
 
