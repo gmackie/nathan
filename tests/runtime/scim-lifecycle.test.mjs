@@ -365,19 +365,18 @@ test("while an earlier change is pending, a different later change is refused (5
   await issueTokens("u-alice", session.id);
   const addKim = fill(okta.addMember, { USER_ID: kim.id });
   await sql("ALTER TABLE nathan_backchannel_deliveries RENAME TO hidden_deliveries");
-  let earlier, later, staged;
   try {
-    earlier = await scim("acme", "PATCH", "/Users/" + alice.id, entra.disableUser);
-    later = await scim("acme", "PATCH", "/Groups/" + oktaGroup.id, addKim);
-    staged = await ok(await scim("acme", "GET", "/Groups/" + oktaGroup.id));
+    const earlier = await scim("acme", "PATCH", "/Users/" + alice.id, entra.disableUser);
+    const later = await scim("acme", "PATCH", "/Groups/" + oktaGroup.id, addKim);
+    const staged = await ok(await scim("acme", "GET", "/Groups/" + oktaGroup.id));
+    assert.equal(earlier.status, 503, "the deactivation could not be applied");
+    assert.equal(later.status, 503, "a different change is refused while an earlier one is pending");
+    assert.equal(later.headers.get("Retry-After"), "10");
+    assert.ok(!staged.members.some(m => m.value === kim.id), "the refused change was not staged");
+    assert.equal(await banned("u-alice"), false, "nothing was applied");
+    assert.equal((await nathanSession(session.cookie))?.user?.id, "u-alice");
+    assert.equal(await one("SELECT 1 FROM nathan_group_members WHERE group_id='engineering' AND user_id='u-kim'"), null);
   } finally { await sql("ALTER TABLE hidden_deliveries RENAME TO nathan_backchannel_deliveries"); }
-  assert.equal(earlier.status, 503, "the deactivation could not be applied");
-  assert.equal(later.status, 503, "a different change is refused while an earlier one is pending");
-  assert.equal(later.headers.get("Retry-After"), "10");
-  assert.ok(!staged.members.some(m => m.value === kim.id), "the refused change was not staged");
-  assert.equal(await banned("u-alice"), false, "nothing was applied");
-  assert.equal((await nathanSession(session.cookie))?.user?.id, "u-alice");
-  assert.equal(await one("SELECT 1 FROM nathan_group_members WHERE group_id='engineering' AND user_id='u-kim'"), null);
   // The directory retries the later change: the earlier one is applied first, then this one.
   await ok(await scim("acme", "PATCH", "/Groups/" + oktaGroup.id, addKim));
   assert.equal(await banned("u-alice"), true);
