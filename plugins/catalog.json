@@ -83,6 +83,16 @@
       "securityReviewed": false
     },
     {
+      "id": "email-otp",
+      "name": "Hosted email code and link",
+      "tier": "verified",
+      "packageName": "better-auth/plugins",
+      "activation": "compiled",
+      "installed": false,
+      "compatibleWithWorkers": null,
+      "securityReviewed": false
+    },
+    {
       "id": "magic-link",
       "name": "Magic link",
       "tier": "verified",

@@ -44,6 +44,12 @@
 - [ ] Verify a new subdomain can be explicitly onboarded without changing the original IdP's DNS or provider credentials.
 - [ ] Verify domain-wide setup never installs wildcard Worker Routes or changes existing apex/subdomain DNS without explicit operator approval.
 
+## Hosted email sign-in
+
+- [ ] On the staging issuer, record the deployed revision, migration 0019 and the configured Resend sender. Open a registered staging RP with S256 PKCE, state and nonce using an invited test mailbox.
+- [ ] Check the delivered subject, name and inline logo. Complete one authorization with the code and another with the link. Verify the exact callback, state, token signature, issuer, nonce and registered resource audience.
+- [ ] Confirm each email yields at most one session. Check that an email-authenticated administrator still needs a passkey for Studio. Record delivery and round-trip results against the revision.
+
 ## OIDC/RP acceptance
 
 - [ ] Verify authorize code + S256 PKCE, exact redirect URI and consent flow with a confidential Worker gateway client.

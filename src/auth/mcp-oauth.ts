@@ -27,6 +27,7 @@ import { createLocalJWKSet, decodeJwt, jwtVerify } from "jose";
 import { signJWT } from "better-auth/plugins/jwt";
 import type { AuthEnv } from "./env";
 import { audit, isAdminPrincipal } from "./admin-service";
+import { allowRequests } from "./request-limit";
 import { resolveAccess } from "./rbac";
 import { rolesClaim, validateAudience } from "../shared/token-claims.mjs";
 import { makeCookie, parseCookie, safeReturnPath, constantTimeEqual, redirectWithCookies } from "../shared/security.mjs";
@@ -75,14 +76,8 @@ async function sha256(value: string) {
 }
 const pkceChallenge = sha256;
 
-/** Fixed-window limit in nathan_mcp_limits (migration 0004); keys hold hashes, never raw IPs. */
-async function allow(env: AuthEnv, name: string, subject: string, limit: number, windowSeconds = 60) {
-  const bucket = Math.floor(Date.now() / (windowSeconds * 1000));
-  const key = "mcp-oauth:" + name + ":" + (await sha256(subject)).slice(0, 22) + ":" + bucket;
-  const row = await env.DB.prepare("INSERT INTO nathan_mcp_limits(id,request_count,expires_at) VALUES (?,1,?) " +
-    "ON CONFLICT(id) DO UPDATE SET request_count=request_count+1 RETURNING request_count").bind(key, (bucket + 2) * windowSeconds).first<{ request_count: number }>();
-  return Boolean(row && row.request_count <= limit);
-}
+const allow = (env: AuthEnv, name: string, subject: string, limit: number, windowSeconds = 60) =>
+  allowRequests(env, "mcp-oauth:" + name, subject, limit, windowSeconds);
 const clientIp = (request: Request) => request.headers.get("cf-connecting-ip") ?? "unknown";
 function tooMany() { return oauthJson({ error: "slow_down", error_description: "Too many requests" }, 429, { "Retry-After": "60" }); }
 

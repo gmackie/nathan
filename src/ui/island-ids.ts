@@ -7,7 +7,7 @@
  * - security: /security account security panel (admin onboarding, TOTP enrolment, passkeys; NATH-38).
  * - installer-wizard: the hosted installer's wizard (NATH-40, src/ui/pages/installer/).
  */
-export const ISLAND_IDS = ["passkey-button", "auto-post", "security", "installer-wizard"] as const;
+export const ISLAND_IDS = ["email-sign-in", "passkey-button", "auto-post", "security", "installer-wizard"] as const;
 export type IslandId = (typeof ISLAND_IDS)[number];
 
 export function isIslandId(id: string): id is IslandId {

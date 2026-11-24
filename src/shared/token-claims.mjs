@@ -36,7 +36,8 @@ export function principalKind({ hasUser, clientKind } = {}) {
 }
 
 /**
- * Authentication-method claims from evidence Nathan holds: a nathan_admin_assurance row, written
+ * A verified email session carries only nathan_amr ["email"]. For a passkey, Nathan uses
+ * a nathan_admin_assurance row, written
  * only after Better Auth verified a passkey assertion and created this session. Enrollment alone
  * never produces a row. Returns {} without matching evidence.
  * - nathan_amr ["pop"]: proof of possession of a key (RFC 8176). Not "hwk" (synced passkeys are not
@@ -45,6 +46,7 @@ export function principalKind({ hasUser, clientKind } = {}) {
  */
 export function evidenceClaims(row, { userId, sessionId } = {}) {
   if (!row || typeof row !== "object" || typeof userId !== "string" || typeof sessionId !== "string") return {};
+  if (row.email_session_id === sessionId && row.userId === userId) return { nathan_amr: ["email"] };
   if (row.session_id !== sessionId || row.user_id !== userId || row.method !== "passkey") return {};
   if (!Number.isSafeInteger(row.verified_at) || row.verified_at <= 0) return {};
   return { nathan_amr: ["pop"], nathan_acr: PASSKEY_ACR, nathan_auth_time: row.verified_at };

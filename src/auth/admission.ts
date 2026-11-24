@@ -205,7 +205,7 @@ function refuse(): never {
  * databaseHooks.user.create.before. Composes the SAML connection guard and the admission decision;
  * fails closed (no account) on any error. Returns the SAML guard's data changes, if any.
  */
-export async function admissionUserCreateGuard(env: AuthEnv, user: any, ctx: any) {
+export async function admissionUserCreateGuard(env: AuthEnv, user: any, ctx: any, invitationId: string | null = null) {
   let guard: any;
   try {
     guard = await samlUserCreateGuard(env.DB, user, ctx);
@@ -218,7 +218,7 @@ export async function admissionUserCreateGuard(env: AuthEnv, user: any, ctx: any
   const method = creationMethod(ctx);
   let decision: { admitted: boolean; via: string | null };
   try {
-    decision = await decideAdmission(env.DB, env, { email: merged.email, emailVerified: merged.emailVerified === true, method });
+    decision = await decideAdmission(env.DB, env, { email: merged.email, emailVerified: merged.emailVerified === true, method, invitationId });
     // A password sign-up holds nothing yet: it is provisional until its address is verified.
     if (decision.via === "invitation_pending") await recordPendingAdmission(env.DB, normalizeEmail(merged.email), method);
   } catch {
@@ -228,7 +228,7 @@ export async function admissionUserCreateGuard(env: AuthEnv, user: any, ctx: any
     await auditAdmission(env.DB, method, "refused").catch(() => {});
     refuse();
   }
-  await auditAdmission(env.DB, method, "admitted_" + decision.via!.replace("-", "_"));
+  if (method !== "email-otp") await auditAdmission(env.DB, method, "admitted_" + decision.via!.replace("-", "_"));
   return guard ?? undefined;
 }
 

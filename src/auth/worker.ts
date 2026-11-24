@@ -1,6 +1,11 @@
 import { serveUiAsset } from "../ui/assets.ts";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { verifyOAuthQueryParams } from "@better-auth/oauth-provider";
+import { emailEnabled, emailSignIn } from "./email-sign-in";
+import { isEmailSession } from "./email-sign-in-policy";
+import { emailSignInPage } from "./email-sign-in-page";
+import { signedOAuthQuery } from "./oauth-query.mjs";
+import { normalizeEmail } from "./admission-policy.mjs";
 import { createAuth } from "./instance";
 import {isRawManagementEndpoint} from "./management-boundary.mjs";
 import { loadSocialCredentials, providerStatus, upsertSocialProvider, setSocialProviderEnabled } from "./provider-store";
@@ -41,7 +46,7 @@ async function isAdmin(session:any,env:AuthEnv):Promise<boolean>{
   return Boolean(session?.user && await isAdminPrincipal(session.user,env));
 }
 
-async function handle(request: Request, env: AuthEnv): Promise<Response> {
+async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Promise<Response> {
   const issuer = new URL(env.NATHAN_ISSUER);
   const url = new URL(request.url);
   if (url.origin !== issuer.origin || url.protocol !== "https:") return reject(421, "Misdirected request");
@@ -57,6 +62,13 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     return protectedResourceMetadata(env);
   }
   if(url.pathname.startsWith("/scim/v2/"))return handleScim(request,env);
+  if (url.pathname === "/sign-in/email/request") return emailSignIn(request, env, ctx, "request");
+  if (url.pathname === "/sign-in/email/verify") return emailSignIn(request, env, ctx, "verify");
+  if (url.pathname === "/sign-in/email" && request.method === "GET" && emailEnabled(env)) {
+    const query = signedOAuthQuery(url.search);
+    if (url.search && (!query || !await verifyOAuthQueryParams(query, env.BETTER_AUTH_SECRET))) return reject(400, "Invalid or expired sign-in request");
+    return emailSignInPage(query ? normalizeEmail(new URLSearchParams(query).get("login_hint")) : null);
+  }
   const socialProviders=await loadSocialCredentials(env);
   const auth = createAuth(env,socialProviders);
   // NATH-14: authorization server for remote MCP servers, consent and MCP connections (src/auth/mcp-oauth.ts).
@@ -88,7 +100,9 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
       if (session?.user?.id) return Response.redirect(issuer.origin + "/security", 302);
     }
     const providers = enabledProviderIds(socialProviders);
-    return signInPage(providers, env.ENABLE_PASSWORD === "true", env.ENTERPRISE_SSO === "true");
+    const query = signedOAuthQuery(url.search);
+    const emailHref = emailEnabled(env) ? "/sign-in/email" + (query ? "?" + query : "") : undefined;
+    return signInPage(providers, env.ENABLE_PASSWORD === "true", env.ENTERPRISE_SSO === "true", emailHref);
   }
   if (url.pathname === "/consent" && request.method === "GET") {
     const { secret } = await auth.$context;
@@ -117,6 +131,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
       return reject(403,"Cross-origin request denied");
     const session=await auth.api.getSession({headers:request.headers});
     if(!await isBootstrapOwner(session?.user,env))return reject(403,"Verified initial admin account required");
+    if (await isEmailSession(env.DB, session!.session.id)) return reject(403,"Sign in with an existing authenticator to complete administrator enrollment");
     try{
       return Response.json(await completeBootstrap(env,session!.user.id),{headers:{"Cache-Control":"no-store"}});
     }catch{return reject(409,"Complete verified passkey and TOTP enrollment first");}
@@ -553,9 +568,13 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
 }
 
 export default {
-  fetch: (request: Request, env: AuthEnv) => handle(request, env),
+  fetch: (request: Request, env: AuthEnv, ctx: ExecutionContext) => handle(request, env, ctx),
   scheduled: async (_: ScheduledEvent,env:AuthEnv) => {
     await env.DB.prepare("DELETE FROM nathan_mcp_limits WHERE expires_at < unixepoch()").run();
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM nathan_email_sign_ins WHERE expires_at<=unixepoch()"),
+      env.DB.prepare("DELETE FROM verification WHERE identifier GLOB 'nathan-email:*' AND unixepoch(expiresAt)<=unixepoch()")
+    ]);
     await pruneRbacChanges(env);
     await pruneMcp(env);
     await pruneSamlIdp(env);

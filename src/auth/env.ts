@@ -30,6 +30,9 @@ export interface AuthEnv {
   NATHAN_PROVIDER_DISCORD?: string;
   NATHAN_PROVIDER_TWITCH?: string;
   NATHAN_PROVIDER_TWITTER?: string;
+  NATHAN_APPEARANCE?: string;
+  /** Operator-installed, sanitized PNGs keyed by validated appearance.logo id (base64). */
+  NATHAN_EMAIL_LOGOS?: string;
   RESEND_API_KEY?: string;
   EMAIL_FROM?: string;
   NATHAN_PAIRWISE_SECRET?: string;

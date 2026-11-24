@@ -8,6 +8,7 @@ import { betterAuth } from "better-auth";
 import { admin, jwt, organization, twoFactor } from "better-auth/plugins";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { passkey } from "@better-auth/passkey";
+import { hostedEmailOTP } from "./email-sign-in-plugin";
 import { sso } from "@better-auth/sso";
 
 export const auth = betterAuth({
@@ -27,6 +28,7 @@ export const auth = betterAuth({
     admin(),
     organization(),
     twoFactor(),
+    hostedEmailOTP(),
     passkey({ rpID: "auth.example.com", rpName: "Nathan" }),
     jwt(),
     oauthProvider({

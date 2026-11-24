@@ -24,7 +24,7 @@ Through the supported oauth-provider `extensions[].claims.accessToken` hook (`sr
 | --- | --- | --- |
 | `principal_kind` | every JWT access token | `user`, `machine` or `agent`, see below |
 | `roles` | user and agent-for-user tokens whose requested audiences are **all** registered and bound to the **same** app, when the evaluator allows the user and they hold roles | sorted role keys from NATH-13's evaluator for that app. A **hint** for simple apps; omitted otherwise |
-| `nathan_amr` | verified passkey evidence for this session | `["pop"]`, see below |
+| `nathan_amr` | verified primary method for this live session | `["pop"]` for a passkey, `["email"]` for hosted email sign-in |
 | `nathan_acr` | same | `urn:nathan:acr:passkey` |
 | `nathan_auth_time` | same | when the passkey assertion was verified (seconds since epoch) |
 
@@ -87,7 +87,7 @@ Use `"values": ["human", "agent"]` only for actions an agent may perform for its
 
 ### Authentication-method claims
 
-Nathan reports only evidence it holds. Today that is one thing: a `nathan_admin_assurance` row (migration 0008). Better Auth's after-hook on `/passkey/verify-authentication` writes it only after it verified a passkey (WebAuthn) assertion and created a new session. Enrolling a passkey never writes one. Nathan emits the claims only when the token's session (`sid`) has such a row for the same user and that Better Auth session is still live (present and unexpired). So client-credentials tokens never have them, user tokens cannot be refreshed once the session has ended (see above), and agent tokens refreshed after it ended carry none.
+Nathan records mailbox proof against the live session in `nathan_email_sessions` (migration 0019). Its JWT access tokens carry `nathan_amr: ["email"]`. Passkey evidence is recorded in `nathan_admin_assurance` (migration 0008). Better Auth's after-hook on `/passkey/verify-authentication` writes it only after it verified a passkey (WebAuthn) assertion and created a new session. Enrolling a passkey never writes one. Nathan emits the claims only when the token's session (`sid`) has such a row for the same user and that Better Auth session is still live (present and unexpired). So client-credentials tokens never have them, user tokens cannot be refreshed once the session has ended (see above), and agent tokens refreshed after it ended carry none.
 
 - `nathan_amr: ["pop"]`: RFC 8176 proof of possession of a key. It is not `hwk`, because synced passkeys are not hardware-bound. It is not `user`, `pin` or `mfa`, because Nathan asks for WebAuthn user verification as `preferred`, not `required`.
 - `nathan_acr: "urn:nathan:acr:passkey"`: the session was created by a verified passkey sign-in. **It is not MFA and not NIST AAL2.**

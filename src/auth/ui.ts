@@ -33,7 +33,7 @@ function page(title: string, body: string, script = ""): Response {
   });
 }
 
-export function signInPage(providers: string[], passwordEnabled: boolean, enterpriseSso=false): Response {
+export function signInPage(providers: string[], passwordEnabled: boolean, enterpriseSso=false, emailHref?: string): Response {
   const buttons=providers.map(p=>'<button data-provider="'+htmlEscape(p)+'">Continue with '+htmlEscape(displayName(p))+'</button>').join("");
   const password=passwordEnabled?'<h2>Email/password</h2><label>Email<input id="email" type="email" autocomplete="username"></label>'+
     '<label>Password<input id="password" type="password" autocomplete="current-password"></label>'+
@@ -45,7 +45,7 @@ export function signInPage(providers: string[], passwordEnabled: boolean, enterp
     '<button id="sso-submit">Sign in with SSO</button>':"";
   const passkey='<h2>Passkey</h2><button id="passkey-login">Sign in with passkey</button>';
   return page("Sign in",'<p>Use your configured identity provider, passkey, or approved enterprise account.</p>'+
-    buttons+passkey+sso+password+'<p id="status" role="alert"></p>',String.raw`
+    buttons+passkey+(emailHref ? '<p><a href="'+htmlEscape(emailHref)+'">Sign in by email</a></p>' : '')+sso+password+'<p id="status" role="alert"></p>',String.raw`
     const status=document.getElementById('status');
     // An app's /oauth2/authorize sent the browser here with a signed query; every sign-in request
     // carries it so Better Auth resumes that authorization (back to the app) instead of landing on "/".

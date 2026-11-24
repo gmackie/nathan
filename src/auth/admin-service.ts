@@ -1,3 +1,4 @@
+import { resolveAppearance } from "../ui/appearance.ts";
 import type { AuthEnv } from "./env";
 
 export type AdminActor = { id:string; email:string; role:"admin"; emailVerified:true };
@@ -72,6 +73,7 @@ export async function createOAuthClient(auth:any,env:AuthEnv,headers:Headers,inp
   if(redirect.protocol!=="https:" || redirect.username || redirect.password || redirect.hash || redirect.origin==="null")
     throw Error("Clients require an exact HTTPS redirect URL");
   if(input.kind==="gateway" && redirect.pathname!=="/__nathan/callback")throw Error("Gateway callback must use /__nathan/callback");
+  if (input.appearance !== undefined) resolveAppearance(env.NATHAN_APPEARANCE ? JSON.parse(env.NATHAN_APPEARANCE) : undefined, input.appearance);
   const extras=input.kind==="gateway" ? {backchannel_logout_uri:redirect.origin+"/__nathan/backchannel",enable_end_session:true} : {};
   const resource=input.kind==="mcp" ? {resources:[new URL(env.NATHAN_ISSUER).origin+"/mcp"]} : {};
   await audit(env,actor,"client_create",input.kind+":"+redirect.origin,"attempted");
@@ -79,6 +81,7 @@ export async function createOAuthClient(auth:any,env:AuthEnv,headers:Headers,inp
     const client=await auth.api.adminCreateOAuthClient({
       headers,body:{
         client_name:input.name.trim(),
+        ...(input.appearance === undefined ? {} : { metadata: { appearance: input.appearance } }),
         redirect_uris:[redirect.href],
         token_endpoint_auth_method:input.publicClient?"none":"client_secret_basic",
         application_type:"web",

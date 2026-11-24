@@ -45,6 +45,7 @@ export async function admissionMode(db) {
 export function creationMethod(ctx) {
   const path = typeof ctx?.path === "string" ? ctx.path : "";
   const id = param => (typeof ctx?.params?.[param] === "string" && /^[a-z0-9][a-z0-9-]{0,62}$/.test(ctx.params[param]) ? ctx.params[param] : "unknown");
+  if (path === "/sign-in/email-otp") return "email-otp";
   if (path === "/sign-up/email") return "password";
   if (path === "/callback/:id" || path === "/oauth2/callback/:id") return "social:" + id("id");
   if (path === "/sign-in/social") return "social:id-token";
@@ -99,9 +100,15 @@ export function claimInvitationStatement(id, method, userId) {
  * `{ admitted: false }` otherwise. An invitation is claimed only for an address the method proved.
  * Throws on database errors: callers refuse the account.
  */
-export async function decideAdmission(db, env, { email, emailVerified, method }) {
+/** @param {any} db @param {any} env @param {{email: unknown, emailVerified: boolean, method: string, invitationId?: string|null}} input */
+export async function decideAdmission(db, env, { email, emailVerified, method, invitationId = null }) {
   const address = normalizeEmail(email);
   if (!address) return { admitted: false, via: null };
+  if (method === "email-otp") {
+    // Migration 0019 consumes this exact invitation atomically with the Better Auth user INSERT.
+    const invitation = emailVerified === true && invitationId && await openInvitation(db, address);
+    return invitation && invitation.id === invitationId ? { admitted: true, via: "invitation", invitationId } : { admitted: false, via: null };
+  }
   if (await isBootstrapAdmission(db, env, address, emailVerified)) return { admitted: true, via: "bootstrap" };
   if (await admissionMode(db) === "self-service") return { admitted: true, via: "self-service" };
   if (method === "password") return await openInvitation(db, address) ? { admitted: true, via: "invitation_pending" } : { admitted: false, via: null };

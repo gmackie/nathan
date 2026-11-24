@@ -6,7 +6,7 @@
  * adds, through the supported oauth-provider `extensions[].claims.accessToken` hook:
  *   - `principal_kind` (user / machine / agent), on every JWT access token;
  *   - `roles`, an optional hint from NATH-13's evaluator for the app bound to the token's audience;
- *   - `nathan_amr` / `nathan_acr` / `nathan_auth_time` from verified passkey sign-in evidence only.
+ *   - `nathan_amr` from verified email or passkey sign-in. Only passkeys add `nathan_acr` and `nathan_auth_time`.
  * Better Auth strips the reserved names `acr`, `amr` and `auth_time` from every claim source, so
  * Nathan cannot and does not emit them on access tokens. See docs/gatekeeper.md.
  *
@@ -71,9 +71,9 @@ export async function accessTokenClaims(env: AuthEnv, input: ClaimInput): Promis
     statements.push(resources.length
       ? env.DB.prepare("SELECT identifier, app_id FROM nathan_token_audiences WHERE identifier IN (" + resources.map(() => "?").join(",") + ")").bind(...resources)
       : env.DB.prepare("SELECT identifier, app_id FROM nathan_token_audiences WHERE 0"));
-    // The grant's session, and passkey evidence that counts only while that session exists.
-    statements.push(env.DB.prepare('SELECT s."id" AS id, s."userId" AS userId, s."expiresAt" AS expiresAt, a.session_id, a.user_id, a.method, a.verified_at ' +
-      'FROM "session" s LEFT JOIN nathan_admin_assurance a ON a.session_id=s."id" AND a.user_id=s."userId" WHERE s."id"=? LIMIT 1').bind(sessionId ?? ""));
+    // The grant's session, and authentication evidence that counts only while that session exists.
+    statements.push(env.DB.prepare('SELECT s."id" AS id, s."userId" AS userId, s."expiresAt" AS expiresAt, a.session_id, a.user_id, a.method, a.verified_at, e.session_id AS email_session_id ' +
+      'FROM "session" s LEFT JOIN nathan_admin_assurance a ON a.session_id=s."id" AND a.user_id=s."userId" LEFT JOIN nathan_email_sessions e ON e.session_id=s."id" WHERE s."id"=? LIMIT 1').bind(sessionId ?? ""));
   }
   const [kindRows, userRows, audiences, sessionRows] = (await env.DB.batch(statements)).map(r => (r.results ?? []) as any[]);
   const clientKind = kindRows[0]?.principal_kind;

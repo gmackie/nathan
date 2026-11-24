@@ -1,7 +1,7 @@
 import { betterAuth } from "better-auth";
 import { passkeyRpName, instanceName } from "./passkey-config.mjs";
-import {createAuthMiddleware} from "better-auth/api";
-import { admin, jwt, organization, twoFactor } from "better-auth/plugins";
+import {APIError, createAuthMiddleware, getSessionFromCtx} from "better-auth/api";
+import { admin, jwt, organization } from "better-auth/plugins";
 import { passkey } from "@better-auth/passkey";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { sso } from "@better-auth/sso";
@@ -20,7 +20,13 @@ import {ssoPluginOptions} from "./saml-policy.mjs";
 import { nathanDatabaseHooks } from "./database-hooks";
 import { admissionBeforeEmailVerification, withInviteeSupersession } from "./admission";
 
-export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredentials) {
+import { hostedEmailOTP, hostedTwoFactor } from "./email-sign-in-plugin";
+import { isEmailSession, type EmailFlow } from "./email-sign-in-policy";
+
+const ADMIN_CREDENTIAL_PATHS = new Set(["/passkey/generate-register-options", "/passkey/verify-registration", "/passkey/delete-passkey",
+  "/set-password", "/change-password", "/change-email", "/link-social", "/unlink-account", "/delete-user"]);
+
+export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredentials, email?: { browser: string; flow: EmailFlow }) {
   const issuer = new URL(env.NATHAN_ISSUER);
   if (issuer.protocol !== "https:" && issuer.hostname !== "localhost")
     throw new Error("Nathan requires an HTTPS identity hostname");
@@ -47,14 +53,28 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
     // NATH-9: implicit account linking only on a provider-verified email matching a verified
     // Nathan user; no provider is trusted by name (see docs/providers.md).
     account: { encryptOAuthTokens: true, storeStateStrategy: "database", accountLinking: { ...ACCOUNT_LINKING, trustedProviders: [...ACCOUNT_LINKING.trustedProviders] } },
+    // Independent OTP records for concurrent browser requests. Every other Better Auth
+    // verification identifier retains its existing storage format.
+    ...(email ? { verification: { storeIdentifier: { default: "plain" as const, overrides: {
+      "sign-in-otp-": { hash: async () => "nathan-email:" + email.flow.generation }
+    } } } } : {}),
     disabledPaths: ["/token"],
     // SAML sign-in never creates accounts unless the connection allows
     // just-in-time provisioning for its verified domain (NATH-10); no method creates an account the
     // installation's admission policy refuses (NATH-16). Both compose in ./database-hooks.ts.
-    databaseHooks: nathanDatabaseHooks(env),
+    databaseHooks: nathanDatabaseHooks(env, email?.flow),
     hooks: {
       // NATH-15: a client not marked agent may not have a user delegate nathan:api.
-      before: createAuthMiddleware(async (ctx) => guardAuthorizationScopes(env, ctx, OAUTH_SCOPES)),
+      before: createAuthMiddleware(async ctx => {
+        await guardAuthorizationScopes(env, ctx, OAUTH_SCOPES);
+        // An email-authenticated administrator needs an existing authenticator before changing
+        // credentials, including enrolling the passkey that would grant privileged step-up.
+        if (ctx.path.startsWith("/two-factor/") || ADMIN_CREDENTIAL_PATHS.has(ctx.path)) {
+          const current = await getSessionFromCtx(ctx);
+          if (current?.user && "role" in current.user && current.user.role === "admin" && await isEmailSession(env.DB, current.session.id))
+            throw new APIError("FORBIDDEN", { message: "Sign in with an existing authenticator to manage administrator credentials." });
+        }
+      }),
       after: createAuthMiddleware(async (ctx) => {
         // NATH-9: remember which social provider created a session, so a Studio test
         // sign-in can prove the provider round trip.
@@ -114,7 +134,8 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
       admin(),
       organization(),
       // NATH-43: authenticator apps label the TOTP entry with this issuer (Better Auth's default is "Better Auth").
-      twoFactor({ allowPasswordless: true, issuer: instanceName(env) }),
+      hostedTwoFactor(instanceName(env)),
+      ...(email ? [hostedEmailOTP(email.browser)] : []),
       passkey({ rpID: issuer.hostname, rpName: passkeyRpName(env) }),
       jwt({disableSettingJwtHeader:true,jwks:{rotationInterval:30*24*60*60,gracePeriod:30*24*60*60}}),
       oauthProvider({
