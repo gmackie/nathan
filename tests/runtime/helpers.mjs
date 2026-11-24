@@ -33,8 +33,8 @@ export async function migrate(db, file) {
   if (statements.length) await db.batch(statements.map(statement => db.prepare(statement)));
 }
 
-export async function migrateGateway(db) {
-  for (const file of readdirSync("migrations/gateway").filter(f => f.endsWith(".sql")).sort())
+export async function migrateGateway(db, afterFile = "") {
+  for (const file of readdirSync("migrations/gateway").filter(f => f.endsWith(".sql") && f > afterFile).sort())
     await migrate(db, "migrations/gateway/" + file);
 }
 

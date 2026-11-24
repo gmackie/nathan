@@ -47,13 +47,17 @@ test("gateway receipt upgrade keeps active sessions and pre-upgrade replay recor
   db.exec(migration("migrations/gateway/0001_sessions.sql"));
   db.exec(`INSERT INTO nathan_gateway_sessions(id_hash,subject,issuer,client_id,sid,created_at,expires_at)
            VALUES ('digest','person','issuer','client','old-sid',100,unixepoch()+3600);
-           INSERT INTO nathan_gateway_logout_jti VALUES ('old-jti',unixepoch()+120);`);
+           INSERT INTO nathan_gateway_logout_jti VALUES ('old-jti',unixepoch()+120),('expired-but-retained',unixepoch()-60);`);
   const upgradedAt = db.prepare("SELECT unixepoch() AS now").get().now;
   db.exec(migration("migrations/gateway/0002_logout_receipts.sql"));
+  db.exec("INSERT INTO nathan_gateway_logout_jti VALUES ('during-upgrade',unixepoch()-1)");
+  db.exec(migration("migrations/gateway/0003_legacy_logout_retention.sql"));
+  db.exec("INSERT INTO nathan_gateway_logout_jti VALUES ('after-upgrade',unixepoch()+120)");
   const session = db.prepare("SELECT sid,coalesce(issued_at,created_at) AS issued FROM nathan_gateway_sessions WHERE id_hash='digest'").get();
   assert.equal(session.sid, "old-sid");
   assert.equal(session.issued, 100);
-  assert.ok(db.prepare("SELECT exp FROM nathan_gateway_logout_jti WHERE jti='old-jti'").get().exp >= upgradedAt + 48 * 3600);
+  const retained = db.prepare("SELECT jti FROM nathan_gateway_logout_jti WHERE exp>=? ORDER BY jti").all(upgradedAt + 48 * 3600);
+  assert.deepEqual(retained.map(row => row.jti), ["after-upgrade","during-upgrade","expired-but-retained","old-jti"]);
   assert.equal(db.prepare("SELECT count(*) AS n FROM nathan_gateway_logout_receipts").get().n, 0);
   db.close();
 });

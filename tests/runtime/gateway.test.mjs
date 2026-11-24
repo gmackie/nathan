@@ -1,7 +1,8 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { SignJWT, exportJWK, generateKeyPair } from "jose";
-import { bundle, migrateGateway, randomKey, cookiesOf, start, COMPAT } from "./helpers.mjs";
+import { seal, sha256 } from "../../src/gateway/crypto.ts";
+import { bundle, migrate, migrateGateway, randomKey, cookiesOf, start, COMPAT } from "./helpers.mjs";
 
 const ISSUER = "https://login.example.test/api/auth";
 const ORIGIN = "https://app.example.test";
@@ -39,7 +40,8 @@ async function idp(request) {
   return new Response("unexpected outbound " + url.href, { status: 599 });
 }
 
-let mf, db;
+const flowKey = randomKey();
+let mf, db, upgrade;
 before(async () => {
   mf = await start({
     workers: [{
@@ -51,7 +53,7 @@ before(async () => {
       bindings: {
         NATHAN_ISSUER: ISSUER, PUBLIC_ORIGIN: ORIGIN, APPLICATION_ID: "dashboard",
         OIDC_CLIENT_ID: CLIENT, OIDC_CLIENT_SECRET: "s".repeat(40),
-        SESSION_ENCRYPTION_KEY: randomKey(), SESSION_TTL_SECONDS: "3600", REQUIRE_AAL2: "false",
+        SESSION_ENCRYPTION_KEY: flowKey, SESSION_TTL_SECONDS: "3600", REQUIRE_AAL2: "false",
         NATHAN_PRINCIPAL_KEY: randomKey()
       }
     }, {
@@ -63,7 +65,20 @@ before(async () => {
     }]
   });
   db = await mf.getD1Database("SESSIONS", "gateway");
-  await migrateGateway(db);
+  // Seed what the previous Worker actually persisted before applying the gateway migrations.
+  await migrate(db, "migrations/gateway/0001_sessions.sql");
+  const handle = randomKey(), code = randomKey(), state = randomKey(), nonce = randomKey();
+  const legacyFlow = await seal({ state, nonce, verifier: randomKey(), returnTo: "/reports", expiresAt: Date.now() + 300_000 }, flowKey);
+  upgrade = { handle, code, state, legacyFlow, exchanges: 0 };
+  issued.set(code, { nonce, sub: "upgrade-person", sid: "old-pending", iat: Math.floor(Date.now() / 1000),
+    afterIssue() { upgrade.exchanges++; } });
+  await db.prepare("INSERT INTO nathan_gateway_sessions(id_hash,issuer,client_id,subject,sid,expires_at) VALUES (?,?,?,?,?,unixepoch()+3600)")
+    .bind(await sha256(handle),ISSUER,CLIENT,"unrelated-established","old-established").run();
+  await db.batch([
+    db.prepare("DELETE FROM nathan_gateway_sessions WHERE issuer=? AND client_id=? AND sid=?").bind(ISSUER,CLIENT,"old-pending"),
+    db.prepare("INSERT INTO nathan_gateway_logout_jti(jti, exp) VALUES (?,unixepoch()+120)").bind("old-pending-event")
+  ]);
+  await migrateGateway(db, "0001_sessions.sql");
 });
 after(() => mf?.dispose());
 
@@ -100,6 +115,21 @@ test("gateway login round trip sets flow and session cookies and proxies upstrea
   // no-referrer would make browsers send Origin: null on the app's own same-origin POSTs,
   // which the gateway's unsafe-request check then refuses.
   assert.equal(page.headers.get("Referrer-Policy"), "same-origin");
+});
+
+test("after a gateway upgrade an unfinished old login restarts and an unrelated established session survives", async () => {
+  const { code, state, legacyFlow, handle } = upgrade;
+  const callback = await mf.dispatchFetch(ORIGIN + "/__nathan/callback?" + new URLSearchParams({ code, state }), {
+    redirect: "manual", headers: { Cookie: "__Host-nathan-flow=" + legacyFlow }
+  });
+  assert.equal(callback.status, 400);
+  assert.match(cookiesOf(callback)["__Host-nathan-flow"].raw, /Max-Age=0/);
+  assert.equal(cookiesOf(callback)["__Host-nathan-session"], undefined);
+  assert.equal(upgrade.exchanges, 0, "restart before spending the authorization code");
+  assert.equal(await sessionCount("old-pending"), 0);
+  const page = await mf.dispatchFetch(ORIGIN + "/reports", { headers: { Cookie: "__Host-nathan-session=" + handle } });
+  assert.equal(page.status, 200);
+  await login("upgrade-person", "fresh-upgrade-sid");
 });
 
 async function logoutToken(claims, iat = Math.floor(Date.now() / 1000), jti = crypto.randomUUID()) {
@@ -158,9 +188,10 @@ test("a subject receipt compares the signed ID-token time to the original event 
   await login("other-subject", "other-subject-sid", toe);
 });
 
-test("a retained pre-upgrade JTI acknowledges a replay without revoking a fresh session", async () => {
+test("an expired legacy JTI still present between cleanup runs acknowledges a replay", async () => {
   const jti = crypto.randomUUID(), now = Math.floor(Date.now() / 1000);
   await db.prepare("INSERT INTO nathan_gateway_logout_jti(jti,exp) VALUES (?,?)").bind(jti,now + 120).run();
+  await db.prepare("UPDATE nathan_gateway_logout_jti SET exp=unixepoch()-1 WHERE jti=?").bind(jti).run();
   await login("legacy-jti-person", "legacy-jti-fresh");
   assert.equal((await postLogout(await logoutToken({ sub: "legacy-jti-person" }, now, jti))).status, 204);
   assert.equal(await sessionCount("legacy-jti-fresh"), 1);

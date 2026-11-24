@@ -93,12 +93,22 @@ Before routing traffic to the gateway:
 
 1. Disable the upstream Worker's `workers.dev`, preview URLs, and all independent public routes.
 2. Register a **confidential** OIDC client whose exact callback is `https://app.example.com/__nathan/callback`.
-3. Provision a separate gateway D1 database and apply the migrations in `migrations/gateway/` in order. For an existing gateway, apply `0002_logout_receipts.sql` before updating its Worker. The gateway retains signed logout receipts for 48 hours to cover delivery retries and in-flight callbacks.
+3. Provision a separate gateway D1 database and apply the migrations in `migrations/gateway/` in order. The gateway retains signed logout receipts for 48 hours to cover delivery retries and in-flight callbacks.
 4. Supply `OIDC_CLIENT_SECRET` and 32 random bytes (base64url) as `SESSION_ENCRYPTION_KEY` via Workers Secrets.
 5. Generate gateway Wrangler bindings and review changes before deploying.
 6. Verify browser login, logout, API 401 behavior, invalid state/nonce rejection, replay protection, expiration, and user-session revocation.
 
 The `node scripts/nathan.mjs protect <application-id>` CLI previews the hostname, callback and upstream exposure requirements. It can attempt staged gateway deployment with `--apply` only after public-route checks and OIDC client registration. Comprehensive live integration tests remain incomplete. **Do not claim Access-equivalent protections until origin isolation and session lifecycle are proven.**
+
+### Upgrade or roll back an existing stock gateway
+
+Apply this procedure to the stock gateway Worker and its sessions database. ClassCheck uses its own relying party and stays online throughout a stock gateway upgrade.
+
+1. Put the stock gateway in maintenance on every ingress, keeping the upstream private. Return HTTP 503 with `Retry-After` on the back-channel endpoint so Nathan queues delivery. Pause the gateway's scheduled cleanup and wait for in-flight requests and scheduled executions on the old version to finish. Keep Nathan's issuer delivery scheduler running.
+2. Apply every pending gateway migration through `0003_legacy_logout_retention.sql` to the gateway's D1 database. Older Workers recorded only the event ID. The upgrade preserves every remaining legacy receipt and extends its retention, including entries still awaiting cleanup.
+3. Route 100% of gateway traffic to the upgraded Worker. Confirm it is the only serving version before reopening the back-channel endpoint. Check that queued deliveries have been acknowledged, restore the gateway cleanup schedule, then reopen browser traffic. Verify a new login and a logout. Browsers with an unfinished pre-upgrade login must start it again. Unrelated established sessions keep their existing cookies.
+
+For rollback, drain the gateway again and retain the migrated D1 database, receipts and session keys. Deploy a single tested version that checks the receipt sequence on login callbacks and records scoped logout events. If the prior version predates those checks, keep the stock gateway in maintenance while applying the corrective build. Restoring a database snapshot taken before a logout could revive the ended session.
 
 ## 8. Rollback and incident recovery
 
