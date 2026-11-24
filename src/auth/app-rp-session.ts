@@ -42,7 +42,7 @@ export async function recordAppRefreshSession(env: AuthEnv, user: string, client
  * user; the ID token holds the public or pairwise subject the relying party receives. */
 export async function recordAppRpSession(env: AuthEnv, response: Response) {
   const { id_token, access_token } = await response.clone().json<{ id_token?: string; access_token: string }>();
-  if (id_token === undefined) return;
+  if (!id_token) throw Error("Missing ID token from the OIDC code exchange");
   const id = decodeJwt(id_token), access = decodeJwt(access_token), issuer = issuerOf(env);
   const rpSid = id.sid ?? null, session = access.sid ?? rpSid ?? "";
   if (id.iss !== issuer || access.iss !== issuer || typeof id.aud !== "string" || id.aud !== access.client_id ||

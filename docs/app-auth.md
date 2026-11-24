@@ -16,7 +16,7 @@ The web client registers exactly `/auth/callback` on its ClassCheck origin, requ
 | POST `/sign-in/context` | Submit JSON with the signed `oauth_query`. A valid response provides the registered client name, scopes, login hint and enterprise SSO configuration for the sign-in or consent page. |
 | POST `/sign-in/email/request` | Submit `email` and the signed `oauth_query`. Preserve the `__Host-nathan-email` cookie. The neutral 202 reply includes a `flowId`. |
 | POST `/sign-in/email/verify` | Submit `{flowId,code}` from the six-digit form or the fragment of the same-browser link on `/sign-in/email`. Clear the fragment before making the request. For `twoFactorRedirect`, collect the enrolled authenticator and submit `{flowId,totp}`. Follow the validated continuation and preserve the Nathan session cookie. |
-| POST `/api/auth/oauth2/consent` | Submit `{accept,oauth_query}` using the signed query on the ClassCheck consent page. |
+| POST `/api/auth/oauth2/consent` | Submit `{accept,oauth_query}` using the signed query on the ClassCheck consent page. An approved subset in `scope` must include `openid` so the callback receives a verified identity. |
 | POST `/api/auth/oauth2/token` | Exchange a grant using form encoding and the same resource. Verify ID-token signature, issuer, audience, expiration and nonce, then match UserInfo subject before applying verified email. |
 | GET `/api/auth/oauth2/userinfo` | Send the issued ClassCheck resource access token. |
 | POST `/api/auth/oauth2/revoke`, `/api/auth/sign-out` | Revoke the applicable grant with the registered client and clear the Nathan session and ClassCheck session. |
