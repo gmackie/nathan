@@ -93,7 +93,7 @@ async function beginAuthorization(email) {
   return { query: page.search.slice(1), state, verifier, nonce };
 }
 before(async () => {
-  mf = await authWorker(HOST, { BETTER_AUTH_SECRET: secret, RESEND_API_KEY: "test-sender", EMAIL_FROM: "nathan@example.test",
+  mf = await authWorker(HOST, { BETTER_AUTH_SECRET: secret, ENABLE_EMAIL_OTP: "true", RESEND_API_KEY: "test-sender", EMAIL_FROM: "nathan@example.test",
     NATHAN_EMAIL_LOGOS: JSON.stringify({ classcheck: PNG }), ENABLE_PASSWORD: "true" }, {
     outboundService: async req => {
       assert.equal(req.url, "https://api.resend.com/emails");
@@ -115,6 +115,15 @@ before(async () => {
   }
 });
 after(() => mf?.dispose());
+
+test("configured mail alone leaves hosted email sign-in disabled", async () => {
+  const disabled = await authWorker(HOST, { BETTER_AUTH_SECRET: secret, RESEND_API_KEY: "test-sender", EMAIL_FROM: "nathan@example.test" });
+  try {
+    const page = await disabled.dispatchFetch(ORIGIN + "/sign-in");
+    assert.doesNotMatch(await page.text(), /href="\/sign-in\/email/);
+    assert.equal((await disabled.dispatchFetch(ORIGIN + "/sign-in/email")).status, 404);
+  } finally { await disabled.dispose(); }
+});
 
 for (const method of ["code", "link"]) test(method + " resumes hosted authorization, consent and PKCE with only email evidence", async () => {
   const email = method + "@example.test", invitation = await invite(email);
@@ -202,11 +211,15 @@ test("revocation before redemption, a new invitation, expiry and exhausting atte
 });
 
 test("a verified, provisioned administrator can sign in once and still needs a recent passkey for Studio", async () => {
+  const key = randomKey();
+  await sql('UPDATE "user" SET twoFactorEnabled=1 WHERE id=?', "admin-1");
+  await sql("UPDATE twoFactor SET secret=? WHERE userId=?", await symmetricEncrypt({ key: secret, data: key }), "admin-1");
   const start = await requestCode("admin@example.test"), browser = cookie(start, "__Host-nathan-email");
   const { code, link } = await mailFor("admin@example.test");
   const results = await Promise.all([verify(browser, code), verify(browser, code, { flowId: link.hash.slice(1).split(".")[0] })]);
   assert.deepEqual(results.map(r => r.status).sort(), [200, 400]);
-  const loggedIn = results.find(r => r.ok);
+  assert.deepEqual(await results.find(r => r.ok).json(), { twoFactorRedirect: true });
+  const loggedIn = await post("/sign-in/email/verify", { totp: await createOTP(key).totp(), flowId: flows.get(browser) }, browser);
   const session = cookie(loggedIn, "__Secure-nathan.session_token");
   assert.ok(session);
   const studio = await mf.dispatchFetch(ORIGIN + "/studio/api/admission", { headers: { Cookie: session } });
@@ -250,10 +263,12 @@ test("hosted submission requires a signed continuation and same origin; internal
   }
 });
 
-test("a TOTP-enabled account finishes its enrolled factor before the OIDC handoff", async () => {
+test("an active directory user outside enterprise SSO finishes enrolled TOTP before the OIDC handoff", async () => {
   const address = "mfa@example.test", key = randomKey(), now = new Date().toISOString();
   await sql('INSERT INTO "user"(id,name,email,emailVerified,twoFactorEnabled,createdAt,updatedAt) VALUES (\'mfa\',\'member\',?,1,1,?,?)', address, now, now);
   await sql("INSERT INTO twoFactor(id,userId,secret,backupCodes,verified) VALUES ('tf-mfa','mfa',?,'unused',1)", await symmetricEncrypt({ key: secret, data: key }));
+  await sql("INSERT INTO nathan_scim_connections(id,domain,created_by) VALUES ('mfa-school','example.test','admin')");
+  await sql("INSERT INTO nathan_scim_users(connection_id,scim_id,external_id,user_name,active,user_id,link_state,link_method) VALUES ('mfa-school','a','staff',?,1,'mfa','linked','jit')", address);
   const flow = await beginAuthorization(address), start = await requestCode(address, flow.query);
   const { code } = await mailFor(address), browser = cookie(start, "__Host-nathan-email");
   const primary = await verify(browser, code);
@@ -262,12 +277,16 @@ test("a TOTP-enabled account finishes its enrolled factor before the OIDC handof
   assert.equal(cookie(primary, "__Secure-nathan.session_token"), "");
   assert.equal(await one('SELECT id FROM session WHERE userId=\'mfa\''), null);
   const totp = await createOTP(key).totp();
-  const finished = await post("/sign-in/email/verify", { totp, flowId: flows.get(browser) }, browser);
+  const completions = await Promise.all([0, 1].map(() => post("/sign-in/email/verify", { totp, flowId: flows.get(browser) }, browser)));
+  assert.deepEqual(completions.map(r => r.status).sort(), [200, 400]);
+  const finished = completions.find(r => r.ok);
   assert.equal(finished.status, 200, await finished.clone().text());
   assert.equal(new URL((await finished.json()).url, ORIGIN).pathname, "/consent");
   const session = cookie(finished, "__Secure-nathan.session_token");
   assert.ok(session);
-  assert.ok(await one('SELECT e.session_id FROM nathan_email_sessions e JOIN session s ON s.id=e.session_id WHERE s.userId=\'mfa\''));
+  assert.equal((await one("SELECT count(*) AS n FROM session WHERE userId='mfa'")).n, 1);
+  assert.ok(await one('SELECT e.session_id FROM nathan_email_otp_sessions e JOIN session s ON s.id=e.session_id WHERE s.userId=\'mfa\' AND e.hosted=1'));
+  assert.equal((await one("SELECT count(*) AS n FROM nathan_security_audit WHERE actor='mfa' AND action='email_otp_sign_in' AND outcome='succeeded'")).n, 1);
 });
 
 test("an invitee who proves an address held by a provisional password signup keeps no unproven password", async () => {
@@ -280,9 +299,43 @@ test("an invitee who proves an address held by a provisional password signup kee
   assert.equal((await verify(browser, code)).status, 200);
   const user = await one('SELECT id,emailVerified FROM "user" WHERE email=?', address);
   assert.equal(user.emailVerified, 1);
+  assert.deepEqual(await one('SELECT name,image FROM "user" WHERE id=?', user.id), { name: "", image: null });
   assert.equal(await one('SELECT id FROM account WHERE userId=? AND providerId=\'credential\'', user.id), null);
   assert.equal(await one("SELECT email FROM nathan_admission_pending WHERE email=?", address), null);
   assert.equal((await one("SELECT used_by_user AS id FROM nathan_invitations WHERE id=?", inv)).id, user.id);
+});
+
+test("expiry during mailbox proof leaves a provisional signup and its invitation untouched", async () => {
+  const address = "expiry-race@example.test", inv = await invite(address);
+  const signup = await post("/api/auth/sign-up/email", { name: "Unverified", email: address, password: randomKey() });
+  assert.ok(signup.ok);
+  const index = messages.filter(mail => mail.to.includes(address)).length;
+  const start = await requestCode(address), browser = cookie(start, "__Host-nathan-email");
+  const { code } = await mailFor(address, index);
+  await sql("CREATE TRIGGER expire_during_proof AFTER DELETE ON verification BEGIN " +
+    "UPDATE nathan_email_sign_ins SET expires_at=0 WHERE email='expiry-race@example.test'; END");
+  try {
+    assert.equal((await verify(browser, code)).status, 400);
+    assert.equal((await one('SELECT emailVerified FROM "user" WHERE email=?', address)).emailVerified, 0);
+    assert.equal((await one("SELECT uses FROM nathan_invitations WHERE id=?", inv)).uses, 0);
+    assert.ok(await one("SELECT email FROM nathan_admission_pending WHERE email=?", address));
+  } finally { await sql("DROP TRIGGER expire_during_proof"); }
+});
+
+test("a failed success audit discards the new session and its evidence", async () => {
+  const email = "audit-failure@example.test";
+  await invite(email);
+  const start = await requestCode(email), browser = cookie(start, "__Host-nathan-email");
+  const { code } = await mailFor(email);
+  await sql("CREATE TRIGGER fail_email_sign_in_audit BEFORE INSERT ON nathan_security_audit " +
+    "WHEN NEW.action='email_otp_sign_in' AND NEW.outcome='succeeded' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END");
+  try {
+    const response = await verify(browser, code);
+    assert.equal(response.status, 400);
+    assert.equal(cookie(response, "__Secure-nathan.session_token"), "");
+    assert.equal(await one('SELECT s.id FROM session s JOIN "user" u ON s.userId=u.id WHERE u.email=?', email), null);
+    assert.equal(await one('SELECT e.session_id FROM nathan_email_otp_sessions e JOIN "user" u ON u.id=e.user_id WHERE u.email=?', email), null);
+  } finally { await sql("DROP TRIGGER fail_email_sign_in_audit"); }
 });
 
 test("a second tab cannot apply its code to another authorization in the same browser", async () => {

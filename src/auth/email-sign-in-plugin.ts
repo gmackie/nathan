@@ -3,12 +3,12 @@ import { generateRandomString } from "better-auth/crypto";
 import { EMAIL_ATTEMPTS, EMAIL_TTL } from "./email-sign-in-policy";
 
 /** Keep just the two server calls the hosted flow uses. The public auth instance never installs this plugin. The database hash covers a 256-bit browser secret as well as the mailed digits. */
-export function hostedEmailOTP(browserSecret?: string) {
+export function hostedEmailOTP(proofPrefix?: string) {
   const plugin = emailOTP({
     expiresIn: EMAIL_TTL, allowedAttempts: EMAIL_ATTEMPTS, storeOTP: "hashed",
     generateOTP() {
-      if (!browserSecret) throw Error("Missing hosted sign-in request");
-      return browserSecret + "." + generateRandomString(6, "0-9");
+      if (!proofPrefix) throw Error("Missing hosted sign-in request");
+      return proofPrefix + "." + generateRandomString(6, "0-9");
     },
     sendVerificationOTP: async () => { throw Error("Use the hosted email sender"); }
   });

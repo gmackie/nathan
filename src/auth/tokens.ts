@@ -73,7 +73,7 @@ export async function accessTokenClaims(env: AuthEnv, input: ClaimInput): Promis
       : env.DB.prepare("SELECT identifier, app_id FROM nathan_token_audiences WHERE 0"));
     // The grant's session, and authentication evidence that counts only while that session exists.
     statements.push(env.DB.prepare('SELECT s."id" AS id, s."userId" AS userId, s."expiresAt" AS expiresAt, a.session_id, a.user_id, a.method, a.verified_at, e.session_id AS email_session_id ' +
-      'FROM "session" s LEFT JOIN nathan_admin_assurance a ON a.session_id=s."id" AND a.user_id=s."userId" LEFT JOIN nathan_email_sessions e ON e.session_id=s."id" WHERE s."id"=? LIMIT 1').bind(sessionId ?? ""));
+      'FROM "session" s LEFT JOIN nathan_admin_assurance a ON a.session_id=s."id" AND a.user_id=s."userId" LEFT JOIN nathan_email_otp_sessions e ON e.session_id=s."id" AND e.user_id=s."userId" AND e.hosted=1 WHERE s."id"=? LIMIT 1').bind(sessionId ?? ""));
   }
   const [kindRows, userRows, audiences, sessionRows] = (await env.DB.batch(statements)).map(r => (r.results ?? []) as any[]);
   const clientKind = kindRows[0]?.principal_kind;

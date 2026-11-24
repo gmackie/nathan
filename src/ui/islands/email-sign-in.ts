@@ -8,13 +8,14 @@ const message = document.querySelector<HTMLElement>("#email-status")!;
 let secondFactor = false;
 let flowId: string | undefined;
 
-async function submit(form: HTMLFormElement, action: string, body: object) {
+async function submit(form: HTMLFormElement, action: string, body: object, fromLink = false) {
   const button = form.querySelector("button")!;
   button.disabled = true;
   try {
     const r = await fetch("/sign-in/email/" + action, { method: "POST", credentials: "same-origin",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const result = await r.json() as { flowId?: string; message?: string; error?: string; twoFactorRedirect?: boolean; url?: string };
+    if (!r.ok && fromLink) throw Error("Enter the emailed code in the tab where you started sign-in, or restart from the application.");
     if (!r.ok) throw Error(result.error || "Unable to sign in. Try again.");
     if (result.url) { location.assign(result.url); return; }
     if (result.flowId) flowId = result.flowId;
@@ -43,7 +44,8 @@ if (location.hash) {
   const match = /^#([A-Za-z0-9_-]{43})\.(\d{6})$/.exec(location.hash);
   history.replaceState(null, "", location.pathname + location.search);
   if (match) {
+    requestForm.hidden = true;
     flowId = match[1];
-    void submit(verifyForm, "verify", { flowId, code: match[2] });
+    void submit(verifyForm, "verify", { flowId, code: match[2] }, true);
   }
 }

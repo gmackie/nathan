@@ -4,6 +4,7 @@ import { verifyOAuthQueryParams } from "@better-auth/oauth-provider";
 import { emailEnabled, emailSignIn } from "./email-sign-in";
 import { isEmailSession } from "./email-sign-in-policy";
 import { emailSignInPage } from "./email-sign-in-page";
+import { pruneEmailOtpLimits } from "./email-otp-policy.mjs";
 import { signedOAuthQuery } from "./oauth-query.mjs";
 import { normalizeEmail } from "./admission-policy.mjs";
 import { createAuth } from "./instance";
@@ -571,6 +572,7 @@ export default {
   fetch: (request: Request, env: AuthEnv, ctx: ExecutionContext) => handle(request, env, ctx),
   scheduled: async (_: ScheduledEvent,env:AuthEnv) => {
     await env.DB.prepare("DELETE FROM nathan_mcp_limits WHERE expires_at < unixepoch()").run();
+    await pruneEmailOtpLimits(env.DB);
     await env.DB.batch([
       env.DB.prepare("DELETE FROM nathan_email_sign_ins WHERE expires_at<=unixepoch()"),
       env.DB.prepare("DELETE FROM verification WHERE identifier GLOB 'nathan-email:*' AND unixepoch(expiresAt)<=unixepoch()")

@@ -53,6 +53,7 @@ Visit \`https://login.example.com/studio\` as a fully enrolled administrator. Se
 | SAML applications (Nathan as IdP) | Nothing until an administrator generates a signing key | Generate and rotate the IdP signing key, register SPs bound to an application (disabled), enable/disable, update ([saml-idp.md](saml-idp.md)) |
 | SCIM directory | Optional disabled initial directory connection | Create, list, enable/disable and rotate bearer token |
 | Passkeys / TOTP | Enrollment required to complete initial admin | Self-service enrollment, authenticator inspection and passkey reauthentication |
+| Hosted email sign-in | Off on a fresh installation | Configure the sender and enable `ENABLE_EMAIL_OTP` on the identity Worker. See [hosted email sign-in](oidc.md#hosted-email-sign-in). |
 | MFA posture | Standard or Business profile | View effective policy and *increase* admin requirements without redeploying |
 | Additional administrators | Not during initial install | Grant an existing verified user and revoke additional admins with session termination |
 | Plugin code changes | Pinned Worker release | Requires reviewed build/deploy, not hot-loaded arbitrary JavaScript |

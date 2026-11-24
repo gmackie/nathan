@@ -24,13 +24,22 @@ Use one issuer `https://login.example.com/api/auth` for `example.com` and all ap
 
 Start at the discovered authorization endpoint with the registered client's exact callback, `response_type=code`, S256 PKCE, `state`, `nonce` and explicit scopes such as `openid email`. An optional `login_hint` prefills the email address. Nathan carries the issuer-signed authorization through the hosted email form and consent. The RP receives its usual authorization code and exchanges it with its PKCE verifier. ClassCheck can use this contract for its confidential web client, mapping the verified issuer and subject to its local user.
 
-One Resend message contains a six-digit code and a link to the issuer. Both redeem the same five-minute credential. Open the link in the requesting browser. When reading mail on another device, enter the code in the original tab. A link preview cannot consume the credential. A new delivery for the same address supersedes the earlier one. Each challenge allows five attempts. Fixed ten-minute windows allow three sends per normalized address, twenty sends per source IP and forty verification requests per IP. Requests show the same acknowledgment for ineligible addresses, delivery failures and throttled sends.
+One Resend message contains a six-digit code and a link to the issuer. Both redeem the same five-minute credential. Open the link in the requesting browser. When reading mail on another device, enter the code in the original tab. A link preview cannot consume the credential. A new delivery for the same address supersedes its predecessor. Each email proof expires after five minutes and allows five attempts. The same browser completes any enrolled TOTP challenge within that expiry.
 
-A verified account, an active SCIM-provisioned account, or the holder of an open invitation can use email. New accounts need that specific invitation even on a self-service instance. Nathan rechecks eligibility at redemption, honors enrolled TOTP, and grants ordinary OIDC authentication. An email session carries no admin step-up. An administrator must use an existing authenticator before managing credentials and a fresh passkey wherever privileged step-up is required.
+| Limit | Ten minutes | Day |
+| --- | ---: | ---: |
+| Sends per normalized address | 3 | 10 |
+| Sends per source IP | 10 | — |
+| Verifications per address, including TOTP | 5 | 15 |
+| Verifications per source IP | 20 | — |
+
+The issuer also caps refused proofs at 500 per hour across all addresses. Requests give the same acknowledgment for ineligible addresses, delivery errors and throttling. A successful sign-in records a session-bound `email_otp_sign_in` audit. Rejected proof checks share one anonymous rejection audit per minute.
+
+Eligible users have a verified account, an active directory-provisioned subject, or an open invitation. New accounts need that specific invitation even on a self-service instance. An active directory user outside verified enterprise SSO domains may use email and must complete enrolled TOTP. Addresses in a verified enterprise domain (including its subdomains) and accounts linked to an enterprise identity provider use organization sign-in. Nathan rechecks eligibility at redemption and session creation. Bans, directory deprovisioning and inconsistent factor enrollment fail closed. An administrator who signs in by email needs a separate authenticator sign-in and the existing fresh passkey step-up for privileged operations.
 
 ### Sender and client branding
 
-Configure `RESEND_API_KEY` and `EMAIL_FROM` on the identity Worker and apply migration `0019_email_sign_in.sql`. The hosted option appears when both sender settings are present. The signed OIDC client selects the registered name and its validated `appearance` metadata. The protected `POST /studio/api/clients` registration accepts an optional `appearance` object, for example `{"wordmark":"ClassCheck","logo":"classcheck"}`. An operator can supply a parent appearance as a JSON-encoded string in the Worker's `NATHAN_APPEARANCE` variable.
+Set `ENABLE_EMAIL_OTP=true`, configure `RESEND_API_KEY` and `EMAIL_FROM` on the identity Worker, and apply `0019_email_otp.sql` followed by `0020_hosted_email_sign_in.sql`. Fresh installs and the tracked production configuration default to off. The tracked staging configuration opts in. The signed OIDC client selects the registered name and its validated `appearance` metadata. The protected `POST /studio/api/clients` registration accepts an optional `appearance` object, for example `{"wordmark":"ClassCheck","logo":"classcheck"}`. An operator can supply a parent appearance as a JSON-encoded string in the Worker's `NATHAN_APPEARANCE` variable.
 
 The email logo uses the validated logo ID to select an operator-installed, sanitized PNG from `NATHAN_EMAIL_LOGOS`, a JSON-encoded string mapping IDs to base64 PNG content. Nathan attaches it inline. A missing logo leaves the name in the text and HTML. The From address remains the instance's verified sender.
 

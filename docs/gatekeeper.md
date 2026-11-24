@@ -25,8 +25,8 @@ Through the supported oauth-provider `extensions[].claims.accessToken` hook (`sr
 | `principal_kind` | every JWT access token | `user`, `machine` or `agent`, see below |
 | `roles` | user and agent-for-user tokens whose requested audiences are **all** registered and bound to the **same** app, when the evaluator allows the user and they hold roles | sorted role keys from NATH-13's evaluator for that app. A **hint** for simple apps; omitted otherwise |
 | `nathan_amr` | verified primary method for this live session | `["pop"]` for a passkey, `["email"]` for hosted email sign-in |
-| `nathan_acr` | same | `urn:nathan:acr:passkey` |
-| `nathan_auth_time` | same | when the passkey assertion was verified (seconds since epoch) |
+| `nathan_acr` | live session with verified passkey evidence | `urn:nathan:acr:passkey` |
+| `nathan_auth_time` | live session with verified passkey evidence | when the passkey assertion was verified (seconds since epoch) |
 
 Nathan also sets `accessTokenExpiresIn` and `m2mAccessTokenExpiresIn` to **900 s**. Better Auth takes the minimum of these, scope expirations and the resource's lifetime, so **no access token Nathan issues lives longer than 900 s**. This includes refreshed tokens, opaque tokens, user grants without a resource and resources whose stored `accessTokenTtl` was raised out of band (the runtime test covers each). Audiences registered in Studio are also stored with `accessTokenTtl` 900. The MCP and directory resources stay at 300 s.
 
@@ -87,13 +87,13 @@ Use `"values": ["human", "agent"]` only for actions an agent may perform for its
 
 ### Authentication-method claims
 
-Nathan records mailbox proof against the live session in `nathan_email_sessions` (migration 0019). Its JWT access tokens carry `nathan_amr: ["email"]`. Passkey evidence is recorded in `nathan_admin_assurance` (migration 0008). Better Auth's after-hook on `/passkey/verify-authentication` writes it only after it verified a passkey (WebAuthn) assertion and created a new session. Enrolling a passkey never writes one. Nathan emits the claims only when the token's session (`sid`) has such a row for the same user and that Better Auth session is still live (present and unexpired). So client-credentials tokens never have them, user tokens cannot be refreshed once the session has ended (see above), and agent tokens refreshed after it ended carry none.
+Nathan records mailbox proof against the live session in `nathan_email_otp_sessions` with `hosted=1` (migrations 0019 and 0020). Its JWT access tokens carry `nathan_amr: ["email"]`. Passkey evidence is recorded in `nathan_admin_assurance` (migration 0008). Better Auth's after-hook on `/passkey/verify-authentication` writes it only after it verified a passkey (WebAuthn) assertion and created a new session. Enrolling a passkey never writes one. Nathan emits the claims only when the token's session (`sid`) has such a row for the same user and that Better Auth session is still live (present and unexpired). So client-credentials tokens never have them, user tokens cannot be refreshed once the session has ended (see above), and agent tokens refreshed after it ended carry none.
 
 - `nathan_amr: ["pop"]`: RFC 8176 proof of possession of a key. It is not `hwk`, because synced passkeys are not hardware-bound. It is not `user`, `pin` or `mfa`, because Nathan asks for WebAuthn user verification as `preferred`, not `required`.
 - `nathan_acr: "urn:nathan:acr:passkey"`: the session was created by a verified passkey sign-in. **It is not MFA and not NIST AAL2.**
 - `nathan_auth_time`: when that assertion was verified.
 
-Social, enterprise OIDC/SAML, email and TOTP sign-ins produce no evidence row, so their tokens carry none of these claims. Nathan does not yet hold verified provider authentication-method evidence.
+Social and enterprise OIDC/SAML sign-ins do not supply authentication-method evidence. Hosted email sign-in, including a subsequent enrolled TOTP check, supplies only `nathan_amr: ["email"]`. Historical code-only sessions remain restricted from Studio and supply no method claims. Nathan does not yet hold verified provider authentication-method evidence.
 
 The standard `amr`, `acr` and `auth_time` names cannot be emitted on Better Auth 1.7.14 access tokens (see above), so Nathan uses its own names. Gatekeeper's `mfa` mapping reads only `acr` (plus `auth_time`), so **Nathan tokens never set `principal.mfa` in Gatekeeper.** Leave `mfa` out of the provider entry. Put step-up requirements in Gatekeeper policy only once Nathan has evidence for them.
 

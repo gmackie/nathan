@@ -7,6 +7,7 @@ import { readBoundedText } from "./bounded-body.mjs";
 import { createAuth } from "./instance";
 import { sendSignInEmail, type EmailClient } from "./email";
 import { EMAIL_ATTEMPTS, EMAIL_TTL, emailTarget, type EmailFlow } from "./email-sign-in-policy";
+import { consumeAddressLimit, reserveProofAttempt, releaseProofAttempt, auditRefusedProof } from "./email-otp-policy.mjs";
 import { allowRequests } from "./request-limit";
 import type { AuthEnv } from "./env";
 
@@ -20,7 +21,7 @@ const reply = (status: number, body: object, headers = new Headers()) => {
   return Response.json(body, { status, headers });
 };
 const invalid = () => reply(400, { error: "This code or link is invalid or expired. Request a new email." });
-export const emailEnabled = (env: AuthEnv) => Boolean(env.RESEND_API_KEY && env.EMAIL_FROM);
+export const emailEnabled = (env: AuthEnv) => env.ENABLE_EMAIL_OTP === "true" && Boolean(env.RESEND_API_KEY && env.EMAIL_FROM);
 
 async function oauthClient(env: AuthEnv, query: string): Promise<EmailClient | null> {
   if (!await verifyOAuthQueryParams(query, env.BETTER_AUTH_SECRET)) return null;
@@ -40,7 +41,7 @@ async function issue(env: AuthEnv, browser: string, flowId: string, email: strin
   const auth = createAuth(env, undefined, { browser, flow });
   const proof = await auth.api.createVerificationOTP({ body: { email, type: "sign-in" } });
   if (!eligible) return; // Identical verification work, but no deliverable credential.
-  const digits = proof.slice(browser.length + 1);
+  const digits = proof.slice(-6);
   const link = new URL("/sign-in/email", env.NATHAN_ISSUER);
   link.hash = flowId + "." + digits;
   await sendSignInEmail(env, email, digits, link.href, client);
@@ -60,7 +61,7 @@ async function requestEmail(request: Request, env: AuthEnv, ctx: ExecutionContex
   // Account lookup and Resend run after the neutral reply. The cookie and IP/address counters
   // have the same shape and behavior for unknown, blocked and eligible addresses.
   const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
-  if (await allowRequests(env, "email-send-ip", ip, 20, 600) && email && await allowRequests(env, "email-send-address", email, 3, 600)) {
+  if (await allowRequests(env, "email-send-ip", ip, 10, 600) && email && (await consumeAddressLimit(env.DB, "send", email)).allowed) {
     ctx.waitUntil(issue(env, browser, flowId, email, query, client).catch(() => {
       console.error("Hosted email sign-in delivery failed");
     }));
@@ -71,7 +72,7 @@ async function requestEmail(request: Request, env: AuthEnv, ctx: ExecutionContex
 
 async function verify(request: Request, env: AuthEnv, body: Input) {
   const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
-  if (!await allowRequests(env, "email-verify-ip", ip, 40, 600)) return invalid();
+  if (!await allowRequests(env, "email-verify-ip", ip, 20, 600)) return invalid();
   const browser = parseCookie(request.headers.get("Cookie"), COOKIE);
   const isFactor = body.totp !== undefined;
   const digits = isFactor ? body.totp : body.code;
@@ -81,7 +82,24 @@ async function verify(request: Request, env: AuthEnv, body: Input) {
     "WHERE id=? AND expires_at>unixepoch() AND attempts<? RETURNING id,generation,subject_id,email,invitation_id,oauth_query,second_factor")
     .bind(id, EMAIL_ATTEMPTS).first<EmailFlow>();
   if (!flow || Boolean(flow.second_factor) !== isFactor) return invalid();
+  if (!(await consumeAddressLimit(env.DB, "verify", flow.email)).allowed) return invalid();
   if (flow.oauth_query && !await oauthClient(env, flow.oauth_query)) return invalid();
+  const start = await reserveProofAttempt(env.DB);
+  if (start === null) return invalid();
+  try {
+    const result = await redeem(request, env, flow, browser, digits, isFactor);
+    // A failed refund conservatively costs one slot. The completed, audited session is still deliverable.
+    if (result.ok) await releaseProofAttempt(env.DB, start).catch(() => {});
+    else await auditRefusedProof(env.DB);
+    return result;
+  } finally {
+    // Better Auth can fail after inserting a session, including in an OAuth after-hook.
+    // A pending primary-factor session or a losing completion has no caller.
+    if (flow.issuedSessionId) await env.DB.prepare('DELETE FROM "session" WHERE id=?').bind(flow.issuedSessionId).run();
+  }
+}
+
+async function redeem(request: Request, env: AuthEnv, flow: EmailFlow, browser: string, digits: string, isFactor: boolean) {
   const auth = createAuth(env, undefined, { browser, flow });
   const headers = new Headers(request.headers);
   // Complete exactly this pending sign-in, even if a different user is already signed in.
@@ -100,7 +118,7 @@ async function verify(request: Request, env: AuthEnv, body: Input) {
     const eligible = await emailTarget(env.DB, flow.email);
     // Dummy, revoked and replaced targets take the same credential-verification path. Their
     // proof cannot possibly match, even if someone guesses the digits of an undelivered mail.
-    const otp = eligible && eligible.invitation_id === flow.invitation_id && eligible.subject_id === flow.subject_id ? browser + "." + digits : "unavailable";
+    const otp = eligible && eligible.invitation_id === flow.invitation_id && eligible.subject_id === flow.subject_id ? browser + "." + flow.generation + "." + digits : "unavailable";
     response = await auth.api.signInEmailOTP({ ...options(), body: { email: flow.email, otp, ...oauth } });
   }
   if (!response.ok) return invalid();
@@ -112,10 +130,22 @@ async function verify(request: Request, env: AuthEnv, body: Input) {
     const pending = cookie && parseCookie(cookie, FACTOR_COOKIE);
     if (!pending) return invalid();
     const sealed = await symmetricEncrypt({ key: browser, data: pending });
-    await env.DB.prepare("UPDATE nathan_email_sign_ins SET second_factor=?, attempts=0 WHERE id=? AND generation=?").bind(sealed, id, flow.generation).run();
+    const saved = await env.DB.prepare("UPDATE nathan_email_sign_ins SET second_factor=?, attempts=0 WHERE id=? AND generation=? AND second_factor IS NULL AND expires_at>unixepoch()")
+      .bind(sealed, flow.id, flow.generation).run();
+    if (!saved.meta.changes) return invalid();
     return reply(200, { twoFactorRedirect: true }, outgoing);
   }
-  await env.DB.prepare("DELETE FROM nathan_email_sign_ins WHERE id=? AND generation=?").bind(id, flow.generation).run();
+  // Return a session only after winning the final claim, including for simultaneous TOTP submissions.
+  const sessionId = flow.issuedSessionId;
+  if (!sessionId) return invalid();
+  const [, audit] = await env.DB.batch([
+    env.DB.prepare("DELETE FROM nathan_email_sign_ins WHERE id=? AND generation=? AND expires_at>unixepoch()").bind(flow.id, flow.generation),
+    env.DB.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) " +
+      "SELECT ?,user_id,'email_otp_sign_in',session_id,'succeeded' FROM nathan_email_otp_sessions WHERE session_id=? AND changes()=1")
+      .bind(crypto.randomUUID(), sessionId)
+  ]);
+  if (audit.meta.changes !== 1) return invalid();
+  delete flow.issuedSessionId;
   for (const cookie of cookies) outgoing.append("Set-Cookie", cookie);
   return reply(200, { url: result.url || "/" }, outgoing);
 }
