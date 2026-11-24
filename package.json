@@ -35,6 +35,7 @@
     "test:runtime": "npm run build:auth && npm run build:gateway && npm run build:installer && npm run build:test-upstream && npm run build:test-mcp && npm run build:test-ui && node --test --test-concurrency=1 tests/runtime/*.test.mjs"
   },
   "dependencies": {
+    "@better-auth/core": "1.7.14",
     "@better-auth/oauth-provider": "1.7.14",
     "@better-auth/passkey": "1.7.14",
     "@better-auth/sso": "1.7.14",
