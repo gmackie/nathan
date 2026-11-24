@@ -27,6 +27,7 @@ function apply(db, batch) {
 for (const stage of ["staging", "production"]) {
   test("install seeds only the dedicated " + stage + " issuer and preserves management enrollment", async () => {
     const spec = await readStage(stage);
+    assert.equal(spec.worker.vars.EMAIL_FROM, "ClassCheck <noreply@classcheck.io>");
     assert.equal(spec.worker.workers_dev, false);
     assert.equal(spec.worker.preview_urls, false);
     assert.deepEqual(spec.worker.routes, []);

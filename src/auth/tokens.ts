@@ -90,8 +90,14 @@ export async function accessTokenClaims(env: AuthEnv, input: ClaimInput): Promis
     throw tokenError("invalid_grant", "The sign-in session for this grant has ended");
 
   const appId = audienceApp(audiences, resources);
+  const customerIssuer = env.NATHAN_APP_ORIGIN === env.NATHAN_ISSUER;
+  if (customerIssuer && (!appId || appId !== env.NATHAN_APP_ID))
+    throw tokenError("invalid_target", "The resource does not belong to the application");
   if (appId) {
-    const roles = rolesClaim(await resolveAccess(env, appId, userId));
+    const decision = await resolveAccess(env, appId, userId);
+    if (customerIssuer && !decision.allowed)
+      throw tokenError("invalid_grant", "The account cannot use the application");
+    const roles = rolesClaim(decision);
     if (roles) claims.roles = roles;
   }
   if (session && sessionId) Object.assign(claims, evidenceClaims(session, { userId, sessionId }));

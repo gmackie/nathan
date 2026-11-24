@@ -11,6 +11,13 @@ const GRANTS_FOR_USER =
   "((principal_type='user' AND principal_id=?) OR " +
   "(principal_type='group' AND principal_id IN (SELECT group_id FROM nathan_group_members WHERE user_id=?)))";
 
+/** Current admissions that have been withdrawn, including those with an independently owned grant. */
+export const INACTIVE_PROVISIONS =
+  "SELECT p.app_id FROM nathan_app_provisions p WHERE p.user_id=? AND NOT EXISTS " +
+  "(SELECT 1 FROM nathan_active_app_provisions a WHERE a.app_id=p.app_id AND a.user_id=p.user_id)";
+
+export const revokedMembership = () => ({ allowed: false, reason: "app_membership_revoked", roles: [], permissions: [] });
+
 /** The five reads that make one evaluator input. Run them in one D1 batch (one snapshot).
  * @param {string} appId @param {string} userId @returns {Statement[]} */
 export function accessQueries(appId, userId) {
@@ -77,12 +84,13 @@ export function directoryQueries(userId) {
     { sql: "SELECT g.id AS id, g.name AS name, g.source AS source FROM nathan_group_members m JOIN nathan_groups g ON g.id=m.group_id WHERE m.user_id=? ORDER BY g.id", params: [userId] },
     { sql: "SELECT app_id AS app, role_key AS role, principal_type AS principalType, principal_id AS principalId FROM nathan_rbac_grants WHERE " + GRANTS_FOR_USER + " ORDER BY app_id, role_key, principal_type, principal_id",
       params: [userId, userId] },
-    { sql: "SELECT id, enabled, access_mode AS accessMode FROM nathan_applications WHERE access_mode='any_signed_in' OR id IN (" + appsWithGrants + ") ORDER BY id LIMIT 500",
-      params: [userId, userId] },
+    { sql: "SELECT id, enabled, access_mode AS accessMode FROM nathan_applications WHERE access_mode='any_signed_in' OR id IN (" + appsWithGrants +
+      ") OR id IN (SELECT app_id FROM nathan_app_provisions WHERE user_id=?) ORDER BY id LIMIT 500", params: [userId, userId, userId] },
     { sql: "SELECT r.app_id AS app, r.key AS key, rp.permission_key AS permission FROM nathan_rbac_roles r LEFT JOIN nathan_rbac_role_permissions rp " +
       "ON rp.app_id=r.app_id AND rp.role_key=r.key WHERE r.app_id IN (" + appsWithGrants + ") ORDER BY r.app_id, r.key, rp.permission_key",
       params: [userId, userId] },
-    { sql: "SELECT MAX(COALESCE((SELECT MAX(seq) FROM nathan_rbac_changes),0),(SELECT pruned_through FROM nathan_rbac_feed_state WHERE id='primary')) AS cursor", params: [] }
+    { sql: "SELECT MAX(COALESCE((SELECT MAX(seq) FROM nathan_rbac_changes),0),(SELECT pruned_through FROM nathan_rbac_feed_state WHERE id='primary')) AS cursor", params: [] },
+    { sql: INACTIVE_PROVISIONS, params: [userId] }
   ];
 }
 
@@ -101,16 +109,17 @@ export function parseQualifiedSubject(issuer, value) {
  * @param {{ issuer: string, observedAt: string, results: any[][] }} input results of {@link directoryQueries}
  */
 export function directoryView({ issuer, observedAt, results }) {
-  const [users, groups, grants, apps, roles] = results;
+  const [users, groups, grants, apps, roles, watermark, inactive] = results;
   const user = userState(users[0]);
   if (!user) return null;
   const groupIds = groups.map(g => g.id);
+  const revoked = new Set(inactive.map(p => p.app_id));
   /** @type {Record<string, any>} */
   const applications = {};
   for (const row of apps) {
     const app = appState(row);
     if (!app) continue;
-    const decision = evaluateAccess({
+    const decision = revoked.has(app.id) ? revokedMembership() : evaluateAccess({
       app, user, groups: groupIds,
       grants: grants.filter(g => g.app === app.id).map(g => ({ role: g.role, principalType: g.principalType, principalId: g.principalId })),
       roles: roleDefinitions(roles.filter(r => r.app === app.id))
@@ -124,7 +133,7 @@ export function directoryView({ issuer, observedAt, results }) {
     grants: grants.map(g => ({ app: g.app, role: g.role, via: { type: g.principalType, id: g.principalId } })),
     applications,
     observedAt,
-    cursor: String(results[5][0]?.cursor ?? 0)
+    cursor: String(watermark[0]?.cursor ?? 0)
   };
 }
 

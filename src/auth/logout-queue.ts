@@ -25,11 +25,12 @@ export const LOGOUT_RETRY_DELAYS = [15, 60, 300, 900, 3600, 6 * 3600, 12 * 3600]
 const TIMEOUT_MS = 5000, TOKEN_LIFETIME = 120;
 const EVENT = "http://schemas.openid.net/event/backchannel-logout";
 
-type Due = { id: string; clientId: string; userId: string; sessionId: string | null; attempts: number; uri: string | null; disabled: unknown;
+type Due = { id: string; clientId: string; userId: string; sessionId: string | null; issuedSubject: string | null; attempts: number; uri: string | null; disabled: unknown;
   subjectType: string | null; redirectUris: string | null };
 
 /** Subject the client knows the user by: the user id, or Better Auth's pairwise identifier. */
 async function subjectFor(env: AuthEnv, row: Due): Promise<string> {
+  if (row.issuedSubject !== null) return row.issuedSubject;
   if (row.subjectType !== "pairwise" || !env.NATHAN_PAIRWISE_SECRET) return row.userId;
   const sector = new URL(JSON.parse(row.redirectUris || "[]")[0]).host;
   return makeSignature(sector + "." + row.userId, env.NATHAN_PAIRWISE_SECRET);
@@ -47,7 +48,7 @@ export async function nextLogoutDue(env: AuthEnv, connectionId: string | null): 
  */
 export async function deliverLogouts(env: AuthEnv, { connectionId = null, limit = 25 }: { connectionId?: string | null; limit?: number } = {}) {
   const due = (await env.DB.prepare(
-    'SELECT d.id AS id, d.client_id AS clientId, d.user_id AS userId, d.session_id AS sessionId, d.attempts AS attempts, c."backchannelLogoutUri" AS uri, ' +
+    'SELECT d.id AS id, d.client_id AS clientId, d.user_id AS userId, d.session_id AS sessionId, d.issued_subject AS issuedSubject, d.attempts AS attempts, c."backchannelLogoutUri" AS uri, ' +
     'c."disabled" AS disabled, c."subjectType" AS subjectType, c."redirectUris" AS redirectUris ' +
     'FROM nathan_backchannel_deliveries d LEFT JOIN "oauthClient" c ON c."clientId"=d.client_id ' +
     "WHERE d.state='pending' AND d.next_attempt_at<=unixepoch() AND (?1 IS NULL OR d.connection_id=?1) ORDER BY d.next_attempt_at LIMIT ?2"

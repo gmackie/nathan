@@ -1,3 +1,4 @@
+import { isOperatorAddress } from "./app-operator.ts";
 import { liveSession, userBanned } from "../shared/token-claims.mjs";
 import { openInvitation } from "./admission-policy.mjs";
 import { inVerifiedSsoDomain } from "./email-otp-policy.mjs";
@@ -49,14 +50,7 @@ export async function publishEmailDelivery(db: D1Database, flow: EmailFlow, deli
  * An arbitrary unverified password signup and an unknown address in self-service mode cannot use
  * this method. A provisional invitee may prove the mailbox while their original invite is open. */
 export async function emailTarget(db: D1Database, email: string, env?: AuthEnv): Promise<EmailTarget | null> {
-  // A bootstrap invitation belongs to the operator portal even before the owner has a user row.
-  if (env?.NATHAN_APP_ORIGIN && env.NATHAN_ISSUER === env.NATHAN_APP_ORIGIN) {
-    if (env.NATHAN_ADMIN_EMAILS.split(",").some(address => address.trim().toLowerCase() === email) ||
-        await db.prepare("SELECT 1 FROM nathan_bootstrap_status WHERE admin_email=? COLLATE NOCASE " +
-          "UNION ALL SELECT 1 FROM nathan_admin_grants WHERE enabled=1 AND email=? COLLATE NOCASE " +
-          'UNION ALL SELECT 1 FROM "user" WHERE email=? COLLATE NOCASE AND role=? LIMIT 1')
-          .bind(email,email,email,"admin").first()) return null;
-  }
+  if (env?.NATHAN_APP_ORIGIN && env.NATHAN_ISSUER === env.NATHAN_APP_ORIGIN && await isOperatorAddress(env,email)) return null;
   if (await inVerifiedSsoDomain(db, email)) return null;
   const matches = await db.prepare(
     'SELECT u.id,u.email,u.emailVerified,u.banned,u.banExpires,u.twoFactorEnabled, ' +
