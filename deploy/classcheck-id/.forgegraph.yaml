@@ -10,6 +10,7 @@ stages:
         config:
           appDir: .
           workerName: nathan-classcheck-stg-auth
+          keepCrons: true
           buildCommand: npm ci --no-audit --no-fund
           deployCommand: >-
             npx wrangler d1 migrations apply DB --remote --config deploy/classcheck-staging/wrangler.auth.jsonc &&
