@@ -401,3 +401,33 @@ test("a delayed logout retry preserves the signed event ID and occurrence time",
     await sql("UPDATE oauthClient SET backchannelLogoutUri=NULL WHERE clientId=?", client);
   }
 });
+
+test("a pairwise logout retry keeps the subject its recipient first received", async () => {
+  const recipient = "pairwise-retry-client", internalSub = "pairwise-retry-user", event = "pairwise-retry-event";
+  await sql("INSERT INTO oauthClient(id,clientId,redirectUris,subjectType,backchannelLogoutUri) " +
+    "VALUES(?,?,?,'pairwise',?)", recipient,recipient,JSON.stringify([origin + "/auth/callback"]),backchannel);
+  await sql("INSERT INTO nathan_backchannel_deliveries(id,client_id,user_id,reason) VALUES(?,?,?,'test-logout')",
+    event,recipient,internalSub);
+  const auth = await mf.getWorker("auth");
+  const keys = createLocalJWKSet(await (await get("/api/auth/jwks")).json());
+  const send = async status => {
+    const start = deliveries.length;
+    receiverStatus = status;
+    await auth.scheduled({ cron: "* * * * *" });
+    const token = deliveries.slice(start).find(value => decodeJwt(value).aud === recipient);
+    return (await jwtVerify(token, keys, { issuer, audience: recipient, typ: "logout+jwt", algorithms: ["EdDSA"] })).payload;
+  };
+  try {
+    const first = await send(503);
+    assert.notEqual(first.sub, internalSub);
+    await sql("UPDATE oauthClient SET redirectUris=? WHERE clientId=?",
+      JSON.stringify(["https://new-sector.example.test/auth/callback"]),recipient);
+    await sql("UPDATE nathan_backchannel_deliveries SET next_attempt_at=0 WHERE id=?",event);
+    const retry = await send(204);
+    assert.equal(retry.jti, first.jti);
+    assert.equal(retry.sub, first.sub);
+  } finally {
+    receiverStatus = 204;
+    await sql("DELETE FROM oauthClient WHERE clientId=?",recipient);
+  }
+});

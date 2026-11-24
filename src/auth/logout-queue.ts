@@ -36,9 +36,17 @@ const released = "(d.reason!='app-session-end' OR NOT EXISTS(SELECT 1 FROM sessi
 /** Subject the client knows the user by: the user id, or Better Auth's pairwise identifier. */
 async function subjectFor(env: AuthEnv, row: Due): Promise<string> {
   if (row.issuedSubject !== null) return row.issuedSubject;
-  if (row.subjectType !== "pairwise" || !env.NATHAN_PAIRWISE_SECRET) return row.userId;
-  const sector = new URL(JSON.parse(row.redirectUris || "[]")[0]).host;
-  return makeSignature(sector + "." + row.userId, env.NATHAN_PAIRWISE_SECRET);
+  let subject = row.userId;
+  if (row.subjectType === "pairwise" && env.NATHAN_PAIRWISE_SECRET) {
+    const sector = new URL(JSON.parse(row.redirectUris || "[]")[0]).host;
+    subject = await makeSignature(sector + "." + row.userId, env.NATHAN_PAIRWISE_SECRET);
+  }
+  // Directory and legacy queue entries can lack the RP subject. Commit it before sending
+  // so concurrent attempts and later registration edits cannot change the event's recipient.
+  const saved = await env.DB.prepare("UPDATE nathan_backchannel_deliveries SET issued_subject=COALESCE(issued_subject,?1) " +
+    "WHERE id=?2 AND state='pending' RETURNING issued_subject").bind(subject, row.id).first<string>("issued_subject");
+  if (!saved) throw Error("Logout recipient unavailable");
+  return saved;
 }
 export async function nextLogoutDue(env: AuthEnv, connectionId: string | null): Promise<number | null> {
   const row = await env.DB.prepare(
