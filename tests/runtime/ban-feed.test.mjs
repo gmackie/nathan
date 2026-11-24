@@ -48,10 +48,11 @@ const signIn = () => mf.dispatchFetch(ORIGIN + "/api/auth/sign-in/email", {
 });
 const asAdmin = () => new Headers({ Cookie: adminCookie });
 
-test("the account admission, change-feed and SCIM ban triggers exist in D1", async () => {
+test("D1 has the admission, email delivery, change-feed and SCIM ban triggers", async () => {
   const triggers = (await db.prepare("SELECT name, tbl_name AS tbl FROM sqlite_master WHERE type='trigger' ORDER BY name").all()).results;
   assert.deepEqual(triggers.filter(t => t.name.startsWith("nathan_")).map(t => t.name + " ON " + t.tbl),
-    ["nathan_claim_email_invitation ON user", "nathan_rbac_feed_user_ban ON user", "nathan_rbac_feed_user_delete ON user", "nathan_scim_ban_changed ON user"]);
+    ["nathan_claim_email_invitation ON user", "nathan_email_delivery_before_insert ON nathan_email_sign_ins",
+      "nathan_rbac_feed_user_ban ON user", "nathan_rbac_feed_user_delete ON user", "nathan_scim_ban_changed ON user"]);
 });
 
 test("Better Auth's admin banUser and unbanUser write user.banned and user.unbanned to the change feed", async () => {
