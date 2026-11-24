@@ -42,6 +42,22 @@ test("gateway session migration applies with strict deletion support",()=>{
   db.close();
 });
 
+test("gateway receipt upgrade keeps active sessions and pre-upgrade replay records", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec(migration("migrations/gateway/0001_sessions.sql"));
+  db.exec(`INSERT INTO nathan_gateway_sessions(id_hash,subject,issuer,client_id,sid,created_at,expires_at)
+           VALUES ('digest','person','issuer','client','old-sid',100,unixepoch()+3600);
+           INSERT INTO nathan_gateway_logout_jti VALUES ('old-jti',unixepoch()+120);`);
+  const upgradedAt = db.prepare("SELECT unixepoch() AS now").get().now;
+  db.exec(migration("migrations/gateway/0002_logout_receipts.sql"));
+  const session = db.prepare("SELECT sid,coalesce(issued_at,created_at) AS issued FROM nathan_gateway_sessions WHERE id_hash='digest'").get();
+  assert.equal(session.sid, "old-sid");
+  assert.equal(session.issued, 100);
+  assert.ok(db.prepare("SELECT exp FROM nathan_gateway_logout_jti WHERE jti='old-jti'").get().exp >= upgradedAt + 48 * 3600);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM nathan_gateway_logout_receipts").get().n, 0);
+  db.close();
+});
+
 test("realm schema prevents duplicate hosts and cross-realm foreign keys",()=>{
   const db=new DatabaseSync(":memory:");db.exec("PRAGMA foreign_keys=ON");
   for(const file of ["0001_nathan_registry.sql","0002_better_auth.sql","0003_security_audit.sql","0004_mcp_limits.sql","0005_domain_realm.sql"])

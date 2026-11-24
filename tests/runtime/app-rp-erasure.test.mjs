@@ -2,7 +2,7 @@ import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
-import { bundle, COMPAT, cookiesOf, insertSession, migrate, randomKey, start } from "./helpers.mjs";
+import { bundle, COMPAT, cookiesOf, insertSession, migrate, migrateGateway, randomKey, start } from "./helpers.mjs";
 
 const origin = "https://school.example.test", issuer = origin + "/api/auth", signingSecret = randomKey();
 const clients = ["broad", "per-session"], secret = randomKey();
@@ -58,7 +58,7 @@ before(async () => {
   await run("INSERT INTO oauthResource(id,identifier,name,allowedScopes) VALUES ('res',?,'API','[\"openid\",\"email\",\"profile\"]')", origin + "/api");
   await run("INSERT INTO nathan_token_audiences(identifier,app_id,created_by) VALUES (?,'classcheck','test')", origin + "/api");
   for (const client of clients) {
-    await migrate(await mf.getD1Database("SESSIONS", client), "migrations/gateway/0001_sessions.sql");
+    await migrateGateway(await mf.getD1Database("SESSIONS", client));
     await run("INSERT INTO oauthClient(id,clientId,clientSecret,redirectUris,skipConsent,requirePKCE,grantTypes,scopes," +
       "tokenEndpointAuthMethod,backchannelLogoutUri,backchannelLogoutSessionRequired,subjectType) VALUES(?,?,?,?,1,1," +
       "'[\"authorization_code\"]','[\"openid\",\"profile\",\"email\"]','client_secret_basic',?,?,?)",

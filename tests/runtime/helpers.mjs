@@ -34,6 +34,11 @@ export async function migrate(db, file) {
   for (const statement of statements) await db.prepare(statement).run();
 }
 
+export async function migrateGateway(db) {
+  for (const file of readdirSync("migrations/gateway").filter(f => f.endsWith(".sql")).sort())
+    await migrate(db, "migrations/gateway/" + file);
+}
+
 export function base64url(bytes) {
   return Buffer.from(bytes).toString("base64url");
 }

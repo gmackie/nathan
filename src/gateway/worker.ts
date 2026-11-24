@@ -10,7 +10,8 @@ import type { AccessDecision } from "./env";
 
 const SESSION_COOKIE = "__Host-nathan-session";
 const FLOW_COOKIE = "__Host-nathan-flow";
-type Flow = { state: string; nonce: string; verifier: string; returnTo: string; expiresAt: number };
+const FLOW_SECONDS = 300;
+type Flow = { state: string; nonce: string; verifier: string; returnTo: string; expiresAt: number; logoutSequence?: number };
 type StoredSession = { subject: string; email: string | null; sessionIdHash: string; expiresAt: number; acr: string | null; authTime: number | null; issuer: string; sid?: string | null };
 
 function origin(env: GatewayEnv) {
@@ -54,14 +55,18 @@ function cleared(response: Response): Response {
 }
 async function beginLogin(url: URL, env: GatewayEnv) {
   const meta = await discover(env);
+  // A sequence orders same-second logins against a subject logout from an issuer without toe.
+  const logoutSequence = await env.SESSIONS.prepare(
+    "SELECT coalesce(max(sequence),0) AS sequence FROM nathan_gateway_logout_receipts"
+  ).first<number>("sequence");
   const flow: Flow = {
     state: randomId(), nonce: randomId(), verifier: randomId(),
     returnTo: safeReturnPath(url.searchParams.get("returnTo") || "/"),
-    expiresAt: Date.now() + 5 * 60_000
+    expiresAt: Date.now() + FLOW_SECONDS * 1000, logoutSequence: logoutSequence ?? 0
   };
   const loginUrl = await authorizeUrl(env, meta, flow.state, flow.nonce, flow.verifier);
   const response = redirectWithCookies(loginUrl, 302,
-    [makeCookie(FLOW_COOKIE, await seal(flow, env.SESSION_ENCRYPTION_KEY), { maxAge: 300 })]);
+    [makeCookie(FLOW_COOKIE, await seal(flow, env.SESSION_ENCRYPTION_KEY), { maxAge: FLOW_SECONDS })]);
   return secureResponse(response);
 }
 async function completeLogin(url: URL, request: Request, env: GatewayEnv): Promise<Response> {
@@ -84,10 +89,25 @@ async function completeLogin(url: URL, request: Request, env: GatewayEnv): Promi
       throw new Error("Invalid gateway session lifetime");
     const ttl = requestedTtl;
     const expiresAt = Math.floor(Date.now() / 1000) + ttl;
-    await env.SESSIONS.prepare(
-      "INSERT INTO nathan_gateway_sessions(id_hash, subject, email, issuer, client_id, acr, auth_time, sid, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    ).bind(hash, id.sub, id.email_verified === true && typeof id.email === "string" ? id.email : null, meta.issuer, env.OIDC_CLIENT_ID,
-      typeof id.acr === "string" ? id.acr : null, typeof id.auth_time === "number" ? id.auth_time : null, typeof id.sid === "string" ? id.sid : null, expiresAt).run();
+    const issuedAt = id.iat ?? (flow.expiresAt / 1000 - FLOW_SECONDS);
+    if (!Number.isFinite(issuedAt) || issuedAt < 0) throw Error("Invalid ID token issue time");
+    // If logout committed first, the guarded write cannot restore access. If this write
+    // committed first, the logout transaction sees this row and deletes it.
+    const inserted = await env.SESSIONS.prepare(`
+      INSERT INTO nathan_gateway_sessions(id_hash,subject,email,issuer,client_id,acr,auth_time,sid,expires_at,issued_at)
+      SELECT ?1,?2,?3,?4,?5,?6,?7,?8,?9,?10 WHERE ?11>unixepoch('subsec')*1000
+      AND NOT EXISTS (
+        SELECT 1 FROM nathan_gateway_logout_receipts WHERE issuer=?4 AND client_id=?5 AND sid=?8 AND exp>unixepoch()
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM nathan_gateway_logout_receipts WHERE issuer=?4 AND client_id=?5 AND sid IS NULL
+        AND subject=?2 AND exp>unixepoch() AND (event_time>=?10 OR (event_time IS NULL AND sequence>?12))
+      )
+    `).bind(hash, id.sub, id.email_verified === true && typeof id.email === "string" ? id.email : null, meta.issuer, env.OIDC_CLIENT_ID,
+      typeof id.acr === "string" ? id.acr : null, typeof id.auth_time === "number" ? id.auth_time : null, typeof id.sid === "string" ? id.sid : null,
+      expiresAt, Math.floor(issuedAt), flow.expiresAt, flow.logoutSequence ?? 0).run();
+    if (inserted.meta.changes !== 1)
+      return cleared(errorResponse(401, "This sign-in has ended. Please try again.", request, loginRetry(flow.returnTo)));
     const response = redirectWithCookies(origin(env) + flow.returnTo, 303, [makeCookie(SESSION_COOKIE, handle, { maxAge: ttl })]);
     return cleared(response);
   } catch {
@@ -189,7 +209,7 @@ export default {
       // NATH-32: the gateway's own Kumo pages load their hashed assets from here, never the upstream.
       const uiAsset = serveUiAsset(request);
       if (uiAsset) return uiAsset;
-      if (url.pathname === "/__nathan/login" && request.method === "GET") return beginLogin(url, env);
+      if (url.pathname === "/__nathan/login" && request.method === "GET") return await beginLogin(url, env);
       if (url.pathname === "/__nathan/callback" && request.method === "GET") return completeLogin(url, request, env);
       if (url.pathname === "/__nathan/logout" && request.method === "POST") return logout(request, env);
       if (url.pathname === "/__nathan/backchannel" && request.method === "POST") return handleBackchannelLogout(request, env);
@@ -213,10 +233,10 @@ export default {
     }
   },
   async scheduled(_event: ScheduledEvent, env: GatewayEnv): Promise<void> {
-    // TTL alone is not sufficient; remove expired opaque sessions and consumed logout JTIs.
     await env.SESSIONS.batch([
       env.SESSIONS.prepare("DELETE FROM nathan_gateway_sessions WHERE expires_at <= unixepoch()"),
-      env.SESSIONS.prepare("DELETE FROM nathan_gateway_logout_jti WHERE exp <= unixepoch()")
+      env.SESSIONS.prepare("DELETE FROM nathan_gateway_logout_jti WHERE exp <= unixepoch()"),
+      env.SESSIONS.prepare("DELETE FROM nathan_gateway_logout_receipts WHERE exp <= unixepoch()")
     ]);
   }
 };

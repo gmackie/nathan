@@ -8,6 +8,8 @@ const done = () => new Response(null, {status: 204, headers: {"Cache-Control":"n
 // 5xx tells the IdP to retry; used whenever the gateway could not decide, never for a bad token.
 const retry = (reason: string) => new Response(reason + "; retry", {status: 503, headers: {"Cache-Control":"no-store", "Retry-After": "5"}});
 const MAX_IAT_SKEW = 180, CLOCK_TOLERANCE = 30;
+// The seven redelivery delays total nearly 20 hours, before scheduler delays.
+const RECEIPT_SECONDS = 48 * 60 * 60;
 /**
  * jose reports token problems with ERR_JWT_* / ERR_JWS_* codes, and a token signed by an
  * unknown key or disallowed algorithm as ERR_JWKS_NO_MATCHING_KEY / ERR_JOSE_ALG_NOT_ALLOWED. Other JWKS failures (timeout, malformed or non-200
@@ -49,27 +51,28 @@ export async function handleBackchannelLogout(request: Request, env: GatewayEnv)
   if (typeof payload.sid !== "string" && typeof payload.sub !== "string") return failed();
   const now = Math.floor(Date.now()/1000);
   if (Math.abs(now - payload.iat) > MAX_IAT_SKEW) return failed();
-  // Keep the replay record until the token can no longer pass the iat window, even when
-  // the token is future-dated, so pruning never re-opens it for replay.
-  const replayUntil = Math.max(now, payload.iat) + MAX_IAT_SKEW + CLOCK_TOLERANCE + 60;
+  const replayUntil = Math.max(now, payload.iat) + RECEIPT_SECONDS;
+  const sid = typeof payload.sid === "string" ? payload.sid : null;
+  const subject = typeof payload.sub === "string" ? payload.sub : null;
   try {
-    const seen = await env.SESSIONS.prepare("SELECT 1 AS seen FROM nathan_gateway_logout_jti WHERE jti=?").bind(payload.jti).first();
-    if (seen) return done(); // replay safely ignored; never revokes sessions created after the original logout
-    const revoke = typeof payload.sid === "string"
-      ? env.SESSIONS.prepare("DELETE FROM nathan_gateway_sessions WHERE sid=? AND issuer=? AND client_id=?")
-          .bind(payload.sid, metadata.issuer, env.OIDC_CLIENT_ID)
-      : env.SESSIONS.prepare("DELETE FROM nathan_gateway_sessions WHERE subject=?1 AND issuer=?2 AND client_id=?3 " +
-          "AND (?4 IS NULL OR created_at<=?4)")
-          .bind(payload.sub, metadata.issuer, env.OIDC_CLIENT_ID, occurred ?? null);
-    // One D1 batch is one transaction: the JTI is recorded only if revocation committed,
-    // so a storage failure leaves the token retryable by the IdP.
-    await env.SESSIONS.batch([
-      revoke,
-      env.SESSIONS.prepare("INSERT INTO nathan_gateway_logout_jti(jti,exp) VALUES (?,?)").bind(payload.jti, replayUntil)
-    ]);
+    const record = env.SESSIONS.prepare(`
+      INSERT INTO nathan_gateway_logout_receipts(issuer,client_id,jti,sid,subject,event_time,exp)
+      SELECT ?1,?2,?3,?4,?5,?6,?7
+      WHERE NOT EXISTS (SELECT 1 FROM nathan_gateway_logout_jti WHERE jti=?3 AND exp>unixepoch())
+      ON CONFLICT(issuer,client_id,jti) DO NOTHING
+    `).bind(metadata.issuer, env.OIDC_CLIENT_ID, payload.jti, sid, subject, occurred ?? null, replayUntil);
+    // changes() is the receipt insertion in this transaction. Redelivery acknowledges
+    // the original decision, including for older issuers that do not send an event time.
+    const revoke = sid !== null
+      ? env.SESSIONS.prepare("DELETE FROM nathan_gateway_sessions WHERE changes()=1 AND issuer=? AND client_id=? AND sid=?")
+          .bind(metadata.issuer, env.OIDC_CLIENT_ID, sid)
+      : env.SESSIONS.prepare(`
+          DELETE FROM nathan_gateway_sessions WHERE changes()=1 AND issuer=?1 AND client_id=?2 AND subject=?3
+          AND (?4 IS NULL OR coalesce(issued_at,created_at)<=?4)
+        `).bind(metadata.issuer, env.OIDC_CLIENT_ID, subject, occurred ?? null);
+    await env.SESSIONS.batch([record, revoke]);
     return done();
-  } catch (error) {
-    if (String(error).includes("UNIQUE")) return done(); // a concurrent delivery of the same token committed first
+  } catch {
     return retry("Logout could not be recorded");
   }
 }

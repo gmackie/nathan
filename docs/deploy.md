@@ -93,7 +93,7 @@ Before routing traffic to the gateway:
 
 1. Disable the upstream Worker's `workers.dev`, preview URLs, and all independent public routes.
 2. Register a **confidential** OIDC client whose exact callback is `https://app.example.com/__nathan/callback`.
-3. Provision a separate gateway D1 database and apply `migrations/gateway/0001_sessions.sql`.
+3. Provision a separate gateway D1 database and apply the migrations in `migrations/gateway/` in order. For an existing gateway, apply `0002_logout_receipts.sql` before updating its Worker. The gateway retains signed logout receipts for 48 hours to cover delivery retries and in-flight callbacks.
 4. Supply `OIDC_CLIENT_SECRET` and 32 random bytes (base64url) as `SESSION_ENCRYPTION_KEY` via Workers Secrets.
 5. Generate gateway Wrangler bindings and review changes before deploying.
 6. Verify browser login, logout, API 401 behavior, invalid state/nonce rejection, replay protection, expiration, and user-session revocation.
