@@ -41,7 +41,7 @@ export async function userByEmail(db, email, { requireVerified = false } = {}) {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) || value.length > 254) throw Error("Select an existing user by exact email");
   const users = await db.all('SELECT "id" AS id, "emailVerified" FROM "user" WHERE lower("email")=? LIMIT 2', [value]);
   if (users.length !== 1) throw Error("User not found");
-  if (requireVerified && users[0].emailVerified !== 1) throw Error("A verified email is required to select a user by address");
+  if (requireVerified && users[0].emailVerified !== 1) throw Error("Select a user with a verified email");
   return /** @type {string} */ (users[0].id);
 }
 /** An existing user by Nathan user id (the OIDC `sub`). @param {AdminReader} db @param {unknown} userId */
