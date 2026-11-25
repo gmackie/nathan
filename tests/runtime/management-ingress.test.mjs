@@ -131,6 +131,7 @@ test("only the invited bootstrap owner can choose a management password and veri
     assert.equal((await get("/")).headers.get("Location"), origin + setup);
     const form = await get(setup);
     assert.equal(form.status, 200);
+    assert.equal(form.headers.get("Cache-Control"), "private, no-store, no-transform");
     assert.match(await form.text(), /autocomplete="new-password"/i);
     assert.equal((await submit("https://management.test", ownerJwt)).status, 403);
     assert.equal((await submit(origin, ownerJwt)).status, 303);
