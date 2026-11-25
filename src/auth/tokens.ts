@@ -6,7 +6,7 @@
  * adds, through the supported oauth-provider `extensions[].claims.accessToken` hook:
  *   - `principal_kind` (user / machine / agent), on every JWT access token;
  *   - `roles`, an optional hint from NATH-13's evaluator for the app bound to the token's audience;
- *   - `nathan_amr` / `nathan_acr` / `nathan_auth_time` from verified passkey sign-in evidence only.
+ *   - `nathan_amr` from verified email or passkey sign-in. Only passkeys add `nathan_acr` and `nathan_auth_time`.
  * Better Auth strips the reserved names `acr`, `amr` and `auth_time` from every claim source, so
  * Nathan cannot and does not emit them on access tokens. See docs/gatekeeper.md.
  *
@@ -15,21 +15,21 @@
  */
 import type { AuthEnv } from "./env";
 import { APIError } from "better-auth/api";
+import type { SchemaClient } from "@better-auth/oauth-provider";
+import { recordAppRefreshSession } from "./app-rp-session";
 import { audit } from "./admin-service";
 import { resolveAccess } from "./rbac";
 import { principalKind, evidenceClaims, rolesClaim, audienceApp, validateAudience, liveSession, userBanned, apiScopeAllowed,
-  MAX_ACCESS_TOKEN_SECONDS, API_SCOPE } from "../shared/token-claims.mjs";
+  MAX_ACCESS_TOKEN_SECONDS, API_SCOPE, AUDIENCE_SCOPES } from "../shared/token-claims.mjs";
 
-export { MAX_ACCESS_TOKEN_SECONDS, API_SCOPE };
-/** Scopes a registered audience accepts: user sign-in scopes plus the machine and agent API scope. */
-export const AUDIENCE_SCOPES = ["openid", "profile", "email", "offline_access", API_SCOPE];
+export { MAX_ACCESS_TOKEN_SECONDS, API_SCOPE, AUDIENCE_SCOPES };
 
 const CLIENT_ID = /^[A-Za-z0-9._-]{1,200}$/;
 const APP_ID = /^[a-z][a-z0-9-]{0,62}$/;
 
 type ClaimInput = {
   user?: { id?: unknown } | null;
-  client: { clientId: string };
+  client: Pick<SchemaClient, "clientId" | "subjectType" | "redirectUris" | "enableEndSession" | "backchannelLogoutUri">;
   sessionId?: string | null;
   scopes?: string[];
   grantType?: string;
@@ -71,9 +71,9 @@ export async function accessTokenClaims(env: AuthEnv, input: ClaimInput): Promis
     statements.push(resources.length
       ? env.DB.prepare("SELECT identifier, app_id FROM nathan_token_audiences WHERE identifier IN (" + resources.map(() => "?").join(",") + ")").bind(...resources)
       : env.DB.prepare("SELECT identifier, app_id FROM nathan_token_audiences WHERE 0"));
-    // The grant's session, and passkey evidence that counts only while that session exists.
-    statements.push(env.DB.prepare('SELECT s."id" AS id, s."userId" AS userId, s."expiresAt" AS expiresAt, a.session_id, a.user_id, a.method, a.verified_at ' +
-      'FROM "session" s LEFT JOIN nathan_admin_assurance a ON a.session_id=s."id" AND a.user_id=s."userId" WHERE s."id"=? LIMIT 1').bind(sessionId ?? ""));
+    // The grant's session, and authentication evidence that counts only while that session exists.
+    statements.push(env.DB.prepare('SELECT s."id" AS id, s."userId" AS userId, s."expiresAt" AS expiresAt, a.session_id, a.user_id, a.method, a.verified_at, e.session_id AS email_session_id ' +
+      'FROM "session" s LEFT JOIN nathan_admin_assurance a ON a.session_id=s."id" AND a.user_id=s."userId" LEFT JOIN nathan_email_otp_sessions e ON e.session_id=s."id" AND e.user_id=s."userId" AND e.hosted=1 WHERE s."id"=? LIMIT 1').bind(sessionId ?? ""));
   }
   const [kindRows, userRows, audiences, sessionRows] = (await env.DB.batch(statements)).map(r => (r.results ?? []) as any[]);
   const clientKind = kindRows[0]?.principal_kind;
@@ -90,11 +90,19 @@ export async function accessTokenClaims(env: AuthEnv, input: ClaimInput): Promis
     throw tokenError("invalid_grant", "The sign-in session for this grant has ended");
 
   const appId = audienceApp(audiences, resources);
+  const customerIssuer = env.NATHAN_APP_ORIGIN === env.NATHAN_ISSUER;
+  if (customerIssuer && (!appId || appId !== env.NATHAN_APP_ID))
+    throw tokenError("invalid_target", "The resource does not belong to the application");
   if (appId) {
-    const roles = rolesClaim(await resolveAccess(env, appId, userId));
+    const decision = await resolveAccess(env, appId, userId);
+    if (customerIssuer && !decision.allowed)
+      throw tokenError("invalid_grant", "The account cannot use the application");
+    const roles = rolesClaim(decision);
     if (roles) claims.roles = roles;
   }
   if (session && sessionId) Object.assign(claims, evidenceClaims(session, { userId, sessionId }));
+  if (customerIssuer && input.grantType === "refresh_token" && input.scopes?.includes("openid"))
+    await recordAppRefreshSession(env, userId, input.client, sessionId, kind === "agent");
   return claims;
 }
 

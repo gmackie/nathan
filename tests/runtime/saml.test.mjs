@@ -5,6 +5,7 @@
  */
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { authWorker, cookiesOf, randomKey } from "./helpers.mjs";
 import { makeCertificate } from "../fixtures/x509.mjs";
 import { idpMetadata, authnRequestId, samlResponse } from "../fixtures/saml-idp.mjs";
@@ -549,12 +550,14 @@ test("certificate rotation: trust the next certificate, then retire the old one"
 
 test("concurrent certificate changes never silently lose an update", async () => {
   const a = makeCertificate({ cn: "acme idp a" }), b = makeCertificate({ cn: "acme idp b" });
-  const results = await Promise.all([a, b].map(c => studio("/studio/api/saml/certificates", { providerId: PID, certificate: c.certPem })));
-  const bodies = await Promise.all(results.map(r => r.json()));
+  const results = await Promise.all([a, b].map(async c => {
+    const response = await studio("/studio/api/saml/certificates", { providerId: PID, certificate: c.certPem });
+    return { status: response.status, body: await response.json() };
+  }));
   const accepted = results.filter(r => r.status === 200).length;
-  assert.ok(accepted >= 1, JSON.stringify(bodies));
-  for (const [i, r] of results.entries())
-    if (r.status !== 200) assert.match(bodies[i].error, /changed concurrently/, "a lost race is reported, not swallowed");
+  assert.ok(accepted >= 1, JSON.stringify(results));
+  for (const { status, body } of results)
+    if (status !== 200) assert.match(body.error, /changed concurrently/, "a lost race is reported, not swallowed");
   const { certificates, samlConfig } = await db.prepare('SELECT c.certificates AS certificates,p."samlConfig" AS samlConfig FROM nathan_saml_connections c JOIN "ssoProvider" p ON p."providerId"=c.provider_id WHERE c.provider_id=?').bind(PID).first();
   const stored = JSON.parse(certificates);
   assert.equal(stored.length, 1 + accepted, "every accepted certificate is still stored");
@@ -583,6 +586,12 @@ test("Studio and sign-in pages carry the SAML UI with valid inline scripts", asy
   assert.doesNotThrow(() => new Function(scriptOf(html)), "Studio script parses");
   const signIn = await (await mf.dispatchFetch(ORIGIN + "/sign-in")).text();
   assert.ok(signIn.includes("Sign in with SSO"));
-  assert.ok(signIn.includes("/sign-in/sso/start"));
-  assert.doesNotThrow(() => new Function(scriptOf(signIn)), "sign-in script parses");
+  assert.ok(signIn.includes('<form class="nathan-form" data-sso=""'), "the SSO form");
+  // NATH-38: no inline code on the Kumo sign-in page; the SSO start lives in the SRI-pinned sign-in island.
+  assert.doesNotMatch(signIn, /<script nonce="[^"]+">/, "no inline script");
+  const island = /<script type="module" src="(\/__nathan\/ui\/sign-in-[A-Za-z0-9]+\.js)" integrity="sha384-[^"]+" nonce="[^"]+"><\/script>/.exec(signIn)?.[1];
+  assert.ok(island, "the sign-in island");
+  const code = await (await mf.dispatchFetch(ORIGIN + island)).text();
+  assert.ok(code.includes("/sign-in/sso/start"));
+  execFileSync(process.execPath, ["--input-type=module", "--check"], { input: code });
 });

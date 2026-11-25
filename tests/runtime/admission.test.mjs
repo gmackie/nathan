@@ -355,8 +355,12 @@ test("self-service admits verified sign-ins without an invitation; switching bac
 
 test("the sign-in page explains a refused sign-in", async () => {
   const html = await (await mf.dispatchFetch(ORIGIN + "/sign-in?error=ACCOUNT_NOT_ADMITTED")).text();
-  assert.match(html, /errorCallbackURL/, "social sign-in returns to the sign-in page on errors");
-  assert.match(html, /ACCOUNT_NOT_ADMITTED/);
+  // NATH-38: explained on the server (no script needed), with the reason code.
+  assert.match(html, /invitation only[^<]*\(ACCOUNT_NOT_ADMITTED\)/);
+  // The sign-in behaviour is the SRI-pinned sign-in island; its social sign-in returns here on errors.
+  const island = /<script type="module" src="(\/__nathan\/ui\/sign-in-[A-Za-z0-9]+\.js)"/.exec(html)?.[1];
+  assert.ok(island, "the sign-in island is loaded");
+  assert.match(await (await mf.dispatchFetch(ORIGIN + island)).text(), /errorCallbackURL:"\/sign-in"/, "social sign-in returns to the sign-in page on errors");
 });
 
 test("enterprise OIDC SSO: an invitation is claimed only for an address inside the connection's verified domain", async () => {

@@ -93,12 +93,38 @@ Before routing traffic to the gateway:
 
 1. Disable the upstream Worker's `workers.dev`, preview URLs, and all independent public routes.
 2. Register a **confidential** OIDC client whose exact callback is `https://app.example.com/__nathan/callback`.
-3. Provision a separate gateway D1 database and apply `migrations/gateway/0001_sessions.sql`.
+3. Provision a separate gateway D1 database and apply the migrations in `migrations/gateway/` in order. The gateway retains signed logout receipts for 48 hours to cover delivery retries and in-flight callbacks.
 4. Supply `OIDC_CLIENT_SECRET` and 32 random bytes (base64url) as `SESSION_ENCRYPTION_KEY` via Workers Secrets.
 5. Generate gateway Wrangler bindings and review changes before deploying.
 6. Verify browser login, logout, API 401 behavior, invalid state/nonce rejection, replay protection, expiration, and user-session revocation.
 
 The `node scripts/nathan.mjs protect <application-id>` CLI previews the hostname, callback and upstream exposure requirements. It can attempt staged gateway deployment with `--apply` only after public-route checks and OIDC client registration. Comprehensive live integration tests remain incomplete. **Do not claim Access-equivalent protections until origin isolation and session lifecycle are proven.**
+
+### Upgrade or roll back an existing stock gateway
+
+Use this procedure for a stock gateway on schema 0001 or later. Run the commands from the repository root with the generated Wrangler config for that gateway. Its `SESSIONS` binding must point to the gateway's D1. ClassCheck uses its own relying party and stays online throughout a stock gateway upgrade.
+
+1. **Hold session creation before closing ingress.** Run the following against the serving gateway database and confirm it succeeded. When the trigger commits, D1 rejects every later session insert, including a callback already in flight. Existing sessions and logout writes remain available.
+
+   ```sh
+   npx wrangler d1 execute SESSIONS --remote --config "$GATEWAY_CONFIG" --file scripts/gateway-maintenance/hold-session-creation.sql
+   ```
+
+2. Put every stock gateway ingress in maintenance and keep the upstream private. Return HTTP 503 with `Retry-After` on the back-channel endpoint. Pause the gateway's scheduled cleanup and wait for old requests and scheduled executions to finish. Keep Nathan's issuer delivery scheduler running.
+3. Apply the pending gateway migrations through `0003_legacy_logout_retention.sql`, then route 100% of traffic to the upgraded Worker. Keep browser traffic closed and keep the database hold in place. Confirm only the new version can receive requests.
+
+   ```sh
+   npx wrangler d1 migrations apply SESSIONS --remote --config "$GATEWAY_CONFIG"
+   ```
+
+4. Reopen only the back-channel endpoint. Have the issuer retry outstanding logout notifications for this client. If cleanup already removed a legacy event ID and a pending subject-only token omits `toe`, its original cutoff cannot be recovered. Deliver that signed token while the hold is active. The receiver conservatively ends the subject's existing gateway sessions and records a scoped receipt. Confirm the issuer received the acknowledgement and marked the event delivered. For Nathan, check that client’s outstanding entries in `nathan_backchannel_deliveries`. If an old event failed or the sender cannot confirm its disposition, keep the hold and browser maintenance in place until the sender can redeliver and confirm completion.
+5. Wait until the backlog is acknowledged and the full five-minute flow-cookie lifetime has elapsed since the last old login request finished. This also expires flows from a prior 0002 Worker that already included a sequence. Release the hold, restore scheduled cleanup and reopen browser traffic. Verify a new login and a signed logout. Users with an interrupted sign-in start again. Unrelated established sessions keep their existing cookies.
+
+   ```sh
+   npx wrangler d1 execute SESSIONS --remote --config "$GATEWAY_CONFIG" --file scripts/gateway-maintenance/resume-session-creation.sql
+   ```
+
+For rollback, repeat the same hold, drain and backlog checks. Retain the migrated D1 database, receipts and session keys. The rollback build must reject an absent flow receipt sequence **before exchanging the authorization code**, check scoped receipts when it creates a session, and record signed logout events atomically. Revision `14f838fe` defaults an absent sequence to zero and fails this requirement. Keep the gateway in maintenance until a qualifying build is available. Restoring an earlier database snapshot could revive ended sessions.
 
 ## 8. Rollback and incident recovery
 

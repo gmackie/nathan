@@ -1,8 +1,16 @@
 import { serveUiAsset } from "../ui/assets.ts";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { verifyOAuthQueryParams } from "@better-auth/oauth-provider";
+import { emailEnabled, emailSignIn } from "./email-sign-in";
+import { beginEmailSignIn as beginSingleAppSignIn, finishEmailSignIn as finishSingleAppSignIn } from "./single-app";
+import { isEmailSession } from "./email-sign-in-policy";
+import { emailSignInPage } from "./email-sign-in-page";
+import { pruneEmailOtpLimits } from "./email-otp-policy.mjs";
+import { signedOAuthQuery } from "./oauth-query.mjs";
+import { normalizeEmail } from "./admission-policy.mjs";
 import { createAuth } from "./instance";
 import {isRawManagementEndpoint} from "./management-boundary.mjs";
+import { managementIngress } from "./management-ingress";
 import { loadSocialCredentials, providerStatus, upsertSocialProvider, setSocialProviderEnabled } from "./provider-store";
 import { enabledProviderIds, beginProviderTest, completeProviderTest } from "./provider-store";
 import { providerTestResultPage } from "./provider-ui.mjs";
@@ -12,8 +20,11 @@ import {effectiveAdminPolicy,tightenAdminPolicy} from "./security-policy";
 import {handleScim} from "./scim/gateway";
 import {listScimConnections,createScimConnection,setScimConnectionEnabled,rotateScimToken} from "./scim/admin";
 import {samlProtocolGate,handleSamlRoutes} from "./saml-routes";
+export { NathanAppAuth } from "./app-auth";
 export {NathanScimDirectory} from "./scim/directory";
-import { signInPage, consentPage, studioPage } from "./ui";
+export { NathanAppProvisioner } from "./app-provisioning";
+import { studioPage } from "./ui";
+import { signInPage, consentPage } from "./hosted-pages.tsx";
 import { securityPage } from "./security-ui";
 import { loadVerifiedRealm, listRealmClients,registerRealmClient,registerRealmClientsBatch,updateRealmClientStatus } from "./domain-realm";
 import type { AuthEnv } from "./env";
@@ -33,9 +44,6 @@ import { scimUserOperation, scimOutboxView, skipScimOutbox, SCIM_REVIEW_ERRORS }
 import { admissionOverview, applyAdmissionOperation, ADMISSION_ERRORS } from "./admission";
 import { healthResponse } from "./health";
 import { handleSamlIdp, samlIdpReturnRedirect, pruneSamlIdp } from "./saml-idp";
-import type { Background } from "./email-otp";
-import { emailOtpOffered, pruneEmailOtpLimits } from "./email-otp-policy.mjs";
-import { beginEmailSignIn, finishEmailSignIn } from "./single-app";
 
 function reject(status: number, reason: string) {
   return Response.json({ error: reason }, { status, headers: { "Cache-Control": "no-store" } });
@@ -44,7 +52,7 @@ async function isAdmin(session:any,env:AuthEnv):Promise<boolean>{
   return Boolean(session?.user && await isAdminPrincipal(session.user,env));
 }
 
-async function handle(request: Request, env: AuthEnv, background?: Background): Promise<Response> {
+async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Promise<Response> {
   const issuer = new URL(env.NATHAN_ISSUER);
   const url = new URL(request.url);
   if (url.origin !== issuer.origin || url.protocol !== "https:") return reject(421, "Misdirected request");
@@ -60,8 +68,15 @@ async function handle(request: Request, env: AuthEnv, background?: Background): 
     return protectedResourceMetadata(env);
   }
   if(url.pathname.startsWith("/scim/v2/"))return handleScim(request,env);
+  if (url.pathname === "/sign-in/email/request") return emailSignIn(request, env, ctx, "request");
+  if (url.pathname === "/sign-in/email/verify") return emailSignIn(request, env, ctx, "verify");
+  if (url.pathname === "/sign-in/email" && request.method === "GET" && emailEnabled(env)) {
+    const query = signedOAuthQuery(url.search);
+    if (url.search && (!query || !await verifyOAuthQueryParams(query, env.BETTER_AUTH_SECRET))) return reject(400, "Invalid or expired sign-in request");
+    return emailSignInPage(query ? normalizeEmail(new URLSearchParams(query).get("login_hint")) : null);
+  }
   const socialProviders=await loadSocialCredentials(env);
-  const auth = createAuth(env,socialProviders,background);
+  const auth = createAuth(env,socialProviders);
   // NATH-14: authorization server for remote MCP servers, consent and MCP connections (src/auth/mcp-oauth.ts).
   if (isMcpOAuthPath(url.pathname)) return handleMcpOAuth(request, env, auth);
   if (url.pathname === "/mcp") return handleMcp(request,env,auth);
@@ -91,12 +106,16 @@ async function handle(request: Request, env: AuthEnv, background?: Background): 
       if (session?.user?.id) return Response.redirect(issuer.origin + "/security", 302);
     }
     const providers = enabledProviderIds(socialProviders);
-    return signInPage(providers, env.ENABLE_PASSWORD === "true", env.ENTERPRISE_SSO === "true", emailOtpOffered(env));
+    const query = signedOAuthQuery(url.search);
+    const emailHref = emailEnabled(env) ? "/sign-in/email" + (query ? "?" + query : "") : undefined;
+    return signInPage(providers, env.ENABLE_PASSWORD === "true", env.ENTERPRISE_SSO === "true",
+      { issuer: issuer.host, error: url.searchParams.get("error"), emailHref });
   }
   if (url.pathname === "/consent" && request.method === "GET") {
     const { secret } = await auth.$context;
     const verified = await verifyOAuthQueryParams(url.search.slice(1), secret);
-    return consentPage(Boolean(verified), url.searchParams.get("client_id") ?? "Application", url.searchParams.get("scope") ?? "");
+    return consentPage(Boolean(verified), url.searchParams.get("client_id") ?? "Application", url.searchParams.get("scope") ?? "",
+      { issuer: issuer.host });
   }
   if (url.pathname === "/security" && request.method === "GET") {
     const session=await auth.api.getSession({headers:request.headers});
@@ -120,6 +139,7 @@ async function handle(request: Request, env: AuthEnv, background?: Background): 
       return reject(403,"Cross-origin request denied");
     const session=await auth.api.getSession({headers:request.headers});
     if(!await isBootstrapOwner(session?.user,env))return reject(403,"Verified initial admin account required");
+    if (await isEmailSession(env.DB, session!.session.id)) return reject(403,"Sign in with an existing authenticator to complete administrator enrollment");
     try{
       return Response.json(await completeBootstrap(env,session!.user.id),{headers:{"Cache-Control":"no-store"}});
     }catch{return reject(409,"Complete verified passkey and TOTP enrollment first");}
@@ -136,7 +156,7 @@ async function handle(request: Request, env: AuthEnv, background?: Background): 
     if (!await isAdmin(session, env) || !await mayAdminister(env,session!.user.id,session!.session.id)) return reject(403, "Admin enrollment incomplete");
     if (url.pathname === "/studio/api/status") {
       return Response.json({
-        issuer: issuer.origin + "/api/auth",
+        issuer: (env.NATHAN_APP_ORIGIN ?? issuer.origin) + "/api/auth",
         providers: Object.fromEntries((await providerStatus(env)).map(p=>[p.id,p.enabled])),
         features: {oidcProvider: true, passkeys: true, totp: true, enterpriseSso: env.ENTERPRISE_SSO === "true", password: env.ENABLE_PASSWORD === "true", scimDirectory: Boolean(env.SCIM_DIRECTORY)},
         note: "Authentication assurance level enforcement and guided plugin installation are not yet available"
@@ -556,14 +576,30 @@ async function handle(request: Request, env: AuthEnv, background?: Background): 
 }
 
 export default {
-  fetch: (request: Request, env: AuthEnv, ctx?: ExecutionContext) =>
-    handle(request, env, ctx ? promise => ctx.waitUntil(promise) : undefined),
-  scheduled: async (_: ScheduledEvent,env:AuthEnv) => {
+  async fetch(request: Request, env: AuthEnv, ctx: ExecutionContext) {
+    const response = await managementIngress(request, env, ctx, handle);
+    if (response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase() !== "text/html") return response;
+    // Apply this after management ingress seals cookies and sets its own cache policy.
+    // Cloudflare Web Analytics respects no-transform on the final HTML response.
+    const page = new Response(response.body, response);
+    page.headers.set("Cache-Control", "private, no-store, no-transform");
+    return page;
+  },
+  scheduled: async (event: ScheduledEvent,env:AuthEnv) => {
+    if (event.cron === "* * * * *" && env.NATHAN_APP_ORIGIN) {
+      await deliverLogouts(env,{limit:100});
+      return;
+    }
     await env.DB.prepare("DELETE FROM nathan_mcp_limits WHERE expires_at < unixepoch()").run();
+    await pruneEmailOtpLimits(env.DB);
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM nathan_email_sign_ins WHERE expires_at<=unixepoch()"),
+      env.DB.prepare("DELETE FROM nathan_email_delivery_order WHERE expires_at<=unixepoch()"),
+      env.DB.prepare("DELETE FROM verification WHERE (identifier GLOB 'nathan-email:*' OR identifier GLOB 'hosted-email-*') AND unixepoch(expiresAt)<=unixepoch()")
+    ]);
     await pruneRbacChanges(env);
     await pruneMcp(env);
     await pruneSamlIdp(env);
-    await pruneEmailOtpLimits(env.DB);
     // NATH-11: retry due back-channel logouts (connection Durable Objects also retry their own).
     await deliverLogouts(env,{limit:100}).catch(()=>{});
   }
@@ -625,28 +661,24 @@ export class NathanVerifier extends WorkerEntrypoint<AuthEnv, BindingProps> {
     return resolveAccess(this.env, scope.app, input?.subject);
   }
   /**
-   * NATH-52: the pinned app asks for an email code and shows its own form.
-   * Unavailable unless this instance is AUTH_MODE=single-app. The answer does
-   * not say whether a message was sent. Mail stays off this call's wait when
-   * the runtime can defer it, so the answer's timing does not reveal the address.
-   */
-  async beginEmailSignIn(input: { email?: string; ip?: string }) {
-    const scope = scopedApplication(this.ctx.props, undefined);
-    if (!scope.ok) return { ok: false, error: "unavailable" };
-    const waitUntil = this.ctx.waitUntil?.bind(this.ctx);
-    return beginEmailSignIn(this.env, input, waitUntil);
-  }
-  /** NATH-52: a correct code returns the person. No cookie, token, or admin role. */
-  async finishEmailSignIn(input: { email?: string; code?: string; ip?: string }) {
-    const scope = scopedApplication(this.ctx.props, undefined);
-    if (!scope.ok) return { ok: false, error: "unavailable" };
-    return finishEmailSignIn(this.env, input);
-  }
-  /**
    * NATH-14 grant check for remote MCP servers (the SDK's nathanMcp()): verifies the access token,
    * and returns the scopes it may use now = token ∩ live grant ∩ the user's current permissions.
    * Like every call here it is app-scoped: only resources of the pinned application are answered.
    */
+  /**
+   * NATH-52: email sign-in for a pinned single-app binding. The app draws the form.
+   * The answer is a subject and email, never a session cookie, token, or admin role.
+   */
+  async beginEmailSignIn(input: { email?: string; ip?: string }) {
+    const scope = scopedApplication(this.ctx.props, undefined);
+    if (!scope.ok) return { ok: false, error: "unavailable" as const };
+    return beginSingleAppSignIn(this.env, input, this.ctx);
+  }
+  async finishEmailSignIn(input: { email?: string; code?: string; ip?: string }) {
+    const scope = scopedApplication(this.ctx.props, undefined);
+    if (!scope.ok) return { ok: false, error: "unavailable" as const };
+    return finishSingleAppSignIn(this.env, input, this.ctx);
+  }
   async mcpGrant(input: { token: string; resource: string }) {
     const scope = scopedApplication(this.ctx.props, undefined);
     if (!scope.ok || !input || typeof input.token !== "string" || typeof input.resource !== "string") return { active: false };

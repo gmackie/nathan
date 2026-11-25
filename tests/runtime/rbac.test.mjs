@@ -9,7 +9,7 @@ import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync } from "node:fs";
 import { SignJWT, UnsecuredJWT, exportJWK, generateKeyPair } from "jose";
-import { bundle, migrate, randomKey, cookiesOf, start, COMPAT, enrollAdmin, insertSession, studioPost, nathanUserToken, nathanClientToken } from "./helpers.mjs";
+import { bundle, migrate, migrateGateway, randomKey, cookiesOf, start, COMPAT, enrollAdmin, insertSession, studioPost, nathanUserToken, nathanClientToken } from "./helpers.mjs";
 
 const AUTH_HOST = "login.example.test";
 const AUTH_ORIGIN = "https://" + AUTH_HOST;
@@ -88,7 +88,7 @@ before(async () => {
       }
     ]
   });
-  await migrate(await mf.getD1Database("SESSIONS", "gateway"), "migrations/gateway/0001_sessions.sql");
+  await migrateGateway(await mf.getD1Database("SESSIONS", "gateway"));
   authDb = await mf.getD1Database("DB", "auth");
   for (const file of readdirSync("migrations").filter(f => f.endsWith(".sql")).sort()) await migrate(authDb, "migrations/" + file);
   gateway = await mf.getWorker("gateway");

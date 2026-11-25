@@ -7,7 +7,6 @@ import { displayName } from "../shared/providers.mjs";
 import { providerStudioSection, providerStudioScript } from "./provider-ui.mjs";
 import { samlStudioSection, samlStudioScript } from "./saml-ui.mjs";
 import { samlIdpStudioSection, samlIdpStudioScript } from "./saml-idp-ui.mjs";
-import { signedOAuthQuery } from "./oauth-query.mjs";
 const htmlEscape = (s: string) => s.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 
 function page(title: string, body: string, script = ""): Response {
@@ -33,152 +32,12 @@ function page(title: string, body: string, script = ""): Response {
   });
 }
 
-export function signInPage(providers: string[], passwordEnabled: boolean, enterpriseSso=false, emailCode=false): Response {
-  const buttons=providers.map(p=>'<button data-provider="'+htmlEscape(p)+'">Continue with '+htmlEscape(displayName(p))+'</button>').join("");
-  const password=passwordEnabled?'<h2>Email/password</h2><label>Email<input id="email" type="email" autocomplete="username"></label>'+
-    '<label>Password<input id="password" type="password" autocomplete="current-password"></label>'+
-    '<button id="password-submit">Sign in</button>'+
-    '<div id="two-factor" hidden><label>Authenticator code<input id="totp-code" autocomplete="one-time-code" inputmode="numeric"></label>'+
-    '<button id="two-factor-submit">Verify second factor</button></div>':"";
-  const sso=enterpriseSso?'<h2>Work or school account</h2>'+
-    '<label>Corporate email address<input id="sso-email" type="email" autocomplete="email" placeholder="you@company.com"></label>'+
-    '<button id="sso-submit">Sign in with SSO</button>':"";
-  // NATH-49: passwordless email sign-in. Two steps on one page: the address, then the emailed code.
-  const otp=emailCode?'<h2>Email code</h2>'+
-    '<form id="otp-request"><label>Email address<input id="otp-email" type="email" autocomplete="email" required></label>'+
-    '<button type="submit">Email me a code</button></form>'+
-    '<form id="otp-verify" hidden><label>6-digit code from the email<input id="otp-code" inputmode="numeric" autocomplete="one-time-code" '+
-    'pattern="[0-9]{6}" maxlength="6" required aria-describedby="otp-help"></label>'+
-    '<small id="otp-help">The code expires in 10 minutes.</small><br>'+
-    '<button type="submit">Sign in</button><button type="button" class="secondary" id="otp-restart">Use a different email</button></form>':"";
-  const passkey='<h2>Passkey</h2><button id="passkey-login">Sign in with passkey</button>';
-  return page("Sign in",'<p>Use your configured identity provider, passkey'+(emailCode?', a code sent to your email':'')+', or approved enterprise account.</p>'+
-    buttons+passkey+otp+sso+password+'<p id="status" role="alert"></p>',String.raw`
-    const status=document.getElementById('status');
-    // An app's /oauth2/authorize sent the browser here with a signed query; every sign-in request
-    // carries it so Better Auth resumes that authorization (back to the app) instead of landing on "/".
-    const oauthQuery=(${signedOAuthQuery.toString()})(location.search);
-    const withOAuth=b=>oauthQuery?{...b,oauth_query:oauthQuery}:b;
-    // After a sign-in, follow the resumed authorization when Better Auth returns one.
-    const land=d=>location.assign(d&&typeof d.url==='string'&&d.url?d.url:'/');
-    const unwrap=x=>x.data||x;
-    async function request(path,payload){
-      const res=await fetch('/api/auth'+path,{method:'POST',headers:{'Content-Type':'application/json'},
-        credentials:'same-origin',body:JSON.stringify(payload)});
-      const body=await res.json().catch(()=>({}));
-      if(!res.ok)throw Object.assign(Error(body.message||body.error||'Authentication failed'),{code:body.code,status:res.status});
-      return unwrap(body);
-    }
-    // NATH-16/19: a refused sign-in returns here with ?error=<code>; explain known codes with fixed text.
-    const signInErrors={ACCOUNT_NOT_ADMITTED:'This installation creates new accounts by invitation only, and this email address has no open invitation. Ask an administrator to invite it, then sign in again.',
-      ACCOUNT_DEPROVISIONED:'Your organization\'s directory has deactivated this account. Contact your administrator.',
-      BANNED_USER:'This account is blocked. Contact your administrator.'};
-    const signInError=new URLSearchParams(location.search).get('error');
-    if(signInError&&/^[A-Za-z_]{1,64}$/.test(signInError))status.textContent=Object.hasOwn(signInErrors,signInError)?signInErrors[signInError]:('Sign-in failed ('+signInError+').');
-    document.querySelectorAll('[data-provider]').forEach(b=>b.onclick=async()=>{
-      try{const d=await request('/sign-in/social',withOAuth({provider:b.dataset.provider,callbackURL:'/',errorCallbackURL:'/sign-in'}));
-        if(!d.url)throw Error('No OAuth redirect URL');location.assign(d.url);
-      }catch(e){status.textContent=e.message}
-    });
-    // NATH-49: email sign-in code. The send step answers the same for every address.
-    const otpRequest=document.getElementById('otp-request');
-    if(otpRequest){
-      const otpVerify=document.getElementById('otp-verify'),otpEmail=document.getElementById('otp-email'),otpCode=document.getElementById('otp-code');
-      const otpErrors={INVALID_OTP:'That code is not right. Check the email and try again.',
-        OTP_EXPIRED:'That code has expired. Use a different email or request a new code.',
-        TOO_MANY_ATTEMPTS:'Too many wrong codes. Request a new code.'};
-      const showRequest=()=>{otpVerify.hidden=true;otpRequest.hidden=false;otpCode.value='';otpEmail.focus()};
-      otpRequest.onsubmit=async e=>{
-        e.preventDefault();
-        try{
-          await request('/email-otp/send-verification-otp',{email:otpEmail.value.trim(),type:'sign-in'});
-          otpRequest.hidden=true;otpVerify.hidden=false;
-          status.textContent='If this address can sign in here, a code is on its way to it. Enter it below.';
-          otpCode.focus();
-        }catch(err){status.textContent=err.message}
-      };
-      otpVerify.onsubmit=async e=>{
-        e.preventDefault();
-        try{
-          land(await request('/sign-in/email-otp',withOAuth({email:otpEmail.value.trim(),otp:otpCode.value.replace(/\s/g,'')})));
-        }catch(err){
-          status.textContent=Object.hasOwn(otpErrors,err.code||'')?otpErrors[err.code]:err.message;
-          if(err.code==='TOO_MANY_ATTEMPTS'||err.code==='OTP_EXPIRED')showRequest();
-        }
-      };
-      document.getElementById('otp-restart').onclick=showRequest;
-    }
-    const pwd=document.getElementById('password-submit');
-    if(pwd)pwd.onclick=async()=>{
-      try{
-        const d=await request('/sign-in/email',withOAuth({email:document.getElementById('email').value,
-          password:document.getElementById('password').value}));
-        if(d.twoFactorRedirect){
-          document.getElementById('two-factor').hidden=false;
-          status.textContent='Enter the code from your authenticator to finish signing in.';
-        }else land(d);
-      }catch(e){status.textContent=e.message}
-    };
-    const totp=document.getElementById('two-factor-submit');
-    if(totp)totp.onclick=async()=>{
-      try{
-        land(await request('/two-factor/verify-totp',withOAuth({code:document.getElementById('totp-code').value,trustDevice:false})));
-      }catch(e){status.textContent=e.message}
-    };
-    const sso=document.getElementById('sso-submit');
-    if(sso)sso.onclick=async()=>{
-      try{
-        // Nathan routes the email domain to its enabled SAML or verified OIDC connection.
-        const res=await fetch('/sign-in/sso/start',{method:'POST',headers:{'Content-Type':'application/json'},
-          credentials:'same-origin',body:JSON.stringify(withOAuth({email:document.getElementById('sso-email').value}))});
-        const d=unwrap(await res.json().catch(()=>({})));if(!res.ok)throw Error(d.error||d.message||'SSO provider unavailable');
-        if(!d.url)throw Error('SSO provider unavailable');
-        location.assign(d.url);
-      }catch(e){status.textContent=e.message}
-    };
-    const decode=s=>Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
-    const encode=b=>{
-      let s='';for(const x of new Uint8Array(b))s+=String.fromCharCode(x);
-      return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
-    };
-    document.getElementById('passkey-login').onclick=async()=>{
-      try{
-        if(!window.PublicKeyCredential)throw Error('Passkeys are unavailable in this browser');
-        const optRes=await fetch('/api/auth/passkey/generate-authenticate-options',{credentials:'same-origin'});
-        const options=await optRes.json();if(!optRes.ok)throw Error('Passkey challenge unavailable');
-        const publicKey=unwrap(options).publicKey||unwrap(options);
-        publicKey.challenge=decode(publicKey.challenge);
-        if(publicKey.allowCredentials)publicKey.allowCredentials=publicKey.allowCredentials.map(c=>({...c,id:decode(c.id)}));
-        const cred=await navigator.credentials.get({publicKey});
-        if(!cred)throw Error('Passkey authentication cancelled');
-        const response={id:cred.id,rawId:encode(cred.rawId),type:'public-key',
-          response:{clientDataJSON:encode(cred.response.clientDataJSON),
-            authenticatorData:encode(cred.response.authenticatorData),
-            signature:encode(cred.response.signature),
-            userHandle:cred.response.userHandle?encode(cred.response.userHandle):undefined},
-          clientExtensionResults:cred.getClientExtensionResults()};
-        land(await request('/passkey/verify-authentication',withOAuth({response})));
-      }catch(e){status.textContent=e.message}
-    };
-  `);
-}
-export function consentPage(verified: boolean, clientName: string, scope: string): Response {
-  if(!verified) return new Response("Invalid or expired consent request", {status:400});
-  return page("Authorize application", `<p><strong>${htmlEscape(clientName)}</strong> requests access.</p><p>Requested scopes: ${htmlEscape(scope)}</p><button id="allow">Allow</button><button class="secondary" id="deny">Deny</button><p id="status" role="alert"></p>`, `
-    async function consent(accept){
-      try{
-        const r=await fetch('/api/auth/oauth2/consent',{method:'POST',headers:{'content-type':'application/json'},credentials:'same-origin',body:JSON.stringify({accept,oauth_query:new URLSearchParams(location.search).toString()})});
-        const d=await r.json();if(!r.ok)throw Error('Consent failed');if(d.url)location.assign(d.url);else location.assign('/');
-      }catch(e){document.getElementById('status').textContent=e.message}
-    }
-    document.getElementById('allow').onclick=()=>consent(true);
-    document.getElementById('deny').onclick=()=>consent(false);
-  `);
-}
+// NATH-38: signInPage and consentPage moved to ./hosted-pages.tsx (stock Kumo, islands, no inline script).
 export function studioPage(userEmail: string): Response {
   return page("Identity Studio", `<nav><a href="/security">My security settings</a> · <a href="/sign-in">Switch identity</a></nav><div id="studio-tabs" role="tablist"></div><div id="studio-root"><p>Signed in as <strong>${htmlEscape(userEmail)}</strong>.</p><h2>Register OIDC client</h2><p>Workers, external HTTPS apps, and gateway clients can use the same issuer.</p>
   <label>Client name<input id="name" placeholder="My application"></label>
-  <label>Exact HTTPS redirect URI<input id="redirect" placeholder="https://app.example.com/oauth/callback"></label><label>Client type<select id="kind"><option value="external">External web app</option><option value="worker">Cloudflare Worker</option><option value="gateway">Nathan gateway</option><option value="mcp">MCP administrator</option></select></label><label><input type="checkbox" id="public-client"> Public OIDC client (PKCE, no secret)</label>
+  <label>Client type<select id="kind"><option value="external">External web app</option><option value="worker">Cloudflare Worker</option><option value="gateway">Nathan gateway</option><option value="mcp">MCP administrator</option><option value="native">Native mobile app (public, PKCE S256)</option></select></label>
+  <label><span id="redirect-label">Exact HTTPS redirect URI</span><input id="redirect" placeholder="https://app.example.com/oauth/callback"></label><label id="public-client-option"><input type="checkbox" id="public-client"> Public OIDC client (PKCE, no secret)</label>
   <button id="create">Register client</button><p id="status" role="alert"></p><pre id="result"></pre>
   <p><small>Client secrets are shown once. Store them in a secure manager.</small></p><h2>Registered applications</h2><button class="secondary" id="refresh">Refresh registered clients</button><pre id="clients" aria-live="polite"></pre><h3>Disable or resume OIDC client</h3><label>Client ID<input id="manage-client" placeholder="OIDC client_id"></label><button class="secondary" id="disable-client">Disable</button><button class="secondary" id="enable-client">Re-enable</button><p id="manage-status" role="status"></p><h2>Authentication and MFA policy</h2>
   <p>Nathan's effective security posture combines the selected installer profile with any stricter policy configured here. Administrators may increase requirements without redeploying, but weakening a baseline requires a separately reviewed Cloudflare operator change. Federated NIST AAL claims remain unsupported until validated.</p>
@@ -522,10 +381,17 @@ ${providerStudioScript}
     });
     if(tabs.firstElementChild)tabs.firstElementChild.click();
 
+    const clientKind=document.getElementById('kind');
+    clientKind.onchange=()=>{
+      const native=clientKind.value==='native';
+      document.getElementById('public-client-option').hidden=native;
+      document.getElementById('redirect-label').textContent=native?'Exact reverse-domain callback or app-claimed HTTPS link':'Exact HTTPS redirect URI';
+      document.getElementById('redirect').placeholder=native?'io.example.app:/oauth':'https://app.example.com/oauth/callback';
+    };
     document.getElementById('create').onclick=async()=>{
       const status=document.getElementById('status');status.textContent='Creating...';
       try{
-        const r=await fetch('/studio/api/clients',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify({name:document.getElementById('name').value,redirectUri:document.getElementById('redirect').value,kind:document.getElementById('kind').value,publicClient:document.getElementById('public-client').checked})});
+        const r=await fetch('/studio/api/clients',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify({name:document.getElementById('name').value,redirectUri:document.getElementById('redirect').value,kind:clientKind.value,publicClient:clientKind.value==='native'||document.getElementById('public-client').checked})});
         const d=await r.json();if(!r.ok)throw Error(d.error||'Failed');status.textContent='Client created';
         document.getElementById('result').textContent=JSON.stringify(d,null,2);
       }catch(e){status.textContent=e.message}

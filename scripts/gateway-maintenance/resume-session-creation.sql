@@ -1,0 +1,1 @@
+DROP TRIGGER IF EXISTS nathan_gateway_pause_session_creation;
