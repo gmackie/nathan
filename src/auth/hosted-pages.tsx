@@ -36,6 +36,7 @@ export interface HostedPageOptions {
 export interface SignInOptions extends HostedPageOptions {
   /** The ?error= code a refused sign-in returned with (NATH-16/19). */
   error?: string | null;
+  emailHref?: string;
 }
 
 /** Fixed explanations for refusal codes a sign-in can return with. The code is always shown too. */
@@ -134,6 +135,7 @@ export function signInPage(providers: string[], passwordEnabled: boolean, enterp
   // The primary method comes first; the others keep their usual order.
   const blocks: { method: string; node: ReactNode }[] = [
     { method: "provider", node: providerButtons }, { method: "passkey", node: passkey },
+    { method: "email-otp", node: opts.emailHref && <p key="email-otp"><a href={opts.emailHref}>Sign in by email</a></p> },
     { method: "sso", node: sso }, { method: "email", node: password }
   ].filter(b => b.node);
   const lead = primary.startsWith("provider:") ? "provider" : primary;

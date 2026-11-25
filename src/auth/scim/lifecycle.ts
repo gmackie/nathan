@@ -28,6 +28,7 @@
  * several batches, possibly across invocations, and is marked applied only when complete.
  */
 import type { AuthEnv } from "../env";
+import { revokeUserSessions } from "../session-revocation.ts";
 import { changeStatement, auditStatement } from "../../shared/rbac-store.mjs";
 import { admissionMode, openInvitation, claimInvitationStatement } from "../admission-policy.mjs";
 
@@ -443,11 +444,7 @@ export async function applyUser(env: AuthEnv, policy: ConnectionPolicy, snap: Us
               "EXISTS (SELECT 1 FROM \"oauthRefreshToken\" t WHERE t.\"clientId\"=c.\"clientId\" AND t.\"userId\"=?) OR " +
               "EXISTS (SELECT 1 FROM \"oauthConsent\" t WHERE t.\"clientId\"=c.\"clientId\" AND t.\"userId\"=?))",
               userId, connection, "scim." + cause, userId, userId, userId));
-            // Every session and token goes, offline_access refresh tokens included: the person left.
-            tail.push(
-              statement('DELETE FROM "session" WHERE "userId"=?', userId),
-              statement('UPDATE "oauthAccessToken" SET "revoked"=? WHERE "userId"=? AND "revoked" IS NULL', now, userId),
-              statement('UPDATE "oauthRefreshToken" SET "revoked"=? WHERE "userId"=? AND "revoked" IS NULL', now, userId));
+            tail.push(...revokeUserSessions(userId, now));
             if (transition) {
               tail.push(
                 changeStatement({ kind: "user.deprovisioned", principalType: "user", principalId: userId, detail: { connection, cause }, actor }),

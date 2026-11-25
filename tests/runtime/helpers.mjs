@@ -10,8 +10,14 @@ export function bundle(name) {
   return path;
 }
 
-/** Applies a migration file statement by statement; D1's exec() rejects multi-line statements.
- * A CREATE TRIGGER ... BEGIN ...; END statement is kept whole. */
+export function authFixtureModules() {
+  return [
+    { type: "ESModule", path: "tests/runtime/fixtures/auth-worker.mjs" },
+    { type: "ESModule", path: bundle("auth") }
+  ];
+}
+
+/** Apply a migration in one D1 batch, preserving complete CREATE TRIGGER bodies. */
 export async function migrate(db, file) {
   const sql = readFileSync(file, "utf8")
     .split("\n").filter(line => !line.trim().startsWith("--")).join("\n");
@@ -24,7 +30,12 @@ export async function migrate(db, file) {
     if (/\bEND$/i.test(trigger)) { statements.push(trigger); trigger = null; }
   }
   if (trigger !== null) throw Error("Unterminated CREATE TRIGGER in " + file);
-  for (const statement of statements) await db.prepare(statement).run();
+  if (statements.length) await db.batch(statements.map(statement => db.prepare(statement)));
+}
+
+export async function migrateGateway(db, afterFile = "") {
+  for (const file of readdirSync("migrations/gateway").filter(f => f.endsWith(".sql") && f > afterFile).sort())
+    await migrate(db, "migrations/gateway/" + file);
 }
 
 export function base64url(bytes) {
@@ -68,10 +79,15 @@ export async function authWorker(host, vars = {}, options = {}) {
       BETTER_AUTH_SECRET: randomKey() + randomKey(), NATHAN_CONFIG_KEY: randomKey(), ...vars
     }
   });
-  const db = await mf.getD1Database("DB");
-  for (const file of readdirSync("migrations").filter(f => f.endsWith(".sql")).sort())
-    await migrate(db, "migrations/" + file);
-  return mf;
+  try {
+    const db = await mf.getD1Database("DB");
+    for (const file of readdirSync("migrations").filter(f => f.endsWith(".sql")).sort())
+      await migrate(db, "migrations/" + file);
+    return mf;
+  } catch (error) {
+    await mf.dispose();
+    throw error;
+  }
 }
 
 // ---- Real Better Auth sessions and Nathan-issued tokens -----------------------------------------

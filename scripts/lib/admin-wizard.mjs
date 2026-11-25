@@ -9,6 +9,37 @@ export function validateAdminPromotion(email, cfg) {
   if (!allowed.has(candidate)) throw Error("Email is not in NATHAN_ADMIN_EMAILS; update and deploy the allowlist first");
   return candidate;
 }
+// The same identity and ownership predicates guard both writes and the final read.
+export async function promoteBootstrapOwner(api, dbId, accountId, email, userId) {
+  const params = [userId, email, "cli:" + accountId];
+  const eligible = `SELECT u.id
+    FROM "user" u JOIN nathan_bootstrap_status b ON b.id = 'primary'
+    WHERE u.id = ? AND lower(u.email) = ? AND b.cloudflare_user_id = ?
+      AND b.admin_email = lower(u.email) AND u.emailVerified = 1 AND coalesce(u.banned, 0) = 0
+      AND (b.admin_user_id IS NULL OR b.admin_user_id = u.id)
+      AND b.state IN ('pending', 'identity_verified', 'authenticators_enrolled', 'complete')
+      AND (SELECT count(*) FROM "user" other WHERE lower(other.email) = lower(u.email)) = 1`;
+  const bound = eligible + " AND b.admin_user_id = u.id AND b.state <> 'pending'";
+  const statements = [
+    {sql: `INSERT INTO nathan_security_audit (id,actor,action,target,outcome)
+      SELECT ?, ?, 'admin_bootstrap', ?, 'succeeded'
+      WHERE EXISTS (${eligible} AND (u.role IS NOT 'admin' OR b.admin_user_id IS NULL OR b.state = 'pending'))`,
+      params: [crypto.randomUUID(), "cli:" + accountId, userId, ...params]},
+    {sql: `UPDATE nathan_bootstrap_status SET admin_user_id = ?,
+      state = CASE WHEN state = 'pending' THEN 'identity_verified' ELSE state END,
+      updated_at = unixepoch()
+      WHERE id = 'primary' AND (admin_user_id IS NULL OR state = 'pending') AND EXISTS (${eligible})`,
+      params: [userId, ...params]},
+    {sql: `UPDATE "user" SET role = 'admin' WHERE id IN (${bound}) AND role IS NOT 'admin'`, params},
+    {sql: bound + " AND u.role = 'admin'", params}
+  ];
+  const results = await api.batchDatabase(dbId, statements);
+  const verified = results.at(-1);
+  if (verified.length !== 1 || verified[0].id !== userId) {
+    throw Error("The verified account does not match the CLI installation's bootstrap owner");
+  }
+}
+
 export async function adminCommand(args, file, apply) {
   const cfg = await loadConfig(file);
   if (args[0] !== "promote") {
@@ -29,29 +60,7 @@ export async function adminCommand(args, file, apply) {
   if (rows.length !== 1 || rows[0].emailVerified !== 1) {
     throw Error("The verified user was not found. Complete an upstream OAuth sign-in and email verification first.");
   }
-  if (rows[0].role === "admin") {
-    console.log("Verified admin already holds the role; no change.");
-    return;
-  }
-  if (!(await yesNo("Promote this verified allowlisted user to Nathan admin?"))) throw Error("Cancelled");
-  await api.queryDatabase(dbId,
-    'UPDATE "user" SET "role" = ? WHERE "id" = ? AND "emailVerified" = 1',
-    ["admin", rows[0].id]
-  );
-  const confirm = await api.queryDatabase(dbId,
-    'SELECT "role" FROM "user" WHERE "id" = ? AND "emailVerified" = 1',
-    [rows[0].id]
-  );
-  if (confirm.length !== 1 || confirm[0].role !== "admin") throw Error("Admin promotion verification failed");
-  const claimed=await api.queryDatabase(dbId,
-    "UPDATE nathan_bootstrap_status SET admin_user_id=?,state='identity_verified',updated_at=unixepoch() "+
-    "WHERE id='primary' AND admin_email=? AND cloudflare_user_id=? "+
-    "AND (admin_user_id IS NULL OR admin_user_id=?)",
-    [rows[0].id,email,"cli:"+cfg.accountId,rows[0].id]);
-  const boot=await api.queryDatabase(dbId,
-    "SELECT admin_user_id FROM nathan_bootstrap_status WHERE id='primary' LIMIT 1",[]);
-  if(boot.length!==1 || boot[0].admin_user_id!==rows[0].id)
-    throw Error("Bootstrap ownership binding failed; admin account requires manual security review");
-
-  console.log("Promoted verified allowlisted administrator. Enroll MFA immediately.");
+  if (!(await yesNo("Bind this verified allowlisted user as the installation administrator?", false))) throw Error("Cancelled");
+  await promoteBootstrapOwner(api, dbId, cfg.accountId, email, rows[0].id);
+  console.log("Verified administrator bound. Complete authenticator enrollment at /security.");
 }

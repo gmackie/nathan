@@ -36,7 +36,8 @@ function page(title: string, body: string, script = ""): Response {
 export function studioPage(userEmail: string): Response {
   return page("Identity Studio", `<nav><a href="/security">My security settings</a> · <a href="/sign-in">Switch identity</a></nav><div id="studio-tabs" role="tablist"></div><div id="studio-root"><p>Signed in as <strong>${htmlEscape(userEmail)}</strong>.</p><h2>Register OIDC client</h2><p>Workers, external HTTPS apps, and gateway clients can use the same issuer.</p>
   <label>Client name<input id="name" placeholder="My application"></label>
-  <label>Exact HTTPS redirect URI<input id="redirect" placeholder="https://app.example.com/oauth/callback"></label><label>Client type<select id="kind"><option value="external">External web app</option><option value="worker">Cloudflare Worker</option><option value="gateway">Nathan gateway</option><option value="mcp">MCP administrator</option></select></label><label><input type="checkbox" id="public-client"> Public OIDC client (PKCE, no secret)</label>
+  <label>Client type<select id="kind"><option value="external">External web app</option><option value="worker">Cloudflare Worker</option><option value="gateway">Nathan gateway</option><option value="mcp">MCP administrator</option><option value="native">Native mobile app (public, PKCE S256)</option></select></label>
+  <label><span id="redirect-label">Exact HTTPS redirect URI</span><input id="redirect" placeholder="https://app.example.com/oauth/callback"></label><label id="public-client-option"><input type="checkbox" id="public-client"> Public OIDC client (PKCE, no secret)</label>
   <button id="create">Register client</button><p id="status" role="alert"></p><pre id="result"></pre>
   <p><small>Client secrets are shown once. Store them in a secure manager.</small></p><h2>Registered applications</h2><button class="secondary" id="refresh">Refresh registered clients</button><pre id="clients" aria-live="polite"></pre><h3>Disable or resume OIDC client</h3><label>Client ID<input id="manage-client" placeholder="OIDC client_id"></label><button class="secondary" id="disable-client">Disable</button><button class="secondary" id="enable-client">Re-enable</button><p id="manage-status" role="status"></p><h2>Authentication and MFA policy</h2>
   <p>Nathan's effective security posture combines the selected installer profile with any stricter policy configured here. Administrators may increase requirements without redeploying, but weakening a baseline requires a separately reviewed Cloudflare operator change. Federated NIST AAL claims remain unsupported until validated.</p>
@@ -380,10 +381,17 @@ ${providerStudioScript}
     });
     if(tabs.firstElementChild)tabs.firstElementChild.click();
 
+    const clientKind=document.getElementById('kind');
+    clientKind.onchange=()=>{
+      const native=clientKind.value==='native';
+      document.getElementById('public-client-option').hidden=native;
+      document.getElementById('redirect-label').textContent=native?'Exact reverse-domain callback or app-claimed HTTPS link':'Exact HTTPS redirect URI';
+      document.getElementById('redirect').placeholder=native?'io.example.app:/oauth':'https://app.example.com/oauth/callback';
+    };
     document.getElementById('create').onclick=async()=>{
       const status=document.getElementById('status');status.textContent='Creating...';
       try{
-        const r=await fetch('/studio/api/clients',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify({name:document.getElementById('name').value,redirectUri:document.getElementById('redirect').value,kind:document.getElementById('kind').value,publicClient:document.getElementById('public-client').checked})});
+        const r=await fetch('/studio/api/clients',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify({name:document.getElementById('name').value,redirectUri:document.getElementById('redirect').value,kind:clientKind.value,publicClient:clientKind.value==='native'||document.getElementById('public-client').checked})});
         const d=await r.json();if(!r.ok)throw Error(d.error||'Failed');status.textContent='Client created';
         document.getElementById('result').textContent=JSON.stringify(d,null,2);
       }catch(e){status.textContent=e.message}

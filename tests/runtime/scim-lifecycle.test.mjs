@@ -8,7 +8,7 @@ import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { SignJWT, exportJWK, generateKeyPair } from "jose";
-import { bundle, migrate, randomKey, cookiesOf, start, COMPAT, enrollAdmin, insertSession, studioPost } from "./helpers.mjs";
+import { bundle, migrate, migrateGateway, randomKey, cookiesOf, start, COMPAT, enrollAdmin, insertSession, studioPost } from "./helpers.mjs";
 
 const AUTH_HOST = "login.example.test";
 const AUTH_ORIGIN = "https://" + AUTH_HOST;
@@ -84,7 +84,7 @@ before(async () => {
     ]
   });
   gatewayDb = await mf.getD1Database("SESSIONS", "gateway");
-  await migrate(gatewayDb, "migrations/gateway/0001_sessions.sql");
+  await migrateGateway(gatewayDb);
   db = await mf.getD1Database("DB", "auth");
   for (const file of readdirSync("migrations").filter(f => f.endsWith(".sql")).sort()) await migrate(db, "migrations/" + file);
   auth = await mf.getWorker("auth");
@@ -254,9 +254,9 @@ test("deactivation bans, revokes sessions and tokens, logs out the gateway and b
   assert.deepEqual({ ...delivery }, { state: "delivered", attempts: 1, last_status: "204" });
   assert.equal((await gatewayDb.prepare("SELECT count(*) AS n FROM nathan_gateway_sessions WHERE subject='u-alice'").first()).n, 0);
   assert.notEqual((await viaGateway(gatewayCookie)).status, 200);
-  // A gateway session obtained anyway (here from the mock IdP) is refused within the 1 s cache window.
-  const fresh = await login("u-alice");
+  // Issue a fresh mock IdP proof after the logout second and the 1 s access-cache window.
   await sleep(1100);
+  const fresh = await login("u-alice");
   assert.equal((await viaGateway(fresh)).status, 403);
 });
 
@@ -365,19 +365,18 @@ test("while an earlier change is pending, a different later change is refused (5
   await issueTokens("u-alice", session.id);
   const addKim = fill(okta.addMember, { USER_ID: kim.id });
   await sql("ALTER TABLE nathan_backchannel_deliveries RENAME TO hidden_deliveries");
-  let earlier, later, staged;
   try {
-    earlier = await scim("acme", "PATCH", "/Users/" + alice.id, entra.disableUser);
-    later = await scim("acme", "PATCH", "/Groups/" + oktaGroup.id, addKim);
-    staged = await ok(await scim("acme", "GET", "/Groups/" + oktaGroup.id));
+    const earlier = await scim("acme", "PATCH", "/Users/" + alice.id, entra.disableUser);
+    const later = await scim("acme", "PATCH", "/Groups/" + oktaGroup.id, addKim);
+    const staged = await ok(await scim("acme", "GET", "/Groups/" + oktaGroup.id));
+    assert.equal(earlier.status, 503, "the deactivation could not be applied");
+    assert.equal(later.status, 503, "a different change is refused while an earlier one is pending");
+    assert.equal(later.headers.get("Retry-After"), "10");
+    assert.ok(!staged.members.some(m => m.value === kim.id), "the refused change was not staged");
+    assert.equal(await banned("u-alice"), false, "nothing was applied");
+    assert.equal((await nathanSession(session.cookie))?.user?.id, "u-alice");
+    assert.equal(await one("SELECT 1 FROM nathan_group_members WHERE group_id='engineering' AND user_id='u-kim'"), null);
   } finally { await sql("ALTER TABLE hidden_deliveries RENAME TO nathan_backchannel_deliveries"); }
-  assert.equal(earlier.status, 503, "the deactivation could not be applied");
-  assert.equal(later.status, 503, "a different change is refused while an earlier one is pending");
-  assert.equal(later.headers.get("Retry-After"), "10");
-  assert.ok(!staged.members.some(m => m.value === kim.id), "the refused change was not staged");
-  assert.equal(await banned("u-alice"), false, "nothing was applied");
-  assert.equal((await nathanSession(session.cookie))?.user?.id, "u-alice");
-  assert.equal(await one("SELECT 1 FROM nathan_group_members WHERE group_id='engineering' AND user_id='u-kim'"), null);
   // The directory retries the later change: the earlier one is applied first, then this one.
   await ok(await scim("acme", "PATCH", "/Groups/" + oktaGroup.id, addKim));
   assert.equal(await banned("u-alice"), true);
@@ -418,9 +417,9 @@ test("a failed back-channel delivery stays queued and is retried by the schedule
   const hal = await ok(await scim("acme", "POST", "/Users", { ...okta.createUser, userName: "hal@acme.example", externalId: "00u-hal",
     emails: [{ value: "hal@acme.example", primary: true, type: "work" }] }), 201);
   // The gateway cannot record the logout, so it answers 503 (retry).
-  await gatewayDb.prepare("ALTER TABLE nathan_gateway_logout_jti RENAME TO hidden_jti").run();
+  await gatewayDb.prepare("ALTER TABLE nathan_gateway_logout_receipts RENAME TO hidden_receipts").run();
   try { await ok(await scim("acme", "PATCH", "/Users/" + hal.id, okta.deactivateUser)); }
-  finally { await gatewayDb.prepare("ALTER TABLE hidden_jti RENAME TO nathan_gateway_logout_jti").run(); }
+  finally { await gatewayDb.prepare("ALTER TABLE hidden_receipts RENAME TO nathan_gateway_logout_receipts").run(); }
   assert.equal((await one('SELECT "banned" AS banned FROM "user" WHERE "id"=\'u-hal\'')).banned, 1, "revocation does not wait for relying parties");
   const pending = await one("SELECT state, attempts, last_status FROM nathan_backchannel_deliveries WHERE user_id='u-hal'");
   assert.deepEqual({ ...pending }, { state: "pending", attempts: 1, last_status: "503" });

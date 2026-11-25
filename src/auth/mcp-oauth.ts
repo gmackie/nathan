@@ -27,6 +27,7 @@ import { createLocalJWKSet, decodeJwt, jwtVerify } from "jose";
 import { signJWT } from "better-auth/plugins/jwt";
 import type { AuthEnv } from "./env";
 import { audit, isAdminPrincipal } from "./admin-service";
+import { allowRequests } from "./request-limit";
 import { resolveAccess } from "./rbac";
 import { rolesClaim, validateAudience } from "../shared/token-claims.mjs";
 import { makeCookie, parseCookie, safeReturnPath, constantTimeEqual, redirectWithCookies } from "../shared/security.mjs";
@@ -75,14 +76,8 @@ async function sha256(value: string) {
 }
 const pkceChallenge = sha256;
 
-/** Fixed-window limit in nathan_mcp_limits (migration 0004); keys hold hashes, never raw IPs. */
-async function allow(env: AuthEnv, name: string, subject: string, limit: number, windowSeconds = 60) {
-  const bucket = Math.floor(Date.now() / (windowSeconds * 1000));
-  const key = "mcp-oauth:" + name + ":" + (await sha256(subject)).slice(0, 22) + ":" + bucket;
-  const row = await env.DB.prepare("INSERT INTO nathan_mcp_limits(id,request_count,expires_at) VALUES (?,1,?) " +
-    "ON CONFLICT(id) DO UPDATE SET request_count=request_count+1 RETURNING request_count").bind(key, (bucket + 2) * windowSeconds).first<{ request_count: number }>();
-  return Boolean(row && row.request_count <= limit);
-}
+const allow = (env: AuthEnv, name: string, subject: string, limit: number, windowSeconds = 60) =>
+  allowRequests(env, "mcp-oauth:" + name, subject, limit, windowSeconds);
 const clientIp = (request: Request) => request.headers.get("cf-connecting-ip") ?? "unknown";
 function tooMany() { return oauthJson({ error: "slow_down", error_description: "Too many requests" }, 429, { "Retry-After": "60" }); }
 
@@ -483,10 +478,14 @@ async function authorizePost(request: Request, env: AuthEnv, auth: any) {
     // An empty or invalid selection re-renders the page and keeps the ticket usable.
     return consentPage({ ...built.view, error: e instanceof Error ? e.message : "Invalid scope selection" }, 400);
   }
-  if (!await takeArtifact(env, ticket, "consent")) return mcpErrorPage("Consent expired", "This consent page was already answered.");
   const code = "nmcp_ac_" + randomToken();
-  await putArtifact(env, code, "code", { clientId: data.clientId, redirectUri: data.redirectUri, challenge: data.challenge,
-    resource: data.resource, userId: data.userId, scope: stored }, MCP_CODE_SECONDS);
+  const approval = { clientId: data.clientId, redirectUri: data.redirectUri, challenge: data.challenge,
+    resource: data.resource, userId: data.userId, scope: stored };
+  // A promotion or sign-out during the consent form cannot leave a new code for the retired session.
+  const issued = await env.DB.prepare("UPDATE nathan_mcp_artifacts SET hash=?,kind='code',data=?,expires_at=? " +
+    "WHERE hash=? AND kind='consent' AND expires_at>unixepoch() AND EXISTS(SELECT 1 FROM session WHERE id=? AND userId=?)")
+    .bind(await sha256(code), JSON.stringify(approval), nowSeconds() + MCP_CODE_SECONDS, await sha256(ticket), data.sessionId, data.userId).run();
+  if (!issued.meta.changes) return mcpErrorPage("Consent expired", "This consent page expired or was already answered.");
   await audit(env, data.userId, "mcp_consent", "client=" + data.clientId + " resource=" + data.resource + " scope=" + stored, "succeeded");
   const target = new URL(data.redirectUri);
   target.searchParams.set("code", code);

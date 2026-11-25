@@ -21,3 +21,7 @@ stages:
 # Production (NATH-31): the gmacko parent instance at https://id.gmac.io, Worker nathan-prod-auth
 #   from deploy/production/wrangler.auth.jsonc with its own D1 nathan-prod-auth. Customer installs
 #   still use the CLI wizard or the hosted installer.
+# Insure's dedicated instances (NATH-50) are a separate ForgeGraph app, "insure-id", on this repository:
+#   staging    https://insure-id-stg.gmac.io  Worker nathan-insure-stg-auth   deploy/insure-staging/wrangler.auth.jsonc
+#   production https://insure-id.gmac.io      Worker nathan-insure-prod-auth  deploy/insure-production/wrangler.auth.jsonc
+#   Each has its own D1 database and its own secrets (fg secret list --app insure-id --stage <stage>).

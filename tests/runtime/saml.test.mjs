@@ -549,12 +549,14 @@ test("certificate rotation: trust the next certificate, then retire the old one"
 
 test("concurrent certificate changes never silently lose an update", async () => {
   const a = makeCertificate({ cn: "acme idp a" }), b = makeCertificate({ cn: "acme idp b" });
-  const results = await Promise.all([a, b].map(c => studio("/studio/api/saml/certificates", { providerId: PID, certificate: c.certPem })));
-  const bodies = await Promise.all(results.map(r => r.json()));
+  const results = await Promise.all([a, b].map(async c => {
+    const response = await studio("/studio/api/saml/certificates", { providerId: PID, certificate: c.certPem });
+    return { status: response.status, body: await response.json() };
+  }));
   const accepted = results.filter(r => r.status === 200).length;
-  assert.ok(accepted >= 1, JSON.stringify(bodies));
-  for (const [i, r] of results.entries())
-    if (r.status !== 200) assert.match(bodies[i].error, /changed concurrently/, "a lost race is reported, not swallowed");
+  assert.ok(accepted >= 1, JSON.stringify(results));
+  for (const { status, body } of results)
+    if (status !== 200) assert.match(body.error, /changed concurrently/, "a lost race is reported, not swallowed");
   const { certificates, samlConfig } = await db.prepare('SELECT c.certificates AS certificates,p."samlConfig" AS samlConfig FROM nathan_saml_connections c JOIN "ssoProvider" p ON p."providerId"=c.provider_id WHERE c.provider_id=?').bind(PID).first();
   const stored = JSON.parse(certificates);
   assert.equal(stored.length, 1 + accepted, "every accepted certificate is still stored");

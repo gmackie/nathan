@@ -210,6 +210,8 @@ async function uploadWorker(
     {type:"plain_text",name:"NATHAN_INSTALL_ACTIVE",text:active?"true":"false"},
     {type:"plain_text",name:"NATHAN_MCP_WRITE_ENABLED",text:"false"},
     {type:"plain_text",name:"ENABLE_PASSWORD",text:"false"},
+    // NATH-49: email sign-in codes stay off until the operator configures Resend and enables them.
+    {type:"plain_text",name:"ENABLE_EMAIL_OTP",text:"false"},
     {type:"plain_text",name:"NATHAN_SECURITY_PROFILE",text:job.profile},
     {type:"plain_text",name:"NATHAN_BOOTSTRAP_REQUIRED",text:"true"},
     {type:"plain_text",name:"NATHAN_ADMIN_STEPUP_REQUIRED",text:job.profile==="business"?"true":"false"},

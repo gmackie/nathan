@@ -87,7 +87,8 @@ test("sign-in island keeps the signed oauth_query on every request and follows d
   assert.match(js, /errorCallbackURL:\s*"\/sign-in"/);
   assert.match(js, /credentials:\s*"same-origin"/);
   assert.doesNotMatch(js, /innerHTML|insertAdjacentHTML|document\.write/, "messages use textContent");
-  assert.match(js, /ba_param/, "signedOAuthQuery is bundled into the island");
+  const chunks = ui.UI_MANIFEST.islands["sign-in"].imports.map(asset => readFileSync(".nathan/ui-assets" + asset.src, "utf8"));
+  assert.ok([js, ...chunks].some(source => source.includes("ba_param")), "the shipped sign-in module graph includes signedOAuthQuery");
 });
 
 test("sign-in explains a refused sign-in on the server, with its reason code; malformed codes are not echoed", async () => {

@@ -1,3 +1,4 @@
+import { liveAdminSession } from "./email-sign-in-policy";
 import type { AuthEnv } from "./env";
 import { audit } from "./admin-service";
 import {effectiveAdminPolicy} from "./security-policy";
@@ -56,8 +57,28 @@ export async function completeBootstrap(env:AuthEnv,userId:string) {
   return {complete:true,identityVerified:true,authenticatorsEnrolled:true,
     note:"Initial admin setup is complete. These enrollment checks alone do not establish current-session MFA."};
 }
+async function recentPasskey(env:AuthEnv,userId:string,sessionId?:string) {
+  if(!sessionId || sessionId.length>256)return false;
+  const stepup=await env.DB.prepare(
+    "SELECT session_id FROM nathan_admin_assurance WHERE session_id=? AND user_id=? "+
+    "AND method='passkey' AND verified_at>=unixepoch()-900 LIMIT 1"
+  ).bind(sessionId,userId).first();
+  return Boolean(stepup);
+}
+
+/** The first enrollment is part of operator setup. Adding another key or replacing an
+ * enrolled TOTP requires the administrator to authenticate with an existing passkey first. */
+export async function mayEnrollManagementFactor(env: AuthEnv, userId: string, sessionId: string, path: string) {
+  const registerKey = path === "/passkey/generate-register-options" || path === "/passkey/verify-registration";
+  if (!registerKey && path !== "/two-factor/enable") return true;
+  const existing = await enrollment(env, userId);
+  const alreadyEnrolled = registerKey ? existing.passkeys > 0 : existing.totpVerified;
+  return !alreadyEnrolled || await recentPasskey(env, userId, sessionId);
+}
+
 /** For any administrator, enrollment is required before privileged UI and MCP. */
 export async function mayAdminister(env:AuthEnv,userId:string,sessionId?:string) {
+  if (!await liveAdminSession(env.DB, userId, sessionId)) return false;
   if(env.NATHAN_BOOTSTRAP_REQUIRED!=="true")return true; // Legacy manual installations
   const b=await row(env);
   if(!b||b.state!=="complete")return false;
@@ -67,10 +88,5 @@ export async function mayAdminister(env:AuthEnv,userId:string,sessionId?:string)
     ?(auth.passkeys>0&&auth.totpVerified):(auth.passkeys>0||auth.totpVerified);
   if(!enrolled)return false;
   if(!policy.requireRecentPasskey)return true;
-  if(!sessionId || sessionId.length>256)return false;
-  const stepup=await env.DB.prepare(
-    "SELECT session_id FROM nathan_admin_assurance WHERE session_id=? AND user_id=? "+
-    "AND method='passkey' AND verified_at>=unixepoch()-900 LIMIT 1"
-  ).bind(sessionId,userId).first();
-  return Boolean(stepup);
+  return recentPasskey(env,userId,sessionId);
 }
