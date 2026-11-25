@@ -13,6 +13,8 @@ export interface AutoPostPageProps {
   samlResponse: string;
   relayState: string | null;
   spName: string;
+  /** NATH-38: issuer host for the fixed footer and route line. */
+  issuer?: string;
 }
 
 function acsOrigin(acsUrl: string): string {
@@ -21,10 +23,10 @@ function acsOrigin(acsUrl: string): string {
   return url.origin;
 }
 
-export function AutoPostPage({ acsUrl, samlResponse, relayState, spName }: AutoPostPageProps) {
+export function AutoPostPage({ acsUrl, samlResponse, relayState, spName, issuer }: AutoPostPageProps) {
   acsOrigin(acsUrl);
   return (
-    <AuthLayout title={"Signing you in to " + spName}>
+    <AuthLayout title={"Signing you in to " + spName} issuer={issuer} route={issuer ? spName : undefined}>
       <form method="post" action={acsUrl} id="saml-post" data-nathan-autopost="">
         <input type="hidden" name="SAMLResponse" value={samlResponse} />
         {relayState !== null ? <input type="hidden" name="RelayState" value={relayState} /> : null}

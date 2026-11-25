@@ -5,7 +5,7 @@
  */
 
 /** The only extra headers a page may add (Refresh, Link and the like would bypass page policy). */
-export const EXTRA_HEADERS = ["set-cookie", "vary", "location", "x-robots-tag"] as const;
+export const EXTRA_HEADERS = ["set-cookie", "vary", "location", "x-robots-tag", "pragma"] as const;
 
 /** Headers renderPage owns. Page-specific extras may not set or override any of them. */
 export const RESERVED_HEADERS = [
@@ -13,13 +13,27 @@ export const RESERVED_HEADERS = [
   "x-frame-options", "cross-origin-opener-policy", "strict-transport-security"
 ] as const;
 
-/** One CSP form-action source: 'self', 'none' or a bare https origin. */
+/** RFC 8252 loopback hosts; the same set validateRedirectUri (src/shared/mcp-scopes.mjs) allows over http. */
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
+ * One CSP form-action source: 'self', 'none', a bare https origin, or (NATH-38, for native MCP
+ * clients' registered loopback callbacks) a bare http origin on a loopback host.
+ */
 export function formActionSource(source: string): string {
   if (source === "'self'" || source === "'none'") return source;
   let url: URL;
   try { url = new URL(source); } catch { throw Error("Invalid form-action origin"); }
-  if (url.protocol !== "https:" || url.origin !== source || !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::\d{1,5})?$/i.test(url.host))
-    throw Error("form-action must be 'self', 'none' or a bare https origin");
+  // Independent review 2026-11-23: per scheme. https needs an exact DNS host (no "*", "_" or trailing
+  // dot; IPv4 literals also match, as validateRedirectUri allows them); http only for the loopback
+  // hosts MCP redirect validation allows (localhost, 127.0.0.1, [::1]), with or without a port.
+  // validateRedirectUri and checkAcsUrl apply the same host test, so a stored URL never fails here.
+  const dnsHost = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/i;
+  // (URL parsing already guarantees a numeric port; origin === source rules out paths, userinfo and ":443".)
+  const allowed = url.origin === source && (
+    (url.protocol === "https:" && dnsHost.test(url.hostname)) ||
+    (url.protocol === "http:" && LOOPBACK.has(url.hostname)));
+  if (!allowed) throw Error("form-action must be 'self', 'none', a bare https origin or a loopback http origin");
   return url.origin;
 }
 

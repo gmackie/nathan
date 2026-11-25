@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { readdirSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify, SignJWT } from "jose";
-import { bundle, COMPAT, cookiesOf, migrate, randomKey, start } from "./helpers.mjs";
+import { waitForEmailPublication, bundle, COMPAT, cookiesOf, migrate, randomKey, start } from "./helpers.mjs";
 
 const origin = "https://classcheck.example.test", issuer = origin + "/api/auth", resource = origin + "/api";
 const management = "https://id.example.test", callback = origin + "/auth/callback";
@@ -36,14 +36,6 @@ async function requestMail(email, query) {
   } finally {
     clearTimeout(timer);
     inbox.off(email, delivery.resolve);
-  }
-}
-
-async function waitForPublication(email) {
-  const deadline = Date.now() + deliveryTimeout;
-  while (!await db.prepare("SELECT 1 FROM nathan_email_delivery_order WHERE email=? AND delivered>0").bind(email).first()) {
-    assert.ok(Date.now() < deadline, "Nathan did not publish the email challenge");
-    await new Promise(resolve => setTimeout(resolve, 25));
   }
 }
 
@@ -121,7 +113,7 @@ for (const method of ["code","link"]) test("ClassCheck " + method + " through a 
   assert.deepEqual(await (await post("/sign-in/context", {oauth_query:query})).json(),
     {clientName:"ClassCheck",scopes,loginHint:email,enterpriseSso:false});
   const { challenge, mail } = await requestMail(email, query);
-  await waitForPublication(email);
+  await waitForEmailPublication(db, email);
   const {flowId} = await challenge.json();
   const browser = "__Host-nathan-email=" + cookiesOf(challenge)["__Host-nathan-email"].value;
   const link = new URL(mail.text.match(/https:\/\/\S+/)[0]);
@@ -195,7 +187,7 @@ test("operator bootstrap stays available to management when its email is submitt
   assert.equal(challenge.status,202);
   // A published, non-delivered challenge has no invitation_id or subject. Wait on publication so
   // an accidentally queued real delivery can't pass the assertion by finishing after the test.
-  await waitForPublication(email);
+  await waitForEmailPublication(db, email);
   assert.equal(sent, false, "the operator must receive no ClassCheck sign-in proof");
   assert.deepEqual(await db.prepare("SELECT subject_id,invitation_id FROM nathan_email_sign_ins WHERE email=?").bind(email).first(),{subject_id:null,invitation_id:null});
   assert.equal(await db.prepare("SELECT uses FROM nathan_invitations WHERE id=?").bind(idOfInvite).first("uses"),0);

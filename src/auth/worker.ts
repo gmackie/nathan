@@ -22,7 +22,8 @@ import {samlProtocolGate,handleSamlRoutes} from "./saml-routes";
 export { NathanAppAuth } from "./app-auth";
 export {NathanScimDirectory} from "./scim/directory";
 export { NathanAppProvisioner } from "./app-provisioning";
-import { signInPage, consentPage, studioPage } from "./ui";
+import { studioPage } from "./ui";
+import { signInPage, consentPage } from "./hosted-pages.tsx";
 import { securityPage } from "./security-ui";
 import { loadVerifiedRealm, listRealmClients,registerRealmClient,registerRealmClientsBatch,updateRealmClientStatus } from "./domain-realm";
 import type { AuthEnv } from "./env";
@@ -106,12 +107,14 @@ async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Pr
     const providers = enabledProviderIds(socialProviders);
     const query = signedOAuthQuery(url.search);
     const emailHref = emailEnabled(env) ? "/sign-in/email" + (query ? "?" + query : "") : undefined;
-    return signInPage(providers, env.ENABLE_PASSWORD === "true", env.ENTERPRISE_SSO === "true", emailHref);
+    return signInPage(providers, env.ENABLE_PASSWORD === "true", env.ENTERPRISE_SSO === "true",
+      { issuer: issuer.host, error: url.searchParams.get("error"), emailHref });
   }
   if (url.pathname === "/consent" && request.method === "GET") {
     const { secret } = await auth.$context;
     const verified = await verifyOAuthQueryParams(url.search.slice(1), secret);
-    return consentPage(Boolean(verified), url.searchParams.get("client_id") ?? "Application", url.searchParams.get("scope") ?? "");
+    return consentPage(Boolean(verified), url.searchParams.get("client_id") ?? "Application", url.searchParams.get("scope") ?? "",
+      { issuer: issuer.host });
   }
   if (url.pathname === "/security" && request.method === "GET") {
     const session=await auth.api.getSession({headers:request.headers});

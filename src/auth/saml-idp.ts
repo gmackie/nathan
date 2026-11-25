@@ -1,7 +1,7 @@
 /**
  * NATH-12: Nathan as a SAML 2.0 identity provider for downstream service providers (AWS IAM
  * Identity Center, Salesforce, Grafana, any SAML SP). Protocol code is in ./saml-idp-protocol.mjs,
- * keys in ./saml-idp-keys.mjs, pages in ./saml-idp-ui.mjs. Routes:
+ * keys in ./saml-idp-keys.mjs, end-user pages in ./saml-idp-pages.tsx, Studio section in ./saml-idp-ui.mjs. Routes:
  *
  *   GET  /saml/idp, /saml/idp/metadata  IdP metadata (entityID https://<host>/saml/idp)
  *   GET  /saml/idp/sso                  SP-initiated AuthnRequest, HTTP-Redirect binding
@@ -35,7 +35,7 @@ import {
   checkRelayState, parseAuthnRequest, verifyRedirectSignature, verifyPostSignature, buildSignedResponse, buildIdpMetadata,
   validateServiceProvider, parseSpMetadata, NAMEID, AC_PASSKEY, AC_UNSPECIFIED, MAX_QUERY_BYTES, MAX_FORM_BYTES, SP_ID
 } from "./saml-idp-protocol.mjs";
-import { autoPostPage, idpErrorPage, idpInitiatedPage, ssoConfirmPage } from "./saml-idp-ui.mjs";
+import { autoPostPage, samlRefusalPage, idpInitiatedPage, ssoConfirmPage } from "./saml-idp-pages.tsx";
 
 const RESUME_COOKIE = "__Host-nathan-saml-idp";
 const PENDING_SECONDS = 600;
@@ -127,7 +127,8 @@ async function metadata(env: AuthEnv) {
 const fail = (code: string, message: string, status?: number): never => { throw new SamlRequestError(code, message, status); };
 /** Every page that refuses a sign-in names Nathan's reason code (the same code the audit log uses). */
 const refusal = (title: string, message: string, code: string, options: { status?: number; signIn?: boolean } = {}) =>
-  idpErrorPage(title, message + " (" + code + ")", options);
+  samlRefusalPage(title, message, code, options);
+const issuerHost = (env: AuthEnv) => new URL(env.NATHAN_ISSUER).host;
 
 async function sso(request: Request, env: AuthEnv, url: URL): Promise<Response> {
   if (!await allow(env, "sso", request.headers.get("cf-connecting-ip") ?? "unknown", 120))
@@ -271,7 +272,8 @@ async function continueSso(request: Request, env: AuthEnv, auth: any): Promise<R
     const r = await env.DB.prepare("UPDATE nathan_saml_idp_pending SET confirm_hash=?,confirm_session=?,confirm_expires=unixepoch()+? WHERE id_hash=? AND used=0")
       .bind(await sha256Hex(token), session.session.id, CONFIRM_SECONDS, idHash).run();
     if (r.meta.changes !== 1) return expired("saml_resume_used");
-    return ssoConfirmPage({ spName: sp.name, email: String(session.user.email ?? ""), acsHost: new URL(pending.acs_url).host, token });
+    return ssoConfirmPage({ spName: sp.name, email: String(session.user.email ?? ""), acsHost: new URL(pending.acs_url).host, token,
+      issuer: issuerHost(env) });
   }
   if (!await consume()) return expired("saml_resume_used");
   return withClearedResume(await issueFor(env, sp, pending, userId!, session));
@@ -390,7 +392,7 @@ async function issue(env: AuthEnv, ctx: { sp: ServiceProvider | null; spId: stri
     signResponse: sp.signResponse, key: signingKey, certificate: key.certificate
   });
   await audit(env, userId, "saml_idp_assertion", sp.id, ctx.requestId ? "issued" : "issued:idp_initiated");
-  return autoPostPage({ acsUrl: ctx.acsUrl, samlResponse: response, relayState: ctx.relayState, spName: sp.name });
+  return autoPostPage({ acsUrl: ctx.acsUrl, samlResponse: response, relayState: ctx.relayState, spName: sp.name, issuer: issuerHost(env) });
 }
 
 /** Random opaque persistent NameID, one per (SP, user), created on first use. */
@@ -418,7 +420,7 @@ async function idpInitiated(request: Request, env: AuthEnv, auth: any, spId: str
     return refusal("Request refused", "IdP-initiated sign-in must be confirmed on Nathan's own page.", "saml_cross_site_request", { status: 403 });
   const session = await auth.api.getSession({ headers: request.headers });
   if (!session?.user?.id) return refusal("Sign in first", "Sign in to Nathan, then open this link again.", "saml_sign_in_required", { status: 401, signIn: true });
-  if (request.method === "GET") return idpInitiatedPage({ spId: sp.id, spName: sp.name, email: session.user.email ?? "" });
+  if (request.method === "GET") return idpInitiatedPage({ spId: sp.id, spName: sp.name, email: session.user.email ?? "", issuer: issuerHost(env) });
   if (request.method !== "POST") return refusal("Method not allowed", "Use the confirmation page.", "saml_method_not_allowed", { status: 405 });
   if (sp.requirePasskey && !await passkeyEvidence(env, session.user.id, session.session.id))
     return refusal("Passkey sign-in required", sp.name + " requires a sign-in with your passkey.", "saml_passkey_required", { signIn: true });

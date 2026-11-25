@@ -5,6 +5,7 @@
  */
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { authWorker, cookiesOf, randomKey } from "./helpers.mjs";
 import { makeCertificate } from "../fixtures/x509.mjs";
 import { idpMetadata, authnRequestId, samlResponse } from "../fixtures/saml-idp.mjs";
@@ -585,6 +586,12 @@ test("Studio and sign-in pages carry the SAML UI with valid inline scripts", asy
   assert.doesNotThrow(() => new Function(scriptOf(html)), "Studio script parses");
   const signIn = await (await mf.dispatchFetch(ORIGIN + "/sign-in")).text();
   assert.ok(signIn.includes("Sign in with SSO"));
-  assert.ok(signIn.includes("/sign-in/sso/start"));
-  assert.doesNotThrow(() => new Function(scriptOf(signIn)), "sign-in script parses");
+  assert.ok(signIn.includes('<form class="nathan-form" data-sso=""'), "the SSO form");
+  // NATH-38: no inline code on the Kumo sign-in page; the SSO start lives in the SRI-pinned sign-in island.
+  assert.doesNotMatch(signIn, /<script nonce="[^"]+">/, "no inline script");
+  const island = /<script type="module" src="(\/__nathan\/ui\/sign-in-[A-Za-z0-9]+\.js)" integrity="sha384-[^"]+" nonce="[^"]+"><\/script>/.exec(signIn)?.[1];
+  assert.ok(island, "the sign-in island");
+  const code = await (await mf.dispatchFetch(ORIGIN + island)).text();
+  assert.ok(code.includes("/sign-in/sso/start"));
+  execFileSync(process.execPath, ["--input-type=module", "--check"], { input: code });
 });
