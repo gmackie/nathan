@@ -10,7 +10,7 @@ import { noInput } from "./schemas";
 export async function studioStatus(env: AuthEnv) {
   const issuer = new URL(env.NATHAN_ISSUER);
   return {
-    issuer: issuer.origin + "/api/auth",
+    issuer: (env.NATHAN_APP_ORIGIN ?? issuer.origin) + "/api/auth",
     providers: Object.fromEntries((await providerStatus(env)).map(p => [p.id, p.enabled])),
     features: { oidcProvider: true, passkeys: true, totp: true, enterpriseSso: env.ENTERPRISE_SSO === "true", password: env.ENABLE_PASSWORD === "true", scimDirectory: Boolean(env.SCIM_DIRECTORY) },
     note: "Authentication assurance level enforcement and guided plugin installation are not yet available"

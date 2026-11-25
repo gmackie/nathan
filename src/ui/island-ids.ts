@@ -5,8 +5,12 @@
  * - passkey-button: example React island that hydrates a Kumo Button (no WebAuthn yet).
  * - auto-post: plain script, no React; submits the SAML auto-POST form (AutoPostPage).
  * - studio: Identity Studio, the Kumo SPA at /studio (NATH-39, src/ui/pages/studio/).
+ * - security: /security account security panel (admin onboarding, TOTP enrolment, passkeys; NATH-38).
+ * - installer-wizard: the hosted installer's wizard (NATH-40, src/ui/pages/installer/).
+ * - sign-in: plain script, no React; the hosted sign-in page (NATH-38, src/auth/hosted-pages.tsx).
+ * - oauth-consent: plain script, no React; Allow/Deny on the OIDC consent page (NATH-38).
  */
-export const ISLAND_IDS = ["passkey-button", "auto-post", "studio"] as const;
+export const ISLAND_IDS = ["email-sign-in", "passkey-button", "auto-post", "security", "installer-wizard", "sign-in", "oauth-consent", "studio"] as const;
 export type IslandId = (typeof ISLAND_IDS)[number];
 
 export function isIslandId(id: string): id is IslandId {

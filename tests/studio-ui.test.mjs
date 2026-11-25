@@ -218,10 +218,7 @@ test("/studio stays admin-only in the Worker and the legacy string-built Studio 
   assert.match(route, /if \(!await mayAdminister\(env,session!\.user\.id,session!\.session\.id\)\) return Response\.redirect\(issuer\.origin\+"\/security\?setup=admin",302\);/);
   assert.match(route, /return studioPage\(session!\.user\.email\);/);
   assert.match(worker, /import \{ studioPage \} from "\.\.\/ui\/pages\/studio\/StudioPage\.tsx";/);
-  const legacyUi = readFileSync("src/auth/ui.ts", "utf8");
-  assert.doesNotMatch(legacyUi, /studioPage|STUDIO_HTML|STUDIO_SCRIPT|StudioSection|StudioScript/);
-  for (const gone of ["src/auth/rbac-ui.ts", "src/auth/tokens-ui.ts", "src/auth/scim-ui.ts", "src/auth/saml-ui.mjs", "src/auth/admission-ui.ts"])
+  for (const gone of ["src/auth/ui.ts", "src/auth/mcp-ui.ts", "src/auth/saml-idp-ui.mjs", "src/auth/rbac-ui.ts", "src/auth/tokens-ui.ts", "src/auth/scim-ui.ts", "src/auth/saml-ui.mjs", "src/auth/admission-ui.ts"])
     assert.equal(existsSync(gone), false, gone + " (string-built Studio section) is removed");
-  for (const f of ["src/auth/mcp-ui.ts", "src/auth/saml-idp-ui.mjs", "src/auth/provider-ui.mjs"])
-    assert.doesNotMatch(readFileSync(f, "utf8"), /STUDIO_HTML|STUDIO_SCRIPT|StudioSection|StudioScript/, f);
+  assert.doesNotMatch(readFileSync("src/auth/provider-ui.mjs", "utf8"), /STUDIO_HTML|STUDIO_SCRIPT|StudioSection|StudioScript/);
 });

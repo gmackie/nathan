@@ -83,6 +83,24 @@
       "securityReviewed": false
     },
     {
+      "id": "email-otp",
+      "name": "Hosted email code and link",
+      "tier": "verified",
+      "packageName": "better-auth/plugins",
+      "activation": "compiled",
+      "installed": true,
+      "compatibleWithWorkers": true,
+      "securityReviewed": false,
+      "config": {
+        "flag": "ENABLE_EMAIL_OTP",
+        "default": "false",
+        "requires": ["RESEND_API_KEY", "EMAIL_FROM"],
+        "routes": ["/sign-in/email/request", "/sign-in/email/verify"],
+        "migrations": ["0019_email_otp.sql", "0020_hosted_email_sign_in.sql", "0021_email_delivery_order.sql", "0022_app_provisioning.sql", "0023_app_rp_sessions.sql", "0024_app_membership_changes.sql", "0025_app_session_end.sql", "0026_legacy_erasure_deliveries.sql"],
+        "docs": "docs/oidc.md#hosted-email-sign-in"
+      }
+    },
+    {
       "id": "magic-link",
       "name": "Magic link",
       "tier": "verified",

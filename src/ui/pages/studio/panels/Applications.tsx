@@ -5,15 +5,16 @@ import { apiGet, apiPost } from "../api.ts";
 import * as confirmations from "../confirmations.ts";
 import { CheckField, DataTable, Form, Loaded, Panel, Prose, RefreshButton, Row, Section, SelectField, TextField, useAction, useFields, useLoad } from "../kit.tsx";
 
-const KINDS = { external: "External web app", worker: "Cloudflare Worker", gateway: "Nathan gateway", mcp: "MCP administrator" } as const;
+const KINDS = { external: "External web app", worker: "Cloudflare Worker", gateway: "Nathan gateway", mcp: "MCP administrator", native: "Native mobile app (public, PKCE S256)" } as const;
 
 export function Applications() {
   const clients = useLoad(() => apiGet("/clients"));
   const create = useAction();
   const manage = useAction();
   const f = useFields({ name: "", redirectUri: "", kind: "external" as keyof typeof KINDS, publicClient: false, clientId: "" });
+  const native = f.values.kind === "native";
   const register = () => create.run(() => apiPost("/clients", {
-    name: f.values.name, redirectUri: f.values.redirectUri, kind: f.values.kind, publicClient: f.values.publicClient
+    name: f.values.name, redirectUri: f.values.redirectUri, kind: f.values.kind, publicClient: native || f.values.publicClient
   }), { message: "Client created", after: () => { void clients.reload(); } });
   const setDisabled = (clientId: string, disabled: boolean) => manage.run(() => apiPost("/clients/status", { clientId, disabled }),
     { confirm: confirmations.clients.status(clientId, disabled), message: disabled ? "Client disabled" : "Client re-enabled", after: () => { void clients.reload(); } });
@@ -22,9 +23,10 @@ export function Applications() {
       <Section title="Register OIDC client" description={<Prose>Client secrets are shown once. Store them in a secure manager.</Prose>}>
         <Form onSubmit={register}>
           <TextField label="Client name" placeholder="My application" {...f.text("name")} />
-          <TextField label="Exact HTTPS redirect URI" placeholder="https://app.example.com/oauth/callback" {...f.text("redirectUri")} />
           <SelectField label="Client type" value={f.values.kind} onChange={v => f.set("kind", v)} options={KINDS} />
-          <CheckField label="Public OIDC client (PKCE, no secret)" {...f.check("publicClient")} />
+          <TextField label={native ? "Exact reverse-domain callback or app-claimed HTTPS link" : "Exact HTTPS redirect URI"}
+            placeholder={native ? "io.example.app:/oauth" : "https://app.example.com/oauth/callback"} {...f.text("redirectUri")} />
+          {!native && <CheckField label="Public OIDC client (PKCE, no secret)" {...f.check("publicClient")} />}
           <Row><Button type="submit" variant="primary">Register client</Button></Row>
         </Form>
         {create.view}

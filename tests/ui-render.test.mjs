@@ -114,13 +114,13 @@ test("pages send today's security headers; without islands there is no script at
 
 test("renderPage options: status, lang, theme, body class, extra headers; security headers can't be overridden", async () => {
   const response = ui.formPage("X", { status: 403, lang: "de-CH", theme: "dark", bodyClass: "a\"b",
-    headers: { "Set-Cookie": "a=1; Path=/; Secure", "X-Extra": "1" } });
+    headers: { "Set-Cookie": "a=1; Path=/; Secure", "Vary": "Cookie" } });
   const html = await response.text();
   assert.equal(response.status, 403);
   assert.match(html, /<html lang="de-CH" data-theme="nathan" data-mode="dark">/);
   assert.match(html, /<body class="nathan-body a&quot;b">/);
   assert.deepEqual(response.headers.getSetCookie(), ["a=1; Path=/; Secure"]);
-  assert.equal(response.headers.get("x-extra"), "1");
+  assert.equal(response.headers.get("vary"), "Cookie");
   assert.throws(() => ui.formPage("X", { headers: { "Content-Security-Policy": "default-src *" } }), /owns the content-security-policy/);
   assert.throws(() => ui.formPage("X", { headers: { "cache-control": "public" } }), /owns the cache-control/);
   assert.throws(() => ui.formPage("X", { lang: "en\"><script>" }), /Invalid lang/);
@@ -279,12 +279,45 @@ test("CLI-generated identity Worker configs build the UI assets from the reposit
 });
 
 test("every Worker config builds the UI assets first, from the repository root", () => {
-  for (const [path, cwd] of [["wrangler.auth.jsonc"], ["wrangler.gateway.jsonc"], ["wrangler.installer.jsonc"],
-    ["deploy/staging/wrangler.auth.jsonc", "../.."], ["deploy/production/wrangler.auth.jsonc", "../.."]]) {
+  // Wrangler resolves build.cwd against the directory it is invoked in, not the config file's, and
+  // ForgeGraph deploys from the repository root: a cwd of "../.." broke the staging deploy.
+  for (const path of ["wrangler.auth.jsonc", "wrangler.gateway.jsonc", "wrangler.installer.jsonc",
+    "deploy/staging/wrangler.auth.jsonc", "deploy/production/wrangler.auth.jsonc",
+    "deploy/insure-staging/wrangler.auth.jsonc", "deploy/insure-production/wrangler.auth.jsonc"]) {
     const text = readFileSync(path, "utf8");
-    assert.ok(text.includes('"build": { "command": "node scripts/build-ui.mjs"' + (cwd ? ', "cwd": "' + cwd + '"' : "") + " }"), path);
+    assert.ok(text.includes('"build": { "command": "node scripts/build-ui.mjs" }'), path);
     // The installer keeps its own static-assets binding, but only for sealed release files.
     if (path === "wrangler.installer.jsonc") assert.match(text, /"directory": "\.\/installer\/public"|"directory": "installer\/public"|installer\/public/, path);
     else assert.doesNotMatch(text, /"assets":/, path + " has no static-assets binding");
   }
+});
+
+// ---- NATH-37 security review hardening ---------------------------------------------------------
+
+test("form-action refuses wildcard and non-DNS hosts", () => {
+  for (const bad of ["https://*", "https://*.example", "https://a_b.example", "https://-x.example"])
+    assert.throws(() => formActionSource(bad), /form-action/, bad);
+  assert.equal(formActionSource("https://sp.example.com"), "https://sp.example.com");
+  assert.equal(formActionSource("https://sp.example.com:8443"), "https://sp.example.com:8443");
+});
+
+test("the tag scanner fails closed on comment forms and elements browsers parse differently", () => {
+  for (const html of ["<!--><img src=x>", "<!-- --!><img src=x>", "<!-- hi --><p>", "<noscript><a title=\"</noscript><img src=x>\">x</a></noscript>", "<noscript><noscript></noscript>",
+    "<iframe></iframe>", "<xmp>x</xmp>", "<plaintext>"])
+    assert.throws(() => rewriteTags(html, () => undefined), /Unexpected HTML comment|Refused element|Unterminated|Nested|Malformed/, html);
+  for (const html of ["<!-- --><p>a</p>", "<!--$--><p>a</p><!--/$-->", "<title>a <b> c</title><p>x</p>", "<textarea><p></textarea>", "<noscript><button>Continue</button></noscript>"])
+    assert.doesNotThrow(() => rewriteTags(html, () => undefined), html);
+});
+
+test("inline style declarations must balance brackets outside strings", () => {
+  for (const bad of ["width:calc(1px", "background:url(a b", "width:calc(1px))", "grid-area:[a"])
+    assert.throws(() => safeDeclarations(bad), /Unsafe inline style/, bad);
+  assert.equal(safeDeclarations("width:calc(100% - (2px * 3));content:\")(\""), "width:calc(100% - (2px * 3));content:\")(\"");
+});
+
+test("page-supplied extra headers are an allowlist", () => {
+  const csp = { nonce: "A".repeat(22) + "==", scripts: false };
+  for (const name of ["Refresh", "Link", "Permissions-Policy", "Content-Disposition"])
+    assert.throws(() => securityHeaders(csp, { [name]: "x" }), /does not allow/, name);
+  assert.equal(securityHeaders(csp, { Vary: "Cookie" }).get("vary"), "Cookie");
 });

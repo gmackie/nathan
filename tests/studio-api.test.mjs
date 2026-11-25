@@ -36,6 +36,8 @@ function setup({ bootstrapState = "complete" } = {}) {
   const user = (u, verified = 1) => run('INSERT INTO "user"("id","name","email","emailVerified","createdAt","updatedAt","role") VALUES (?,?,?,?,0,0,?)',
     u.id, u.name, u.email, verified, u.role);
   user(ADMIN); user(PLAIN);
+  for (const { session, user: owner } of Object.values(SESSIONS))
+    run('INSERT INTO "session"(id, token, userId, expiresAt, createdAt, updatedAt) VALUES (?,?,?,unixepoch()+3600,unixepoch(),unixepoch())', session.id, session.id, owner.id);
   user({ id: "u-bob", email: "bob@example.test", name: "Bob", role: "user" });
   run("INSERT INTO nathan_bootstrap_status(id,cloudflare_user_id,admin_email,admin_user_id,state) VALUES ('primary','cf-1',?,?,?)", ADMIN.email, ADMIN.id, bootstrapState);
   run('INSERT INTO "passkey"("id","publicKey","userId","credentialID","counter","deviceType","backedUp") VALUES (\'pk1\',\'k\',?,\'cred\',0,\'singleDevice\',0)', ADMIN.id);

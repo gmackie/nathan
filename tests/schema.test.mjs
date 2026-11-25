@@ -42,6 +42,51 @@ test("gateway session migration applies with strict deletion support",()=>{
   db.close();
 });
 
+test("gateway receipt upgrade keeps active sessions and pre-upgrade replay records", () => {
+  const db = new DatabaseSync(":memory:");
+  db.exec(migration("migrations/gateway/0001_sessions.sql"));
+  db.exec(`INSERT INTO nathan_gateway_sessions(id_hash,subject,issuer,client_id,sid,created_at,expires_at)
+           VALUES ('digest','person','issuer','client','old-sid',100,unixepoch()+3600);
+           INSERT INTO nathan_gateway_logout_jti VALUES ('old-jti',unixepoch()+120),('expired-but-retained',unixepoch()-60);`);
+  const upgradedAt = db.prepare("SELECT unixepoch() AS now").get().now;
+  db.exec(migration("migrations/gateway/0002_logout_receipts.sql"));
+  db.exec("INSERT INTO nathan_gateway_logout_jti VALUES ('during-upgrade',unixepoch()-1)");
+  db.exec(migration("migrations/gateway/0003_legacy_logout_retention.sql"));
+  db.exec("INSERT INTO nathan_gateway_logout_jti VALUES ('after-upgrade',unixepoch()+120)");
+  const session = db.prepare("SELECT sid,coalesce(issued_at,created_at) AS issued FROM nathan_gateway_sessions WHERE id_hash='digest'").get();
+  assert.equal(session.sid, "old-sid");
+  assert.equal(session.issued, 100);
+  const retained = db.prepare("SELECT jti FROM nathan_gateway_logout_jti WHERE exp>=? ORDER BY jti").all(upgradedAt + 48 * 3600);
+  assert.deepEqual(retained.map(row => row.jti), ["after-upgrade","during-upgrade","expired-but-retained","old-jti"]);
+  assert.equal(db.prepare("SELECT count(*) AS n FROM nathan_gateway_logout_receipts").get().n, 0);
+  db.close();
+});
+
+for (const alreadyOn0002 of [false, true]) {
+  const version = alreadyOn0002 ? "0002" : "0001";
+  test("stock gateway upgrade from " + version + " prevents old callbacks from creating sessions during drain", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(migration("migrations/gateway/0001_sessions.sql"));
+    if (alreadyOn0002) db.exec(migration("migrations/gateway/0002_logout_receipts.sql"));
+    const oldInsert = db.prepare("INSERT INTO nathan_gateway_sessions(id_hash,subject,issuer,client_id,expires_at) VALUES (?,'user','issuer','client',unixepoch()+3600)");
+    oldInsert.run("established");
+    const hold = migration("scripts/gateway-maintenance/hold-session-creation.sql");
+    const resume = migration("scripts/gateway-maintenance/resume-session-creation.sql");
+    db.exec(hold);
+    db.exec(hold);
+    assert.throws(() => oldInsert.run("arriving-during-drain"), /gateway session creation paused/);
+    if (!alreadyOn0002) db.exec(migration("migrations/gateway/0002_logout_receipts.sql"));
+    db.exec(migration("migrations/gateway/0003_legacy_logout_retention.sql"));
+    assert.throws(() => oldInsert.run("arriving-after-migrations"), /gateway session creation paused/);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM nathan_gateway_sessions WHERE id_hash='established'").get().n, 1);
+    db.exec(resume);
+    db.exec(resume);
+    oldInsert.run("reopened");
+    assert.equal(db.prepare("SELECT count(*) AS n FROM nathan_gateway_sessions").get().n, 2);
+    db.close();
+  });
+}
+
 test("realm schema prevents duplicate hosts and cross-realm foreign keys",()=>{
   const db=new DatabaseSync(":memory:");db.exec("PRAGMA foreign_keys=ON");
   for(const file of ["0001_nathan_registry.sql","0002_better_auth.sql","0003_security_audit.sql","0004_mcp_limits.sql","0005_domain_realm.sql"])

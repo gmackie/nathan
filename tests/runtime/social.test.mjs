@@ -6,7 +6,10 @@
  */
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+import { build } from "esbuild";
 import { createHash } from "node:crypto";
 import { SignJWT, jwtVerify, generateKeyPair, exportJWK } from "jose";
 import { authWorker, bundle, migrate, start, randomKey } from "./helpers.mjs";
@@ -15,6 +18,17 @@ import { PROVIDER_IDS } from "../../src/shared/providers.mjs";
 import { providerGuide as cliGuide } from "../../scripts/lib/provider-wizard.mjs";
 
 const HOST = "login.example.test", ORIGIN = "https://" + HOST;
+
+/** The installer wizard component (TSX), bundled with esbuild because node can't import TSX. */
+async function operatePages() {
+  await mkdir(".nathan/test-ui", { recursive: true });
+  const outfile = ".nathan/test-ui/operate-pages-social.mjs";
+  await build({
+    entryPoints: ["tests/fixtures/operate-pages.tsx"], outfile, bundle: true, platform: "node", format: "esm",
+    jsx: "automatic", packages: "external", logLevel: "error", logOverride: { "module-level-directive": "silent" }
+  });
+  return import(pathToFileURL(outfile).href + "?" + Date.now());
+}
 const KEY = randomKey();
 const CREDS = {
   discord: { clientId: "123456789012345678", clientSecret: "AbCdEfGhIjKlMnOpQrStUvWxYz012345" },
@@ -458,12 +472,17 @@ test("callback URLs are identical in the hosted installer page, Studio API and C
   const idb = await installer.getD1Database("INSTALLER_DB");
   for (const file of readdirSync("migrations/installer").filter(f => f.endsWith(".sql")).sort())
     await migrate(idb, "migrations/installer/" + file);
+  // NATH-40: the installer's wizard is the SRI-pinned installer-wizard island (no inline registry
+  // script). It is served by this Worker, and it computes each redirect URI with the registry's own
+  // callbackUrl; render that component and read the URI it shows for every provider.
   const html = await (await installer.dispatchFetch("https://install.example.test/")).text();
-  const start_ = html.indexOf("const providerRegistry="), end = html.indexOf("const $=");
-  assert.ok(start_ > 0 && end > start_, "installer embeds the registry");
-  const { providerRegistry, providerCallbackUrl } = new Function(html.slice(start_, end) + "return {providerRegistry,providerCallbackUrl};")();
-  assert.deepEqual(providerRegistry.map(p => p.id), PROVIDER_IDS);
-  const fromInstaller = Object.fromEntries(providerRegistry.map(p => [p.id, providerCallbackUrl(HOST, p.id)]));
+  const manifest = JSON.parse(readFileSync("src/ui/generated/ui-manifest.json", "utf8"));
+  const island = manifest.islands["installer-wizard"];
+  assert.ok(html.includes("<script type=\"module\" src=\"" + island.src + "\" integrity=\"" + island.integrity + "\""), "installer loads the wizard island");
+  assert.ok(html.includes("data-nathan-island=\"installer-wizard\""), "installer renders the wizard");
+  const wizard = await operatePages();
+  assert.deepEqual(wizard.installerProviderIds(), PROVIDER_IDS);
+  const fromInstaller = Object.fromEntries(PROVIDER_IDS.map(id => [id, wizard.wizardCallback(HOST, id)]));
   const fromCli = Object.fromEntries(PROVIDER_IDS.map(id => [id, cliGuide(id, HOST).callback]));
   assert.deepEqual(fromInstaller, studioCallbacks);
   assert.deepEqual(fromCli, studioCallbacks);

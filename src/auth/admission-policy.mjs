@@ -45,6 +45,7 @@ export async function admissionMode(db) {
 export function creationMethod(ctx) {
   const path = typeof ctx?.path === "string" ? ctx.path : "";
   const id = param => (typeof ctx?.params?.[param] === "string" && /^[a-z0-9][a-z0-9-]{0,62}$/.test(ctx.params[param]) ? ctx.params[param] : "unknown");
+  if (path === "/sign-in/email-otp") return "email-otp";
   if (path === "/sign-up/email") return "password";
   if (path === "/callback/:id" || path === "/oauth2/callback/:id") return "social:" + id("id");
   if (path === "/sign-in/social") return "social:id-token";
@@ -99,11 +100,19 @@ export function claimInvitationStatement(id, method, userId) {
  * `{ admitted: false }` otherwise. An invitation is claimed only for an address the method proved.
  * Throws on database errors: callers refuse the account.
  */
-export async function decideAdmission(db, env, { email, emailVerified, method }) {
+/** @param {any} db @param {any} env @param {{email: unknown, emailVerified: boolean, method: string, invitationId?: string|null, requirePasswordInvitation?: boolean}} input */
+export async function decideAdmission(db, env, { email, emailVerified, method, invitationId = null, requirePasswordInvitation = false }) {
   const address = normalizeEmail(email);
   if (!address) return { admitted: false, via: null };
-  if (await isBootstrapAdmission(db, env, address, emailVerified)) return { admitted: true, via: "bootstrap" };
-  if (await admissionMode(db) === "self-service") return { admitted: true, via: "self-service" };
+  if (method === "email-otp") {
+    // Migration 0019 consumes this exact invitation atomically with the Better Auth user INSERT.
+    const invitation = emailVerified === true && invitationId && await openInvitation(db, address);
+    return invitation && invitation.id === invitationId ? { admitted: true, via: "invitation", invitationId } : { admitted: false, via: null };
+  }
+  if (!(requirePasswordInvitation && method === "password")) {
+    if (await isBootstrapAdmission(db, env, address, emailVerified)) return { admitted: true, via: "bootstrap" };
+    if (await admissionMode(db) === "self-service") return { admitted: true, via: "self-service" };
+  }
   if (method === "password") return await openInvitation(db, address) ? { admitted: true, via: "invitation_pending" } : { admitted: false, via: null };
   if (emailVerified !== true) return { admitted: false, via: null };
   const invitation = await claimInvitation(db, address, method);
@@ -157,19 +166,18 @@ export async function admitOnVerification(db, env, { userId, email }) {
 export async function supersedeUnprovenAccount(db, email, provider = "unknown") {
   const address = normalizeEmail(email);
   if (!address) return null;
-  const row = await db.prepare(
+  const deleted = await db.prepare('DELETE FROM "user" WHERE id IN (' +
     'SELECT u."id" AS id FROM nathan_admission_pending p JOIN "user" u ON u."id"=p.user_id ' +
     'WHERE p.email=? AND lower(u."email")=? AND u."emailVerified"=0 ' +
     'AND NOT EXISTS (SELECT 1 FROM "session" s WHERE s."userId"=u."id") AND NOT EXISTS (SELECT 1 FROM "passkey" k WHERE k."userId"=u."id") ' +
-    "AND EXISTS (SELECT 1 FROM nathan_invitations i WHERE i.email=p.email AND i.uses=0 AND i.revoked_at IS NULL AND i.expires_at>unixepoch()) LIMIT 1"
+    "AND NOT EXISTS (SELECT 1 FROM nathan_app_provisions source WHERE source.user_id=u.id) " +
+    "AND EXISTS (SELECT 1 FROM nathan_invitations i WHERE i.email=p.email AND i.uses=0 AND i.revoked_at IS NULL AND i.expires_at>unixepoch()) LIMIT 1) RETURNING id"
   ).bind(address, address).first();
-  if (!row) return null;
-  const deleted = await db.prepare('DELETE FROM "user" WHERE "id"=? AND "emailVerified"=0 RETURNING "id" AS id').bind(row.id).first();
   if (!deleted) return null;
   const via = /^[a-z][a-z0-9-]{0,62}$/.test(String(provider)) ? provider : "unknown";
   await db.prepare(AUDIT + "VALUES (?,'system:admission','account_superseded',?,'succeeded')")
-    .bind(crypto.randomUUID(), row.id + " email=" + address + " provider=" + via).run();
-  return row.id;
+    .bind(crypto.randomUUID(), deleted.id + " email=" + address + " provider=" + via).run();
+  return deleted.id;
 }
 
 /** Audits an admission decision. Refusals are kept to one row per method and minute (sign-up floods). */

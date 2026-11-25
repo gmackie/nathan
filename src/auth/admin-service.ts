@@ -1,3 +1,5 @@
+import { resolveAppearance } from "../ui/appearance.ts";
+import { isReverseDomainPrivateUseRedirectUri } from "@better-auth/core/utils/redirect-uri";
 import type { AuthEnv } from "./env";
 
 export type AdminActor = { id:string; email:string; role:"admin"; emailVerified:true };
@@ -65,35 +67,46 @@ export async function setApplicationEnabled(env:AuthEnv,id:string,enabled:boolea
 }
 export async function createOAuthClient(auth:any,env:AuthEnv,headers:Headers,input:any,actor:string){
   if(typeof input?.name!=="string" || !input.name.trim() || input.name.length>100)throw Error("Invalid client name");
-  if(!["external","worker","gateway","mcp"].includes(input.kind))throw Error("Invalid client kind");
+  if(!["external","worker","gateway","mcp","native"].includes(input.kind))throw Error("Invalid client kind");
+  const native = input.kind === "native";
+  if(native && input.publicClient !== undefined && input.publicClient !== true)throw Error("Native clients must be public");
   if(input.publicClient && input.kind==="gateway")throw Error("Gateway must be confidential");
   let redirect:URL;
   try{redirect=new URL(input.redirectUri);}catch{throw Error("Invalid redirect URI");}
-  // Exact DNS hostname only: no "*" (the invariants forbid wildcard redirect URIs), no "_" or IP-literal oddities.
-  if(typeof input.redirectUri!=="string" || redirect.protocol!=="https:" || redirect.username || redirect.password || redirect.hash || redirect.origin==="null"
-    || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/i.test(redirect.hostname))
+  if(native) {
+    const privateUse = isReverseDomainPrivateUseRedirectUri(redirect) && redirect.protocol.length <= 254 &&
+      redirect.protocol.slice(0, -1).split(".").every(label => label.length <= 63);
+    if((redirect.protocol !== "https:" && !privateUse) || input.redirectUri !== redirect.href ||
+        input.redirectUri.length > 2048 || /[\s\\*#]|%2a/i.test(input.redirectUri) || redirect.username || redirect.password)
+      throw Error("Native clients require an exact app-claimed HTTPS or reverse-domain private-use callback");
+  } else if(typeof input.redirectUri !== "string" || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/i.test(redirect.hostname) ||
+      redirect.protocol!=="https:" || redirect.username || redirect.password || redirect.hash || redirect.origin==="null") {
     throw Error("Clients require an exact HTTPS redirect URL");
+  }
   if(input.kind==="gateway" && redirect.pathname!=="/__nathan/callback")throw Error("Gateway callback must use /__nathan/callback");
+  if (input.appearance !== undefined) resolveAppearance(env.NATHAN_APPEARANCE ? JSON.parse(env.NATHAN_APPEARANCE) : undefined, input.appearance);
   const extras=input.kind==="gateway" ? {backchannel_logout_uri:redirect.origin+"/__nathan/backchannel",enable_end_session:true} : {};
   const resource=input.kind==="mcp" ? {resources:[new URL(env.NATHAN_ISSUER).origin+"/mcp"]} : {};
-  await audit(env,actor,"client_create",input.kind+":"+redirect.origin,"attempted");
+  const target = input.kind + ":" + (redirect.origin === "null" ? redirect.protocol : redirect.origin);
+  await audit(env,actor,"client_create",target,"attempted");
   try {
     const client=await auth.api.adminCreateOAuthClient({
       headers,body:{
         client_name:input.name.trim(),
+        ...(input.appearance === undefined ? {} : { metadata: { appearance: input.appearance } }),
         redirect_uris:[redirect.href],
-        token_endpoint_auth_method:input.publicClient?"none":"client_secret_basic",
-        application_type:"web",
+        token_endpoint_auth_method:native || input.publicClient ? "none" : "client_secret_basic",
+        application_type:native ? "native" : "web",
         grant_types:["authorization_code","refresh_token"],
         require_pkce:true,
         skip_consent:false,
         ...extras,...resource
       }
     });
-    await audit(env,actor,"client_create",input.kind+":"+redirect.origin,"succeeded");
+    await audit(env,actor,"client_create",target,"succeeded");
     return client;
   } catch(e) {
-    await audit(env,actor,"client_create",input.kind+":"+redirect.origin,"failed");
+    await audit(env,actor,"client_create",target,"failed");
     throw e;
   }
 }

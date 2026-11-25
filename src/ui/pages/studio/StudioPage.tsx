@@ -17,7 +17,7 @@ export function studioPage(userEmail: string): Response {
   return renderPage(
     <>
       <Island id="studio" component={StudioApp} props={{ email: userEmail }} />
-      <noscript><p className="nathan-text nathan-studio-noscript">Identity Studio needs JavaScript. Nathan's sign-in and account pages work without it.</p></noscript>
+      <noscript><p className="nathan-text nathan-studio-noscript">Turn on JavaScript to use Identity Studio.</p></noscript>
     </>,
     { title: "Identity Studio", islands: ["studio"], bodyClass: "nathan-studio-body" }
   );

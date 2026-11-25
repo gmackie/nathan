@@ -15,7 +15,7 @@
  *   "reissue" removes an unverified account for an address and invites it again.
  */
 import { APIError } from "better-auth/api";
-import type { AuthEnv } from "./env";
+import { managementEmail, type AuthEnv } from "./env";
 import { audit } from "./admin-service";
 import { samlUserCreateGuard } from "./saml-policy.mjs";
 import { enterpriseOidcUserCreateGuard } from "./enterprise-oidc-policy.mjs";
@@ -25,6 +25,7 @@ import {
 } from "./admission-policy.mjs";
 
 const ID = /^[0-9a-f-]{36}$/;
+const appManagedAccount = "An account with this email is managed by the provisioning application. Reconcile its access in that application.";
 type InvitationRow = { id: string; email: string; createdBy: string; createdAt: number; expiresAt: number; uses: number;
   usedAt: number | null; usedMethod: string | null; usedByUser: string | null; revokedAt: number | null; revokedBy: string | null; now: number };
 
@@ -86,11 +87,12 @@ function invitationInput(body: any) {
   const days = body?.days === undefined ? INVITATION_DAYS.default : Number(body.days);
   return email && Number.isInteger(days) && days >= 1 && days <= INVITATION_DAYS.max ? { email, days } : null;
 }
-type ExistingAccount = { id: string; verified: number; role: string | null; sessions: number; passkeys: number; directory: number; logins: number };
+type ExistingAccount = { id: string; verified: number; role: string | null; sessions: number; passkeys: number; directory: number; appProvisioned: number; logins: number };
 function existingAccount(env: AuthEnv, email: string) {
   return env.DB.prepare('SELECT u."id" AS id, u."emailVerified" AS verified, u."role" AS role, ' +
     '(SELECT count(*) FROM "session" s WHERE s."userId"=u."id") AS sessions, (SELECT count(*) FROM "passkey" k WHERE k."userId"=u."id") AS passkeys, ' +
     "(SELECT count(*) FROM nathan_scim_users d WHERE d.user_id=u.\"id\") AS directory, " +
+    "EXISTS(SELECT 1 FROM nathan_app_provisions p WHERE p.user_id=u.id) AS appProvisioned, " +
     '(SELECT count(*) FROM "account" a WHERE a."userId"=u."id" AND a."providerId"<>\'credential\') AS logins ' +
     'FROM "user" u WHERE lower(u."email")=? LIMIT 1').bind(email).first<ExistingAccount>();
 }
@@ -133,6 +135,7 @@ export async function applyAdmissionOperation(env: AuthEnv, body: any, actor: st
     const account = await existingAccount(env, input.email);
     if (account) {
       await audit(env, actor, "invitation_create", "existing-account", "rejected");
+      if (account.appProvisioned) throw Error(appManagedAccount);
       if (Number(account.verified) !== 1) throw Error("An unverified account holds this email address. To let the real person in, " +
         "reissue the invitation: it removes that unverified account (CONFIRM REISSUE INVITATION <email>)");
       throw Error("An account with this email address already exists; it needs no invitation");
@@ -150,6 +153,10 @@ export async function applyAdmissionOperation(env: AuthEnv, body: any, actor: st
     }
     const account = await existingAccount(env, input.email);
     if (!account) return createInvitation(env, input.email, input.days, actor);
+    if (account.appProvisioned) {
+      await audit(env, actor, "unverified_account_remove", account.id, "rejected");
+      throw Error(appManagedAccount);
+    }
     if (Number(account.verified) === 1 || account.role === "admin" || Number(account.sessions) || Number(account.passkeys) || Number(account.directory) || Number(account.logins)) {
       await audit(env, actor, "unverified_account_remove", account.id, "rejected");
       throw Error("An account with this email address is verified, has signed in, has a social or SSO login, or is managed by a directory; it is never removed here");
@@ -157,6 +164,7 @@ export async function applyAdmissionOperation(env: AuthEnv, body: any, actor: st
     const removed = await env.DB.prepare('DELETE FROM "user" WHERE "id"=? AND "emailVerified"=0 AND coalesce("role",\'user\')<>\'admin\' ' +
       'AND NOT EXISTS (SELECT 1 FROM "session" WHERE "userId"=?) AND NOT EXISTS (SELECT 1 FROM "passkey" WHERE "userId"=?) ' +
       'AND NOT EXISTS (SELECT 1 FROM nathan_scim_users WHERE user_id=?) ' +
+      'AND NOT EXISTS (SELECT 1 FROM nathan_app_provisions WHERE user_id=user.id) ' +
       // A social or SSO login means the account has been used even if its session ended (sign-out
       // and expiry delete session rows); only password-only unverified accounts are removable.
       'AND NOT EXISTS (SELECT 1 FROM "account" WHERE "userId"=? AND "providerId"<>\'credential\') RETURNING "id" AS id')
@@ -205,7 +213,7 @@ function refuse(): never {
  * databaseHooks.user.create.before. Composes the SAML connection guard and the admission decision;
  * fails closed (no account) on any error. Returns the SAML guard's data changes, if any.
  */
-export async function admissionUserCreateGuard(env: AuthEnv, user: any, ctx: any) {
+export async function admissionUserCreateGuard(env: AuthEnv, user: any, ctx: any, invitationId: string | null = null) {
   let guard: any;
   try {
     guard = await samlUserCreateGuard(env.DB, user, ctx);
@@ -218,7 +226,8 @@ export async function admissionUserCreateGuard(env: AuthEnv, user: any, ctx: any
   const method = creationMethod(ctx);
   let decision: { admitted: boolean; via: string | null };
   try {
-    decision = await decideAdmission(env.DB, env, { email: merged.email, emailVerified: merged.emailVerified === true, method });
+    decision = await decideAdmission(env.DB, env, { email: merged.email, emailVerified: merged.emailVerified === true, method, invitationId,
+      requirePasswordInvitation: Boolean(env[managementEmail]) });
     // A password sign-up holds nothing yet: it is provisional until its address is verified.
     if (decision.via === "invitation_pending") await recordPendingAdmission(env.DB, normalizeEmail(merged.email), method);
   } catch {
@@ -228,7 +237,7 @@ export async function admissionUserCreateGuard(env: AuthEnv, user: any, ctx: any
     await auditAdmission(env.DB, method, "refused").catch(() => {});
     refuse();
   }
-  await auditAdmission(env.DB, method, "admitted_" + decision.via!.replace("-", "_"));
+  if (method !== "email-otp") await auditAdmission(env.DB, method, "admitted_" + decision.via!.replace("-", "_"));
   return guard ?? undefined;
 }
 

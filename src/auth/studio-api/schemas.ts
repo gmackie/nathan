@@ -71,7 +71,7 @@ export const adminRevokeInput = z.looseObject({ id: userId, confirm });
 
 export const clientCreateInput = z.looseObject({
   name: z.string().min(1).max(100),
-  kind: z.enum(["external", "worker", "gateway", "mcp"]),
+  kind: z.enum(["external", "worker", "gateway", "mcp", "native"]),
   redirectUri: text(2048),
   publicClient: z.boolean().optional()
 });

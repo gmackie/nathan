@@ -55,6 +55,8 @@ export async function authorizeStudioRequest(request: Request, env: AuthEnv, aut
     return deny(403, "not_admin", "Verified administrator required");
   if (options.stepUp !== "admin-policy") return deny(403, "step_up_required", "Unknown step-up requirement");
   const assurance = await adminAssurance(env, user.id, sessionId);
+  if (!assurance.ok && assurance.reason === "session_required")
+    return deny(403, "not_admin", "Sign in with an administrator authenticator");
   if (!assurance.ok)
     return assurance.reason === "step_up_required"
       ? deny(403, "step_up_required", "Verify with your passkey again; privileged actions need a passkey sign-in in the last 15 minutes")
