@@ -5,6 +5,7 @@
  */
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { authWorker, cookiesOf, randomKey, studioShell } from "./helpers.mjs";
 import { makeCertificate } from "../fixtures/x509.mjs";
 import { idpMetadata, authnRequestId, samlResponse } from "../fixtures/saml-idp.mjs";
@@ -576,15 +577,14 @@ test("disabling closes the ACS and SSO routing again", async () => {
 });
 
 test("Studio and sign-in pages carry the SAML UI with valid scripts", async () => {
-  const scriptOf = html => /<script nonce="[^"]+">([\s\S]*)<\/script>/.exec(html)[1];
   const studioPage = await studio("/studio");
   assert.equal(studioPage.status, 200);
   // NATH-39: the Kumo Studio's SAML panel, from the SRI-pinned island bundle.
-  const { html, code } = await studioShell((u, i) => mf.dispatchFetch(u, i), ORIGIN, studioPage);
+  const { html, code: studioCode } = await studioShell((u, i) => mf.dispatchFetch(u, i), ORIGIN, studioPage);
   assert.ok(html.includes('href="#/saml"'));
   for (const control of ["Create disabled connection", "Enable connection", "Trust next certificate", "Retire certificate", "/api/auth/sso/saml2/sp/acs/",
     "CONFIRM ENABLE SAML ", "CONFIRM RETIRE CERTIFICATE "])
-    assert.ok(code.includes(control), control);
+    assert.ok(studioCode.includes(control), control);
   const signIn = await (await mf.dispatchFetch(ORIGIN + "/sign-in")).text();
   assert.ok(signIn.includes("Sign in with SSO"));
   assert.ok(signIn.includes('<form class="nathan-form" data-sso=""'), "the SSO form");
@@ -594,5 +594,5 @@ test("Studio and sign-in pages carry the SAML UI with valid scripts", async () =
   assert.ok(island, "the sign-in island");
   const code = await (await mf.dispatchFetch(ORIGIN + island)).text();
   assert.ok(code.includes("/sign-in/sso/start"));
-  assert.doesNotThrow(() => new Function(code.replace(/^import[^;]*;/gm, "")), "sign-in island parses");
+  execFileSync(process.execPath, ["--input-type=module", "--check"], { input: code });
 });

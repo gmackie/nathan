@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { symmetricEncrypt } from "better-auth/crypto";
 import { createOTP } from "@better-auth/utils/otp";
 import { createLocalJWKSet, jwtVerify } from "jose";
-import { authWorker, cookiesOf, enrollAdmin, randomKey } from "./helpers.mjs";
+import { waitForEmailPublication, authWorker, cookiesOf, enrollAdmin, randomKey } from "./helpers.mjs";
 
 const HOST = "login.example.test", ORIGIN = "https://" + HOST, ISSUER = ORIGIN + "/api/auth";
 const RESOURCE = "https://classcheck.example.test/api";
@@ -209,6 +209,7 @@ test("revocation before redemption, a new invitation, expiry and exhausting atte
     const email = reason + "@example.test", id = await invite(email);
     const start = await requestCode(email), browser = cookie(start, "__Host-nathan-email");
     const { code, link } = await mailFor(email);
+    await waitForEmailPublication(db, email);
     if (reason === "reissued") {
       await sql("UPDATE nathan_invitations SET revoked_at=unixepoch() WHERE id=?", id);
       await invite(email);

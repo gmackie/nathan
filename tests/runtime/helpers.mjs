@@ -18,6 +18,14 @@ export function authFixtureModules() {
   ];
 }
 
+export async function waitForEmailPublication(db, email) {
+  const deadline = Date.now() + 30_000;
+  while (!await db.prepare("SELECT 1 FROM nathan_email_delivery_order WHERE email=? AND delivered>0").bind(email).first()) {
+    if (Date.now() >= deadline) throw Error("Nathan did not publish the email challenge");
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+}
+
 /** Apply a migration in one D1 batch, preserving complete CREATE TRIGGER bodies. */
 export async function migrate(db, file) {
   const sql = readFileSync(file, "utf8")
