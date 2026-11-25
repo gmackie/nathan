@@ -2,6 +2,7 @@ import { serveUiAsset } from "../ui/assets.ts";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { verifyOAuthQueryParams } from "@better-auth/oauth-provider";
 import { emailEnabled, emailSignIn } from "./email-sign-in";
+import { beginEmailSignIn as beginSingleAppSignIn, finishEmailSignIn as finishSingleAppSignIn } from "./single-app";
 import { isEmailSession } from "./email-sign-in-policy";
 import { emailSignInPage } from "./email-sign-in-page";
 import { pruneEmailOtpLimits } from "./email-otp-policy.mjs";
@@ -664,6 +665,20 @@ export class NathanVerifier extends WorkerEntrypoint<AuthEnv, BindingProps> {
    * and returns the scopes it may use now = token ∩ live grant ∩ the user's current permissions.
    * Like every call here it is app-scoped: only resources of the pinned application are answered.
    */
+  /**
+   * NATH-52: email sign-in for a pinned single-app binding. The app draws the form.
+   * The answer is a subject and email, never a session cookie, token, or admin role.
+   */
+  async beginEmailSignIn(input: { email?: string; ip?: string }) {
+    const scope = scopedApplication(this.ctx.props, undefined);
+    if (!scope.ok) return { ok: false, error: "unavailable" as const };
+    return beginSingleAppSignIn(this.env, input, this.ctx);
+  }
+  async finishEmailSignIn(input: { email?: string; code?: string; ip?: string }) {
+    const scope = scopedApplication(this.ctx.props, undefined);
+    if (!scope.ok) return { ok: false, error: "unavailable" as const };
+    return finishSingleAppSignIn(this.env, input, this.ctx);
+  }
   async mcpGrant(input: { token: string; resource: string }) {
     const scope = scopedApplication(this.ctx.props, undefined);
     if (!scope.ok || !input || typeof input.token !== "string" || typeof input.resource !== "string") return { active: false };

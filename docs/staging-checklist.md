@@ -64,6 +64,7 @@
 
 ## MFA/enterprise acceptance
 
+- [ ] With `ENABLE_EMAIL_OTP=true` and Resend configured: request a sign-in code for a real mailbox, check the mail (code, host, no link), sign in, and confirm an app authorization resumes; an uninvited address gets the same answer and no mail (NATH-49).
 - [ ] Enroll passkey, use it to authenticate, list and remove enrolled credential.
 - [ ] Enroll TOTP, store recovery codes, finish password+TOTP sign-in; verify wrong code rejects.
 - [ ] Verify SAML/OIDC enterprise discovery and account linking, including disabled/upstream deprovisioned accounts.
