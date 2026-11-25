@@ -8,6 +8,7 @@
 import { registerHooks, stripTypeScriptTypes } from "node:module";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { transformSync } from "esbuild";
 
 registerHooks({
   resolve(specifier, context, next) {
@@ -18,6 +19,10 @@ registerHooks({
     return next(specifier, context);
   },
   load(url, context, next) {
+    if (url.startsWith("file:") && url.endsWith(".tsx")) {
+      const { code } = transformSync(readFileSync(fileURLToPath(url), "utf8"), { loader: "tsx", jsx: "automatic", format: "esm" });
+      return { format: "module", shortCircuit: true, source: code };
+    }
     if (url.startsWith("file:") && url.endsWith(".ts")) {
       const source = stripTypeScriptTypes(readFileSync(fileURLToPath(url), "utf8"), { mode: "transform", sourceUrl: url });
       return { format: "module", shortCircuit: true, source };

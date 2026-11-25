@@ -162,6 +162,27 @@ test("an administrator whose bootstrap is incomplete gets enrollment_incomplete"
   assert.equal(g.json.error.code, "enrollment_incomplete");
 });
 
+test("the Studio API requires a current non-email administrator session", async () => {
+  const t = setup();
+  t.run("INSERT INTO nathan_email_otp_sessions(session_id,user_id) VALUES (?,?)", "s-admin", ADMIN.id);
+  assert.equal((await call(t, "/users", { session: "admin" })).json.error.code, "not_admin");
+  t.run('DELETE FROM "session" WHERE id=?', "s-admin");
+  assert.equal((await call(t, "/users", { session: "admin" })).json.error.code, "not_admin");
+});
+
+test("Studio registers a public native client with its exact callback", async () => {
+  const t = setup();
+  const redirectUri = "io.example.mobile:/oauth";
+  const result = await call(t, "/clients", {
+    method: "POST", session: "admin", body: { name: "Mobile", kind: "native", publicClient: true, redirectUri }
+  });
+  assert.equal(result.status, 200);
+  assert.equal(t.created[0].application_type, "native");
+  assert.equal(t.created[0].token_endpoint_auth_method, "none");
+  assert.equal(t.created[0].require_pkce, true);
+  assert.deepEqual(t.created[0].redirect_uris, [redirectUri]);
+});
+
 test("a stepped-up administrator reads every GET route with the ok envelope", async () => {
   const t = setup();
   const query = { "/rbac": "?app=demo", "/rbac/group": "?id=team", "/scim/connection": "?id=acme", "/scim/outbox": "?id=acme" };
