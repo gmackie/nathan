@@ -5,6 +5,7 @@
  */
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { authWorker, cookiesOf, randomKey } from "./helpers.mjs";
 import { makeCertificate } from "../fixtures/x509.mjs";
 import { idpMetadata, authnRequestId, samlResponse } from "../fixtures/saml-idp.mjs";
@@ -592,5 +593,5 @@ test("Studio and sign-in pages carry the SAML UI with valid inline scripts", asy
   assert.ok(island, "the sign-in island");
   const code = await (await mf.dispatchFetch(ORIGIN + island)).text();
   assert.ok(code.includes("/sign-in/sso/start"));
-  assert.doesNotThrow(() => new Function(code.replace(/^import[^;]*;/gm, "")), "sign-in island parses");
+  execFileSync(process.execPath, ["--input-type=module", "--check"], { input: code });
 });
