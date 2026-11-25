@@ -21,6 +21,12 @@ async function database(t) {
   return db;
 }
 
+test("the committed EducateOS Wrangler config matches its generator before ForgeGraph stamps it", async () => {
+  const { renderConfig } = await import("../deploy/educateos-id/cloudflare.config.ts");
+  const committed = await readFile(new URL("../deploy/educateos-id/wrangler.auth.jsonc", import.meta.url), "utf8");
+  assert.equal(committed, await renderConfig());
+});
+
 test("the generated EducateOS Worker has private ingress and the dedicated D1 and Access audience", async () => {
   const { configuration } = await import("../deploy/educateos-id/cloudflare.config.ts");
   const config = await configuration();

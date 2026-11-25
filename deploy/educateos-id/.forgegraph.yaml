@@ -9,9 +9,10 @@ stages:
         platform: cloudflare-workers
         config:
           appDir: .
+          configPath: deploy/educateos-id/wrangler.auth.jsonc
           workerName: nathan-educateos-stg-auth
           keepCrons: true
-          buildCommand: pnpm import && pnpm install --frozen-lockfile && node deploy/educateos-id/cloudflare.config.ts --check
+          buildCommand: pnpm import && pnpm install --frozen-lockfile
           deployCommand: >-
             pnpm exec wrangler d1 migrations apply DB --remote --config deploy/educateos-id/wrangler.auth.jsonc &&
             pnpm exec wrangler deploy --config deploy/educateos-id/wrangler.auth.jsonc
