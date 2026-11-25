@@ -575,7 +575,15 @@ async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Pr
 }
 
 export default {
-  fetch: (request: Request, env: AuthEnv, ctx: ExecutionContext) => managementIngress(request, env, ctx, handle),
+  async fetch(request: Request, env: AuthEnv, ctx: ExecutionContext) {
+    const response = await managementIngress(request, env, ctx, handle);
+    if (response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase() !== "text/html") return response;
+    // Apply this after management ingress seals cookies and sets its own cache policy.
+    // Cloudflare Web Analytics respects no-transform on the final HTML response.
+    const page = new Response(response.body, response);
+    page.headers.set("Cache-Control", "private, no-store, no-transform");
+    return page;
+  },
   scheduled: async (event: ScheduledEvent,env:AuthEnv) => {
     if (event.cron === "* * * * *" && env.NATHAN_APP_ORIGIN) {
       await deliverLogouts(env,{limit:100});
