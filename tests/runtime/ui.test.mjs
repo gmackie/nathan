@@ -86,7 +86,7 @@ test("the identity Worker serves its bundled UI assets from /__nathan/ui/ immuta
     assert.equal(discovery.status, 200, "OIDC discovery is still the Worker's");
     const signIn = await mf.dispatchFetch("https://" + HOST + "/sign-in");
     assert.equal(signIn.status, 200);
-    assert.equal(signIn.headers.get("cache-control"), "no-store", "the Worker's sign-in page, not an asset");
+    assert.equal(signIn.headers.get("cache-control"), "private, no-store, no-transform", "preserve the identity document at the edge");
   } finally { await mf.dispose(); }
 });
 

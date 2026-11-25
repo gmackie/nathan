@@ -30,7 +30,7 @@ before(async () => {
 test("the Studio shell renders under renderPage with one SRI-pinned island and no style= attributes", async () => {
   const response = await get("/studio", admin.cookie);
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("cache-control"), "private, no-store, no-transform");
   assert.equal(response.headers.get("x-frame-options"), "DENY");
   assert.match(response.headers.get("content-security-policy"), /^default-src 'none'; connect-src 'self'; img-src 'none'; style-src 'self' 'nonce-[^']+'; script-src 'self' 'nonce-[^']+'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'$/);
   const { html, code } = await studioShell(fetcher, ORIGIN, response);
