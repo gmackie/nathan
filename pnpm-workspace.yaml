@@ -1,0 +1,4 @@
+# Nathan's Wrangler toolchain installs its platform-specific Worker and bundler binaries.
+allowBuilds:
+  esbuild: true
+  workerd: true
