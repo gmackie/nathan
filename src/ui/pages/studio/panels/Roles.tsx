@@ -47,6 +47,8 @@ function ApplicationRoles({ applicationId }: { applicationId: string }) {
   });
   const op = (body: Record<string, unknown>, confirm?: confirmations.Confirmation) =>
     action.run(phrase => apiPost("/rbac", confirm?.phrase ? { ...body, confirm: phrase } : body), { confirm, after: () => { void overview.reload(); } });
+  const revokeGrant = (id: string) =>
+    op({ op: "grant.revoke", app: applicationId, id }, confirmations.rbac.revoke(applicationId, id));
   const manifest = () => JSON.parse(f.values.manifest || "{}");
   const preview = () => action.run(() => apiPost("/rbac", { op: "sync", app: applicationId, manifest: manifest(), prune: f.values.prune, dryRun: true }), { message: "Preview (nothing changed)" });
   const apply = () => {
@@ -70,7 +72,7 @@ function ApplicationRoles({ applicationId }: { applicationId: string }) {
               columns={[{ key: "role", label: "Role" }, { key: "principalType", label: "To" }, { key: "label", label: "Who", render: r => r.label ?? r.principalId },
                 { key: "createdAt", label: "Granted", render: r => when(r.createdAt) },
                 { key: "actions", label: "", render: r => <Button size="sm" variant="secondary-destructive"
-                  onClick={() => op({ op: "grant.revoke", id: String(r.id) }, confirmations.rbac.revoke())}>Revoke</Button> }]} />
+                  onClick={() => revokeGrant(String(r.id))}>Revoke</Button> }]} />
           </div>
         </Section>
         <AccessMode key={o.app.accessMode} current={o.app.accessMode} save={accessMode =>
@@ -112,7 +114,7 @@ function ApplicationRoles({ applicationId }: { applicationId: string }) {
             <TextField label="User email or group ID" placeholder="person@example.com or finance" {...f.text("grantWho")} />
             <Row><Button type="submit" variant="primary">Grant role</Button></Row>
           </Form>
-          <Form onSubmit={() => op({ op: "grant.revoke", id: f.values.revokeId.trim() }, confirmations.rbac.revoke())}>
+          <Form onSubmit={() => revokeGrant(f.values.revokeId.trim())}>
             <TextField label="Grant ID to revoke" placeholder="from the grants list" {...f.text("revokeId")} />
             <Row><Button type="submit" variant="secondary-destructive">Revoke grant</Button></Row>
           </Form>

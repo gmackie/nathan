@@ -292,6 +292,28 @@ test("audit parity: OAuth client create", async () => {
   assert.deepEqual(rowsB, rowsA);
 });
 
+test("Studio revokes grants only in the selected application", async () => {
+  const t = setup();
+  const post = body => call(t, "/rbac", { method: "POST", session: "admin", body });
+  const grant = async app => {
+    t.run("INSERT INTO nathan_applications(id,hostname) VALUES (?,?)", app, app + ".example.test");
+    assert.equal((await post({ op: "role.upsert", app, key: "viewer", permissions: [] })).status, 200);
+    const result = await post({ op: "grant.create", app, role: "viewer", principalType: "user", email: "bob@example.test" });
+    assert.equal(result.status, 200);
+    return result.json.data.id;
+  };
+  const billing = await grant("billing");
+  const support = await grant("support");
+  const remaining = () => t.db.prepare("SELECT id FROM nathan_rbac_grants ORDER BY app_id").all().map(row => row.id);
+  assert.equal((await post({ op: "grant.revoke", app: "billing", id: support })).status, 409);
+  assert.equal((await post({ op: "grant.revoke", id: support })).status, 400);
+  assert.deepEqual(remaining(), [billing, support]);
+  assert.equal((await post({ op: "grant.revoke", app: "billing", id: billing })).status, 200);
+  assert.deepEqual(remaining(), [support]);
+  assert.deepEqual(t.auditRows().filter(r => r.action === "rbac_grant_revoke" && r.outcome === "succeeded")
+    .map(r => r.target), ["billing:viewer:user:u-bob"]);
+});
+
 test("audit parity: RBAC role grant, and a refused RBAC operation", async () => {
   const prepare = async t => {
     t.run("INSERT INTO nathan_applications(id,hostname) VALUES ('demo','demo.example.test')");

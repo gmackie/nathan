@@ -105,7 +105,9 @@ export const rbac = {
   grant: (app: string, role: string, who: string): Confirmation => ({
     title: "Grant role", confirmLabel: "Grant", question: "Grant " + role + " in " + app + " to " + who + "?"
   }),
-  revoke: (): Confirmation => ({ title: "Revoke grant", destructive: true, question: "Revoke this grant?" }),
+  revoke: (app: string, id: string): Confirmation => ({
+    title: "Revoke grant", destructive: true, question: "Revoke grant " + id + " in " + app + "?"
+  }),
   groupDelete: (id: string): Confirmation => ({
     title: "Delete group", phrase: "CONFIRM DELETE GROUP " + id, destructive: true,
     question: "Delete group " + id + ", its memberships and grants?"

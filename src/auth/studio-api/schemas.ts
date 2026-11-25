@@ -200,7 +200,7 @@ export const rbacInput = z.discriminatedUnion("op", [
   z.looseObject({ op: z.literal("member.remove"), group: text(64), userId: userId.optional(), email: emailAddress.optional() }),
   z.looseObject({ op: z.literal("grant.create"), app: appId, role: key, principalType: z.enum(["user", "group"]),
     email: emailAddress.optional(), group: text(64).optional() }),
-  z.looseObject({ op: z.literal("grant.revoke"), id: text(200) }),
+  z.looseObject({ op: z.literal("grant.revoke"), app: appId, id: text(200) }),
   z.looseObject({ op: z.literal("sync"), app: appId, manifest: z.record(z.string(), z.unknown()),
     prune: z.boolean().optional(), dryRun: z.boolean().optional(), confirm: confirm.optional(), confirmPrune: confirm.optional() })
 ]);

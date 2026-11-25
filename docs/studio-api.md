@@ -153,5 +153,6 @@ The Identity Studio SPA (NATH-39, `src/ui/pages/studio/`) uses only this API.
   statuses, and v1 uses the codes above. Service refusals are always 409 in v1, where some legacy
   routes used 400.
 - Anonymous requests get 401 (legacy: 403).
+- RBAC `grant.revoke` requires the selected application ID in `app` and the grant ID in `id`. The grant must belong to that application.
 - Body limits count bytes and are enforced while reading (`readBoundedText`). Legacy routes count
   characters after reading.
