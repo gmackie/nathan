@@ -131,3 +131,23 @@ For rollback, repeat the same hold, drain and backlog checks. Retain the migrate
 Retain previous Worker versions and database backups before migrations. Revoke exposed provider credentials and OIDC clients; rotate signing material with overlapping keys, rather than deleting keys immediately. Verify recovery, session revocation, and that no direct public upstream URLs remain.
 
 Read [security](security.md), [operations](operations.md), and [roadmap](roadmap.md).
+
+### Studio behind Cloudflare Access
+
+In the CLI wizard choose `access` for Studio authentication. Select the native Microsoft Entra ID or GitHub provider by its Cloudflare ID. Enable independent MFA methods in the Access organization first. The installer applies the enabled TOTP, security key and biometric methods to the Studio application with a one-hour MFA session. The organization's global enforcement setting is preserved. Use the Cloudflare team callback for that provider.
+
+For example, an existing CLI configuration can include these fields.
+
+```json
+{
+  "adminEmails": ["owner@example.com", "operator@example.com"],
+  "studioAccess": {
+    "identityProviderId": "462306b8-3172-49e5-be9d-5b2562d13db1",
+    "emails": ["operator@example.com"]
+  }
+}
+```
+
+Run `node scripts/nathan.mjs plan path/to/config.json` with the account's Cloudflare token for a read-only check of the Access application, policy, local administrators and hostname. For a fresh installation include the initial owner in the policy. To move an existing installation, complete owner enrollment and grant the selected verified accounts administrative access first. Register the precise operator-host social callback with the upstream provider. Some upstream clients support a single callback, so use an enrolled local authenticator on the admin host if that callback is unavailable.
+
+For a ForgeGraph-managed installation, `node scripts/nathan.mjs studio-access path/to/config.json` previews the Access application and policy independently of Worker deployment. Add `--apply` to create the application and its email policy together, or verify an existing match. This command prints the three verified Worker bindings. It changes no DNS or Worker configuration. Use the normal managed deployment to upload those bindings and the Worker before attaching the exact administrator custom domain. Verify a fresh sign-in on each origin before production cutover. The CLI installer also wires the verified bindings and exact domain into its generated Worker config. The hosted web installer continues to use Nathan authentication.

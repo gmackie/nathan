@@ -9,6 +9,7 @@ import { providerCommand } from "./lib/provider-wizard.mjs";
 import { PROVIDER_IDS } from "../src/shared/providers.mjs";
 import { protectCommand } from "./lib/protect-wizard.mjs";
 import { rbacCommand } from "./lib/rbac-wizard.mjs";
+import { inspectStudioHostname, inspectStudioInstallation, reconcileStudioAccess } from "./lib/studio-access.mjs";
 import { adminCommand } from "./lib/admin-wizard.mjs";
 import { domainCommand } from "./lib/domain-wizard.mjs";
 import { realmForLoginHostname } from "../src/shared/realm.mjs";
@@ -71,10 +72,19 @@ async function init() {
   }
   const profile = await ask("Security profile (standard/business/high)", existing?.securityProfile || "standard");
   const adminEmail = await ask("Admin allowlist email (requires verified account + admin role)", existing?.adminEmails?.[0] || "");
+  const adminEmails = [adminEmail, ...(existing?.adminEmails?.slice(1) ?? [])].filter(Boolean);
+  const mode = await ask("Studio authentication (nathan/access)", existing?.studioAccess ? "access" : "nathan");
+  if (!["nathan", "access"].includes(mode)) throw Error("Choose nathan or access");
+  let studioAccess;
+  if (mode === "access") {
+    const identityProviderId = await ask("Cloudflare Access Entra or GitHub identity provider ID", existing?.studioAccess?.identityProviderId);
+    const emails = await ask("Studio administrator emails, comma-separated", existing?.studioAccess?.emails?.join(",") || adminEmail);
+    studioAccess = { identityProviderId, emails: emails.split(",").map(email => email.trim().toLowerCase()) };
+  }
   const appName = await ask("Worker to protect (blank to skip)", existing?.applications?.[0]?.workerName || detected?.name || availableWorkers[0] || "");
   const cfg = {
     name, hostname, ...(realm?{realm}:{}), ...(accountId ? {accountId} : {}), securityProfile: profile,
-    adminEmails: adminEmail ? [adminEmail] : [],
+    adminEmails, ...(studioAccess ? { studioAccess } : {}),
     database: { type:"d1", name: existing?.database?.name || name + "-auth" },
     providers: existing?.providers || { google: { enabled:false }, github: { enabled:false } },
     applications: existing?.applications || (appName ? [{id: appName.replace(/[^a-z0-9-]/g,"-"), kind:"worker",workerName:appName,protection:"binding"}] : [])
@@ -92,6 +102,10 @@ async function planOrDoctor(live) {
   if (process.env.CLOUDFLARE_API_TOKEN && cfg.accountId) {
     const client = new CloudflareClient(process.env.CLOUDFLARE_API_TOKEN,cfg.accountId);
     result.discovery = await inspectDeployment(client,cfg);
+    if (cfg.studioAccess) {
+      await inspectStudioInstallation(client, cfg, result.discovery);
+      result.studioAccess = await reconcileStudioAccess(client, cfg);
+    }
     if (result.discovery.dnsConflicts.length) result.warning = "DNS records exist. Review manually before deploy.";
   } else result.discovery = "Supply CLOUDFLARE_API_TOKEN and accountId for account/zone/DNS discovery";
   if (live) {
@@ -123,11 +137,13 @@ async function provision(forceApply=false) {
   // and published in a separate step after their OIDC clients exist.
   out({notice:"This creates a D1 database, migrates schema and publishes the auth Worker", accountId:cfg.accountId, hostname:cfg.hostname});
   if (!(await yesNo("Apply changes to this account and hostname?"))) throw Error("Cancelled");
+  if (cfg.studioAccess) await inspectStudioInstallation(client, cfg, snapshot);
+  const studio = cfg.studioAccess ? await reconcileStudioAccess(client, cfg, true) : null;
   const name = cfg.database.name;
   const database = snapshot.existingDatabase || await client.createDatabase(name);
   const dbId = database.uuid || database.id;
   if (!/^[a-f0-9-]{36}$/.test(dbId)) throw Error("Cloudflare did not return a valid D1 database UUID");
-  const configPath = await createGeneratedConfig(cfg,dbId);
+  const configPath = await createGeneratedConfig(cfg,dbId,null,studio?.bindings);
   const liveConfig = JSON.parse(await readFile(configPath,"utf8"));
   console.log("Applying reviewed D1 migrations before publishing the identity hostname.");
   await runCli("npx",["wrangler","d1","migrations","apply",name,"--remote","--config",configPath]);
@@ -177,6 +193,12 @@ async function provision(forceApply=false) {
       : randomBytes(32).toString("base64url");
     await runCli("npx",["wrangler","secret","put",name,"--config",stagingPath],{input:value});
   });
+  if (studio) {
+    await inspectStudioInstallation(client, cfg, snapshot);
+    const verified = await reconcileStudioAccess(client, cfg);
+    if (verified.bindings?.NATHAN_ACCESS_AUD !== studio.bindings.NATHAN_ACCESS_AUD)
+      throw Error("Studio Access changed during installation. Inspect the new plan before publishing");
+  }
   await runCli("npx",["wrangler","deploy","--config",configPath]);
   console.log("Identity Worker published. Configure a trusted login provider and verify OIDC discovery.");
 }
@@ -226,7 +248,7 @@ async function wizard(){
       await adminCommand(["promote"],file,true);
     }
   }
-  console.log("\nIdentity Studio: https://"+cfg.hostname+"/studio");
+  console.log("\nIdentity Studio: https://"+(cfg.studioAccess ? "admin." : "")+cfg.hostname+"/studio");
   console.log("Self-service passkeys and TOTP: https://"+cfg.hostname+"/security");
   console.log("Admin MCP endpoint: https://"+cfg.hostname+"/mcp (read-only by default)");
   console.log("Register external and Worker OIDC clients in Studio. Copy the one-time secret to a secure manager.");
@@ -260,7 +282,15 @@ async function wizard(){
   if (command === "providers") return providerCommand(args.filter(a=>a!=="--apply"&&!a.endsWith(".json")),file,apply);
   if (command === "protect") return protectCommand(args.filter(a=>a!=="--apply"&&!a.endsWith(".json")),file,apply);
   if (command === "rbac") return rbacCommand(args.filter(a=>a!=="--apply"&&!a.endsWith(".json")),file,apply);
+  if (command === "studio-access") {
+    if (args.some(a => a !== "--apply" && a !== file)) throw Error("Usage: studio-access [--apply] [config.json]");
+    const cfg = await loadConfig(file);
+    if (!cfg.accountId) throw Error("Select a Cloudflare account in the configuration");
+    const api = new CloudflareClient(process.env.CLOUDFLARE_API_TOKEN, cfg.accountId);
+    await inspectStudioHostname(api, cfg);
+    return out(await reconcileStudioAccess(api, cfg, apply));
+  }
   if (command === "admin") return adminCommand(args.filter(a=>a!=="--apply"&&!a.endsWith(".json")),file,apply);
   if (command === "domains") return domainCommand(args.filter(a=>!a.endsWith(".json")),file);
-  console.log("Nathan CLI\n  wizard               guided end-to-end installer\n  init                 guided local config\n  plan                 read-only plan + optional Cloudflare discovery\n  doctor [--live]      validate config and optionally OIDC discovery\n  deploy --apply       provision D1 and deploy Worker (requires Cloudflare token)\n  providers guide <id> console link, exact callback and steps (google, github, apple, discord, twitch, twitter)\n  providers add <id> --apply  store provider credentials as an encrypted Worker secret\n  rbac plan <app>          diff permissions/roles in nathan.config.json against Nathan\n  rbac sync <app> --apply  apply them (grants stay in Identity Studio; --prune removes undeclared)\n  protect <app>        plan a gateway for a private upstream\n  protect <app> --apply   deploy only after public-origin isolation\n  admin promote --apply     elevate a verified allowlisted user\n  domains discover         Cloudflare DNS/Worker host inventory and exact OIDC callbacks\n  domains callback <host>  Exact root/subdomain OIDC callback\n  domains routes           Wildcard proxy routing preview (not applied)\n\nNo password or OAuth client secret is accepted as a CLI flag.");
+  console.log("Nathan CLI\n  wizard               guided end-to-end installer\n  init                 guided local config\n  plan                 read-only plan + optional Cloudflare discovery\n  doctor [--live]      validate config and optionally OIDC discovery\n  deploy --apply       provision D1 and deploy Worker (requires Cloudflare token)\n  providers guide <id> console link, exact callback and steps (google, github, apple, discord, twitch, twitter)\n  providers add <id> --apply  store provider credentials as an encrypted Worker secret\n  rbac plan <app>          diff permissions/roles in nathan.config.json against Nathan\n  rbac sync <app> --apply  apply them (grants stay in Identity Studio; --prune removes undeclared)\n  protect <app>        plan a gateway for a private upstream\n  protect <app> --apply   deploy only after public-origin isolation\n  studio-access [--apply]    inspect or create the Studio Access application and report its Worker bindings\n  admin promote --apply     elevate a verified allowlisted user\n  domains discover         Cloudflare DNS/Worker host inventory and exact OIDC callbacks\n  domains callback <host>  Exact root/subdomain OIDC callback\n  domains routes           Wildcard proxy routing preview (not applied)\n\nNo password or OAuth client secret is accepted as a CLI flag.");
 })().catch(e => { console.error("Nathan error:",e.message); process.exitCode=1; });

@@ -1,3 +1,4 @@
+import { reconcileStudioAccess } from "./studio-access.mjs";
 import { readFile } from "node:fs/promises";
 import { loadConfig } from "./config.mjs";
 import { CloudflareClient, inspectDeployment } from "./cloudflare.mjs";
@@ -77,6 +78,7 @@ export async function providerCommand(args, file, apply) {
   const name = args[1];
   const info = providerGuide(name, cfg.hostname);
   printGuide(info);
+  if (cfg.studioAccess) console.log("Register the operator callback with the upstream provider: " + providerGuide(name, "admin." + cfg.hostname).callback);
   if (action === "guide") return;
   if (!apply) throw Error("Credential install requires --apply; no secrets changed");
   if (!cfg.accountId) throw Error("Cloudflare accountId required before configuring providers");
@@ -84,7 +86,8 @@ export async function providerCommand(args, file, apply) {
   const current = await inspectDeployment(api, cfg);
   if (!current.existingAuthWorker || !current.existingDatabase) throw Error("Deploy the Nathan Auth Worker first");
   const databaseId = current.existingDatabase.uuid || current.existingDatabase.id;
-  const configPath = await createGeneratedConfig(cfg, databaseId);
+  const studio = cfg.studioAccess ? await reconcileStudioAccess(api, cfg) : null;
+  const configPath = await createGeneratedConfig(cfg, databaseId, null, studio?.bindings);
   const values = await collectCredentials(name);
   if (!(await yesNo("Store " + info.name + " credentials as the Cloudflare Worker secret " + info.secretBindings[0] + "?"))) throw Error("Cancelled");
   // No secrets are saved in the local manifest or process arguments; the bundle goes over stdin.

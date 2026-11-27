@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { realmForLoginHostname, isHostnameWithinRealm, realmCallback } from "../../src/shared/realm.mjs";
+import { studioAccessOptions } from "./studio-access.mjs";
 import { validateManifest } from "../../src/shared/rbac-manifest.mjs";
 
 export const ALLOWED_PROFILES = new Set(["standard", "business", "high"]);
@@ -24,6 +25,9 @@ export function validateConfig(value) {
   if (!ALLOWED_PROFILES.has(value.securityProfile)) errors.push("securityProfile must be standard, business, or high");
   if (value.accountId != null && !/^[a-f0-9]{32}$/.test(value.accountId)) errors.push("accountId must be a 32-character Cloudflare account ID");
   if (value.database?.type !== "d1" || !SLUG.test(value.database?.name || "")) errors.push("database must specify a valid D1 name");
+  if (value.studioAccess !== undefined) {
+    try { studioAccessOptions(value); } catch (error) { errors.push(error.message); }
+  }
   if (value.realm !== undefined) {
     if(!value.realm || typeof value.realm!=="object" || Array.isArray(value.realm)) errors.push("realm must be a domain-wide SSO object");
     else {
@@ -72,6 +76,8 @@ export function buildPlan(cfg) {
     { operation: "propose", resource: "d1", name: cfg.database.name },
     { operation: "propose", resource: "custom-domain", name: cfg.hostname }
   ];
+  if (cfg.studioAccess) out.push({ operation: "create-or-validate", resource: "studio-access-application",
+    ...studioAccessOptions(cfg), overwriteExisting: false, independentMfa: true });
   if(cfg.realm)out.push({operation:"propose",resource:"domain-wide-sso-realm",
     name:cfg.realm.apex,issuer:"https://"+cfg.hostname+"/api/auth",
     coverage:[cfg.realm.apex,"*."+cfg.realm.apex],registration:"approved-only",

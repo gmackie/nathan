@@ -28,7 +28,7 @@ export function runCli(command, args, { input, cwd } = {}) {
     if (input !== undefined) child.stdin.end(input + "\n"); else child.stdin.end();
   });
 }
-export async function createGeneratedConfig(cfg, databaseId, gateway = null) {
+export async function createGeneratedConfig(cfg, databaseId, gateway = null, studioBindings = null) {
   const templateName = gateway ? "wrangler.gateway.jsonc" : "wrangler.auth.jsonc";
   const wrangler = JSON.parse(stripJsonc(await readFile(resolve(templateName), "utf8")));
   wrangler.account_id = cfg.accountId;
@@ -39,6 +39,12 @@ export async function createGeneratedConfig(cfg, databaseId, gateway = null) {
   if (!gateway) {
     wrangler.name = cfg.name + "-auth";
     wrangler.routes = [{ pattern: cfg.hostname, custom_domain: true }];
+    if (cfg.studioAccess) {
+      if (!studioBindings || studioBindings.NATHAN_ADMIN_ORIGIN !== "https://admin." + cfg.hostname)
+        throw Error("Verified Studio Access settings required to generate the auth Worker configuration");
+      Object.assign(wrangler.vars, studioBindings);
+      wrangler.routes.push({ pattern: "admin." + cfg.hostname, custom_domain: true });
+    }
     wrangler.vars.NATHAN_ISSUER = "https://" + cfg.hostname;
     wrangler.vars.NATHAN_REALM_APEX = cfg.realm?.apex || "";
     wrangler.vars.NATHAN_ADMIN_EMAILS = (cfg.adminEmails || []).join(",");
