@@ -24,6 +24,7 @@ import { newNonce, securityHeaders } from "./headers.ts";
 import { isIslandId, type IslandId } from "./island-ids.ts";
 import { UI_MANIFEST, validateManifest, type UiAsset, type UiManifest } from "./manifest.ts";
 import { NATHAN_THEME, THEME_MODES, type ThemeMode } from "./theme.ts";
+import { appearanceCss, type ResolvedAppearance } from "./appearance.ts";
 
 export interface RenderPageOptions {
   /** Document title; " · Nathan" is appended. */
@@ -42,6 +43,12 @@ export interface RenderPageOptions {
   formAction?: readonly string[];
   /** Page-specific extra headers (for example Set-Cookie). Security headers cannot be overridden. */
   headers?: HeadersInit;
+  /**
+   * NATH-38: a hosted page's resolved appearance (resolveAppearance in ./appearance.ts). Its CSS is
+   * emitted in its own nonce'd <style> after Kumo and theme.css. Omitted or empty: nothing is
+   * emitted and the page is stock Kumo. Studio, installer and gateway pages never pass one.
+   */
+  appearance?: ResolvedAppearance;
   /** For tests: a manifest other than the built one. */
   manifest?: UiManifest;
 }
@@ -71,7 +78,10 @@ export function renderPage(element: ReactElement, opts: RenderPageOptions): Resp
   for (const id of islands) if (!isIslandId(id) || !Object.hasOwn(manifest.islands, id)) throw Error("Unknown island: " + id);
 
   const nonce = newNonce();
-  const rendered = renderToString(<CSPProvider nonce={nonce}>{element}</CSPProvider>);
+  // disableStyleElements: base-ui's hoisted <style precedence> elements (ScrollArea in Kumo's Sidebar,
+  // Select) can't carry the nonce under renderToString, so the scan below would refuse the page.
+  // Their one rule (.base-ui-disable-scrollbar) ships in layout.css instead (NATH-39).
+  const rendered = renderToString(<CSPProvider nonce={nonce} disableStyleElements>{element}</CSPProvider>);
   for (const id of islandsInMarkup(rendered))
     if (!(islands as readonly string[]).includes(id)) throw Error("Island " + id + " is rendered but not in renderPage's islands");
   const { html: body, css } = moveInlineStylesToClasses(rendered);
@@ -91,6 +101,9 @@ export function renderPage(element: ReactElement, opts: RenderPageOptions): Resp
   }
   head += "<link rel=\"stylesheet\"" + integrityAttrs(manifest.css) + ">";
   if (css) head += "<style nonce=\"" + nonce + "\" " + INLINE_STYLE_MARKER + ">" + css + "</style>";
+  // Every value in appearanceCss is a validated #rrggbb, an integer or a fixed font stack.
+  const brand = opts.appearance ? appearanceCss(opts.appearance) : "";
+  if (brand) head += "<style nonce=\"" + nonce + "\" data-nathan-appearance>" + brand + "</style>";
   if (islands.length) {
     const preloaded = new Set<string>();
     for (const id of islands) for (const asset of manifest.islands[id].imports) {

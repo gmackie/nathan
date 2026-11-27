@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
-import { authFixtureModules, migrate, randomKey, base64url, start, COMPAT } from "./helpers.mjs";
+import { authFixtureModules, migrate, randomKey, base64url, start, COMPAT, studioShell } from "./helpers.mjs";
 import { providerEntryFromDocs, gatekeeper, invalidCredentials } from "./gatekeeper-verifier.mjs";
 
 const PROVIDER = providerEntryFromDocs();
@@ -95,6 +95,17 @@ function browserFormHeaders(page) {
   return { Origin: policy === "no-referrer" ? "null" : ORIGIN, "Sec-Fetch-Site": "same-origin" };
 }
 const formHeaders = new Map();
+/**
+ * The consent page's native `<input type="checkbox" name="scope" value=...>` for `scope`, whatever
+ * the attribute order (React 19 writes `checked` before `value`): { checked } or null when absent.
+ */
+function checkbox(html, scope) {
+  for (const [tag] of html.matchAll(/<input\b[^>]*>/g)) {
+    if (!/\btype="checkbox"/.test(tag) || !/\bname="scope"/.test(tag)) continue;
+    if (tag.includes(' value="' + scope + '"')) return { checked: /\schecked(=""|\s|\/|>)/.test(tag) };
+  }
+  return null;
+}
 async function consentPage(who, url) {
   const page = await auth.fetch(url, { redirect: "manual", headers: { Cookie: who.cookie } });
   const html = page.status === 200 ? await page.text() : "";
@@ -234,10 +245,11 @@ test("only an enrolled administrator registers an MCP server, and its catalog ca
   const overview = await (await auth.fetch(ORIGIN + "/studio/api/mcp", { headers: { Cookie: admin.cookie } })).json();
   assert.deepEqual(overview.resources[0].scopes.map(s => s.scope), SCOPES, "nathan:* permissions are never scopes");
   assert.equal(overview.resources[0].scopes.find(s => s.scope === "notes:export").sensitive, true);
-  const page = await (await auth.fetch(ORIGIN + "/studio", { headers: { Cookie: admin.cookie } })).text();
-  const script = [...page.matchAll(/<script nonce="[^"]+">([\s\S]*?)<\/script>/g)].map(m => m[1]).join("\n");
-  assert.doesNotThrow(() => new Function(script), "studio script must be valid JavaScript");
-  assert.match(script, /\/studio\/api\/mcp/);
+  // NATH-39: Studio is a Kumo SPA; its code is the SRI-pinned island bundle the Worker serves.
+  const { html, code } = await studioShell(auth, ORIGIN, await auth.fetch(ORIGIN + "/studio", { headers: { Cookie: admin.cookie } }));
+  assert.ok(html.includes('href="#/mcp"'));
+  assert.match(code, /Remote MCP servers/);
+  assert.match(code, /"\/mcp"/);
 });
 
 test("discovery: protected-resource metadata, 401 challenges and authorization-server metadata", async () => {
@@ -299,7 +311,7 @@ test("an MCP SDK client discovers, registers, gets narrowed consent and calls a 
   // no-referrer would make browsers send Origin: null with the form post, which Nathan refuses.
   assert.equal(page.headers.get("Referrer-Policy"), "same-origin");
   assert.doesNotMatch(html, /<script/);
-  for (const s of SCOPES) assert.match(html, new RegExp('value="' + s + '" checked'), s + " preselected from the request");
+  for (const s of SCOPES) assert.ok(checkbox(html, s)?.checked, s + " preselected from the request");
   const approved = await answer(alice, ticket, ["notes:read"]);
   assert.equal(approved.status, 303);
   const callback = new URL(approved.headers.get("Location"));
@@ -394,8 +406,8 @@ test("sensitive scopes are never granted through an alias or Full access, and ne
   const client = (await registerClient()).body;
   const verifier = base64url(crypto.getRandomValues(new Uint8Array(32)));
   const { html, ticket } = await consentPage(alice, authorizeUrl(client.client_id, { scope: "notes:full notes:basic", verifier }));
-  assert.match(html, /value="notes:full" checked/);
-  assert.match(html, /value="notes:export">/, "offered, but not preselected");
+  assert.ok(checkbox(html, "notes:full")?.checked);
+  assert.equal(checkbox(html, "notes:export")?.checked, false, "offered, but not preselected");
   const callback = new URL((await answer(alice, ticket, ["notes:full"])).headers.get("Location"));
   const exchanged = await token({ grant_type: "authorization_code", code: callback.searchParams.get("code"), redirect_uri: REDIRECT, code_verifier: verifier, client_id: client.client_id, resource: RESOURCE });
   assert.equal(exchanged.body.scope, "notes:read notes:share notes:write");

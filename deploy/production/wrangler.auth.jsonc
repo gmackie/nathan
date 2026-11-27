@@ -25,7 +25,8 @@
   ],
   "vars": {
     "NATHAN_ISSUER": "https://id.gmac.io",
-    "NATHAN_SECURITY_PROFILE": "business",
+    "NATHAN_SECURITY_PROFILE": "standard",
+    "NATHAN_ADMIN_STEPUP_METHOD": "passkey-or-totp",
     "NATHAN_BOOTSTRAP_REQUIRED": "true",
     "NATHAN_INSTALL_ACTIVE": "true",
     "NATHAN_MCP_WRITE_ENABLED": "false",

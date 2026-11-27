@@ -6,10 +6,9 @@ import { readFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
-import { signInPage, consentPage, studioPage } from "../src/auth/ui.ts";
 
-// NATH-38 /security and NATH-40 installer are TSX pages now (node can't import TSX), so bundle them
-// like ui-render.test.mjs does.
+// NATH-38 /security, sign-in and consent and NATH-40 installer are TSX pages now (node can't import
+// TSX), so bundle them like ui-render.test.mjs does.
 await mkdir(".nathan/test-ui", { recursive: true });
 const BUNDLE = { platform: "node", format: "esm", bundle: true, jsx: "automatic", packages: "external", logLevel: "error",
   logOverride: { "module-level-directive": "silent" } };
@@ -18,28 +17,35 @@ await build({ ...BUNDLE, entryPoints: ["src/auth/security-ui.ts"], outfile: secu
 const { securityPage } = await import(pathToFileURL(securityBundle).href + "?" + Date.now());
 await build({ ...BUNDLE, entryPoints: ["src/installer/ui.ts"], outfile: ".nathan/test-ui/installer-ui.mjs" });
 const { installerPage } = await import(pathToFileURL(".nathan/test-ui/installer-ui.mjs").href + "?" + Date.now());
+await build({ ...BUNDLE, entryPoints: ["tests/fixtures/hosted-pages.ts"], outfile: ".nathan/test-ui/pages-hosted.mjs" });
+const { signInPage, consentPage } = await import(pathToFileURL(".nathan/test-ui/pages-hosted.mjs").href + "?" + Date.now());
 
-/** Every inline script must at least parse, or no button on the page works. Import maps must be JSON. */
+/**
+ * Every inline script must at least parse, or no button on the page works. Import maps must be JSON.
+ * Kumo pages carry no inline code: empty, SRI-pinned module tags are skipped.
+ */
 function assertScriptsParse(name, html) {
   const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi)].map(m => ({ attrs: m[1], source: m[2] }));
+  let inline = 0;
   for (const [i, { attrs, source }] of scripts.entries()) {
-    if (/\btype="importmap"/.test(attrs)) assert.doesNotThrow(() => JSON.parse(source), name + " import map " + i + " must be JSON");
-    else assert.doesNotThrow(() => new Script(source, { filename: name + "#script" + i }), name + " script " + i + " must parse");
+    if (/\btype="importmap"/.test(attrs)) { assert.doesNotThrow(() => JSON.parse(source), name + " import map " + i + " must be JSON"); continue; }
+    if (/\ssrc="/.test(attrs) && source === "") continue;
+    inline++;
+    assert.doesNotThrow(() => new Script(source, { filename: name + "#script" + i }), name + " script " + i + " must parse");
   }
-  return scripts.length;
+  return inline;
 }
 
-test("Identity Studio, sign-in, consent and installer scripts parse", async () => {
+// Identity Studio is a Kumo SPA with no inline script (NATH-39); tests/studio-ui.test.mjs covers its shell.
+test("sign-in, consent, security and installer scripts parse", async () => {
   const pages = {
-    studio: await studioPage("admin@example.com").text(),
     signIn: await signInPage(["google", "github"], true, true).text(),
     consent: await consentPage(true, "Example app", "openid profile email").text(),
     security: await securityPage("admin@example.com").text(),
     installer: await installerPage().text()
   };
-  let total = 0;
-  for (const [name, html] of Object.entries(pages)) total += assertScriptsParse(name, html);
-  assert.ok(total >= 3, "expected inline scripts on the interactive pages");
+  // Kumo pages carry no inline code (asserted per page below); only not-yet-converted pages do.
+  for (const [name, html] of Object.entries(pages)) assertScriptsParse(name, html);
 });
 
 test("security page scripts parse: only its import map and the SRI-pinned security island, no inline code", async () => {
@@ -61,6 +67,16 @@ test("security page scripts parse: only its import map and the SRI-pinned securi
     assert.doesNotThrow(() => execFileSync(process.execPath, ["--check", ".nathan/ui-assets" + asset.src], { stdio: "pipe" }), asset.src);
 });
 
+test("Kumo sign-in and consent pages have no inline script, only SRI-pinned islands", async () => {
+  for (const [name, html] of Object.entries({
+    signIn: await signInPage(["google", "github"], true, true).text(),
+    consent: await consentPage(true, "Example app", "openid profile email").text()
+  })) {
+    assert.equal(assertScriptsParse(name, html), 0, name + " has no inline code");
+    assert.match(html, /<script type="module" src="\/__nathan\/ui\/[a-z-]+-[A-Z0-9]+\.js" integrity="sha384-/, name);
+  }
+});
+
 /**
  * Under `Referrer-Policy: no-referrer` browsers send `Origin: null` on a same-origin HTML form POST
  * (verified in Chromium against staging: the form got "Cross-origin request denied", while a
@@ -69,9 +85,9 @@ test("security page scripts parse: only its import map and the SRI-pinned securi
  * requests while still sending no referrer cross-site: `same-origin`.
  */
 test("interactive pages keep the same-origin Origin header (no no-referrer)", async () => {
+  // Identity Studio: tests/studio-ui.test.mjs asserts the same header on its renderPage shell.
   const pages = {
     installer: installerPage(),
-    studio: studioPage("admin@example.com"),
     signIn: signInPage(["google"], true, true),
     consent: consentPage(true, "Example app", "openid"),
     security: securityPage("admin@example.com")

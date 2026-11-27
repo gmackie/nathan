@@ -114,7 +114,22 @@ const resumeCookie = response => {
   return "__Host-nathan-saml-idp=" + c.value;
 };
 /** Nathan's "Continue to <SP> as <user>?" page: its single-use confirmation token, or null. */
-const confirmationToken = html => /<form method="post" action="\/saml\/idp\/continue"><input type="hidden" name="confirm" value="([A-Za-z0-9_-]+)">/.exec(html)?.[1] ?? null;
+// NATH-38: React 19 writes a form's action before its method, and closes void elements with "/>".
+const confirmationToken = html => /<form (?:method="post" action="\/saml\/idp\/continue"|action="\/saml\/idp\/continue" method="post")><input type="hidden" name="confirm" value="([A-Za-z0-9_-]+)"\/?>/.exec(html)?.[1] ?? null;
+/** Nathan's scripts on a page: every one carries the page nonce; returns the executable ones (not the import map). */
+const pageScripts = (html, csp) => {
+  const nonce = /'nonce-([^']+)'/.exec(csp)[1];
+  const scripts = [...html.matchAll(/<script\b([^>]*)>([^]*?)<\/script>/g)];
+  for (const [, attrs] of scripts) assert.ok(attrs.includes('nonce="' + nonce + '"'), "every script carries the page nonce");
+  return scripts.filter(([, attrs]) => !/type="importmap"/.test(attrs));
+};
+/** The auto-POST page runs exactly one script: the hashed, SRI-pinned auto-post island, with no inline code. */
+const assertOnlyAutoPostScript = (html, csp) => {
+  const executable = pageScripts(html, csp);
+  assert.equal(executable.length, 1, "only Nathan's submit script");
+  assert.match(executable[0][1], /type="module" src="\/__nathan\/ui\/auto-post-[A-Za-z0-9]+\.js" integrity="sha384-/);
+  assert.equal(executable[0][2], "", "no inline code");
+};
 /** The browser pressing Continue (or Cancel) on Nathan's confirmation page: a same-origin form POST. */
 function confirmPost(resume, session, token, action = "continue", headers = {}) {
   return dispatch(ORIGIN + "/saml/idp/continue", { method: "POST", redirect: "manual", body: "confirm=" + token + "&action=" + action,
@@ -286,7 +301,8 @@ test("SP-initiated login (HTTP-Redirect): a signed Response that an independent 
   assert.equal(action, s.acs);
   assert.equal(RelayState, "/d/home");
   assert.match(csp, new RegExp("form-action https://" + s.host.replace(/\./g, "\\.") + ";"), "form-action limited to the ACS origin");
-  assert.match(csp, /script-src 'nonce-/);
+  assert.match(csp, /script-src 'self' 'nonce-/);
+  assertOnlyAutoPostScript(html, csp);
   assert.equal(page.headers.get("referrer-policy"), "same-origin");
   assert.match(page.headers.get("set-cookie"), /__Host-nathan-saml-idp=; .*Max-Age=0/, "the resume handle is cleared");
   assert.doesNotMatch(html, /<script>/, "only nonce'd scripts");
@@ -475,7 +491,7 @@ test("IdP-initiated sign-in is off by default and, when enabled, needs a same-or
   await s.update({ allowIdpInitiated: true, defaultRelayState: "/d/home", attributes: [{ name: "email", source: "email" }] });
   const page = await dispatch(start, { headers: { Cookie: user } });
   assert.equal(page.status, 200);
-  assert.match(await page.text(), new RegExp('method="post" action="/saml/idp/start/' + s.id + '"'));
+  assert.match(await page.text(), new RegExp('<form (method="post" action="/saml/idp/start/' + s.id + '"|action="/saml/idp/start/' + s.id + '" method="post")>'));
   const cross = await dispatch(start, { method: "POST", headers: { Cookie: user, Origin: "https://evil.example" } });
   await refused(cross, "cross-site IdP-initiated", "saml_cross_site_request");
   const issued = await form(await dispatch(start, { method: "POST", headers: { Cookie: user, Origin: ORIGIN, "Sec-Fetch-Site": "same-origin" } }));
@@ -573,7 +589,8 @@ test("a forged unsigned AuthnRequest answered with an existing Nathan session as
   const csp = page.headers.get("content-security-policy");
   assert.match(csp, /frame-ancestors 'none'/);
   assert.match(csp, /form-action 'self'/);
-  assert.match(csp, /style-src 'nonce-[^']+'/);
+  assert.match(csp, /style-src 'self' 'nonce-[^']+'/);
+  assert.match(csp, /script-src 'none'/);
   assert.equal(page.headers.get("referrer-policy"), "same-origin");
   assert.equal(page.headers.get("x-frame-options"), "DENY");
   const token = confirmationToken(html);
@@ -794,7 +811,7 @@ test("hostile display name, email and RelayState are escaped end to end; two SPs
   const page = await confirmPost(resume, cookie, confirmationToken(confirmHtml));
   const posted = await form(page);
   for (const raw of ["<img src=x", "<script>alert", "<!--"]) assert.ok(!posted.html.includes(raw), "auto-POST page escapes " + raw);
-  assert.equal((posted.html.match(/<script/g) ?? []).length, 1, "only Nathan's nonce'd submit script");
+  assertOnlyAutoPostScript(posted.html, posted.csp);
   assert.equal(posted.RelayState, relayState, "RelayState is returned exactly");
   const { extract } = await s.sp.parseLoginResponse(s.idp, "post", { body: { SAMLResponse: posted.SAMLResponse, RelayState: posted.RelayState } });
   assert.equal(extract.nameID, email);
