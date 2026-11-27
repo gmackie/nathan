@@ -1,9 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { inspectStudioInstallation, reconcileStudioAccess, studioAccessOptions } from "../scripts/lib/studio-access.mjs";
+import { inspectStudioInstallation, rememberStudioDatabase, reconcileStudioAccess, studioAccessOptions } from "../scripts/lib/studio-access.mjs";
 import { validateConfig, buildPlan } from "../scripts/lib/config.mjs";
 import { createGeneratedConfig } from "../scripts/lib/wrangler.mjs";
-import { readFile, rm } from "node:fs/promises";
+import { publishIdentityDomains } from "../scripts/lib/cloudflare.mjs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 
 const idp = "462306b8-3172-49e5-be9d-5b2562d13db1";
 const appId = "627cc38d-a62c-4b00-b8bc-808c15029294";
@@ -75,7 +78,9 @@ test("existing path overlaps on later pages, policy drift and MFA exemptions pre
     s => { s.policies[0].mfa_config = { mfa_disabled: true }; },
     s => { s.apps[0].mfa_config.mfa_disabled = true; },
     s => { s.apps[0].allowed_idps = []; },
-    s => { s.apps[0].options_preflight_bypass = true; }
+    s => { s.apps[0].options_preflight_bypass = true; },
+    s => { s.apps[0].session_duration = "24h"; },
+    s => { s.policies[0].session_duration = "24h"; }
   ]) {
     const { api, state } = fixture();
     await reconcileStudioAccess(api, cfg, true);
@@ -123,4 +128,62 @@ test("upgrade requires the existing Worker, database, seed and current local ope
   await assert.rejects(inspectStudioInstallation(api, cfg, snapshot), /owner/);
   bindings[0].id = "unrelated";
   await assert.rejects(inspectStudioInstallation(api, cfg, snapshot), /database/);
+});
+
+test("old manifests cannot implicitly remove an existing shared or dedicated Access boundary", async () => {
+  const old = { ...cfg, studioAccess: undefined };
+  const snapshot = { existingAuthWorker: true };
+  const api = { request: async () => ({ bindings: [{ name: "NATHAN_ADMIN_ORIGIN", type: "plain_text" }] }) };
+  await assert.rejects(inspectStudioInstallation(api, old, snapshot), /Restore/);
+  await assert.rejects(inspectStudioInstallation({ request: async () => ({}) }, old, snapshot), /bindings/);
+  await inspectStudioInstallation({ request: async () => ({ bindings: [] }) }, old, snapshot);
+});
+
+
+test("only the recorded D1 can resume an interrupted Studio bootstrap before its first migration or seed", async () => {
+  const folder = await mkdtemp(join(tmpdir(), "nathan-receipt-"));
+  const zone = { id: "zone", name: "example.com", status: "active" };
+  const api = { accountId: cfg.accountId, zones: async () => [zone], request: async () => [], dnsRecords: async () => [] };
+  let hasSchema = false;
+  api.queryDatabase = async (_id, sql) => {
+    if (sql.includes("sqlite_master")) return hasSchema ? [{ name: "nathan_bootstrap_status" }] : [];
+    if (sql.startsWith("SELECT id FROM")) return [];
+    throw Error("Cannot resume unowned database");
+  };
+  try {
+    const snapshot = { existingAuthWorker: false, existingDatabase: { uuid: "db" } };
+    await rememberStudioDatabase(cfg, "db", folder);
+    await inspectStudioInstallation(api, cfg, snapshot, folder);
+    hasSchema = true;
+    await inspectStudioInstallation(api, cfg, snapshot, folder);
+    await assert.rejects(inspectStudioInstallation(api, cfg, { ...snapshot, existingDatabase: { uuid: "other" } }, folder));
+    await assert.rejects(inspectStudioInstallation(api, { ...cfg, accountId: "b".repeat(32) }, snapshot, folder));
+  } finally { await rm(folder, { recursive: true }); }
+});
+
+test("publishes only missing exact domains with all replacement flags disabled", async () => {
+  const worker = cfg.name + "-auth";
+  const zone = { id: "zone", name: "example.com", status: "active" };
+  const domains = new Map([[cfg.hostname, { hostname: cfg.hostname, service: worker, zone_id: zone.id }]]);
+  const writes = [];
+  let reject = true;
+  const api = { accountId: cfg.accountId, zones: async () => [zone], async request(path, init) {
+    if (!init) {
+      const row = domains.get(new URL(path, "https://api.example").searchParams.get("hostname"));
+      return row ? [row] : [];
+    }
+    assert.ok(path.endsWith("/scripts/" + worker + "/domains/records"));
+    const { origins, ...flags } = init.body;
+    assert.deepEqual(flags, { override_scope: false, override_existing_origin: false, override_existing_dns_record: false });
+    assert.deepEqual(origins, [{ hostname: host, zone_id: zone.id, enabled: true, previews_enabled: false }]);
+    writes.push(host);
+    if (reject) throw Error("Conflicting DNS record");
+    domains.set(host, { ...origins[0], service: worker });
+  }};
+  await assert.rejects(publishIdentityDomains(api, cfg, [cfg.hostname, host]), /Conflicting/);
+  assert.equal(domains.has(host), false);
+  reject = false;
+  await publishIdentityDomains(api, cfg, [cfg.hostname, host]);
+  await publishIdentityDomains(api, cfg, [cfg.hostname, host]);
+  assert.equal(writes.length, 2);
 });

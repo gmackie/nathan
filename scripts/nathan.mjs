@@ -2,14 +2,14 @@
 import { readFile, writeFile, access } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { loadConfig, validateConfig, buildPlan } from "./lib/config.mjs";
-import { CloudflareClient, inspectDeployment, ensureIdpSecrets } from "./lib/cloudflare.mjs";
+import { CloudflareClient, inspectDeployment, ensureIdpSecrets, publishIdentityDomains } from "./lib/cloudflare.mjs";
 import { ask, yesNo, secretPrompt } from "./lib/prompts.mjs";
 import { discoverWrangler, runCli, createGeneratedConfig } from "./lib/wrangler.mjs";
 import { providerCommand } from "./lib/provider-wizard.mjs";
 import { PROVIDER_IDS } from "../src/shared/providers.mjs";
 import { protectCommand } from "./lib/protect-wizard.mjs";
 import { rbacCommand } from "./lib/rbac-wizard.mjs";
-import { inspectStudioHostname, inspectStudioInstallation, reconcileStudioAccess } from "./lib/studio-access.mjs";
+import { inspectStudioHostname, inspectStudioInstallation, rememberStudioDatabase, reconcileStudioAccess } from "./lib/studio-access.mjs";
 import { adminCommand } from "./lib/admin-wizard.mjs";
 import { domainCommand } from "./lib/domain-wizard.mjs";
 import { realmForLoginHostname } from "../src/shared/realm.mjs";
@@ -102,8 +102,8 @@ async function planOrDoctor(live) {
   if (process.env.CLOUDFLARE_API_TOKEN && cfg.accountId) {
     const client = new CloudflareClient(process.env.CLOUDFLARE_API_TOKEN,cfg.accountId);
     result.discovery = await inspectDeployment(client,cfg);
+    await inspectStudioInstallation(client, cfg, result.discovery);
     if (cfg.studioAccess) {
-      await inspectStudioInstallation(client, cfg, result.discovery);
       result.studioAccess = await reconcileStudioAccess(client, cfg);
     }
     if (result.discovery.dnsConflicts.length) result.warning = "DNS records exist. Review manually before deploy.";
@@ -137,12 +137,13 @@ async function provision(forceApply=false) {
   // and published in a separate step after their OIDC clients exist.
   out({notice:"This creates a D1 database, migrates schema and publishes the auth Worker", accountId:cfg.accountId, hostname:cfg.hostname});
   if (!(await yesNo("Apply changes to this account and hostname?"))) throw Error("Cancelled");
-  if (cfg.studioAccess) await inspectStudioInstallation(client, cfg, snapshot);
+  await inspectStudioInstallation(client, cfg, snapshot);
   const studio = cfg.studioAccess ? await reconcileStudioAccess(client, cfg, true) : null;
   const name = cfg.database.name;
   const database = snapshot.existingDatabase || await client.createDatabase(name);
   const dbId = database.uuid || database.id;
   if (!/^[a-f0-9-]{36}$/.test(dbId)) throw Error("Cloudflare did not return a valid D1 database UUID");
+  if (studio && !snapshot.existingDatabase) await rememberStudioDatabase(cfg, dbId);
   const configPath = await createGeneratedConfig(cfg,dbId,null,studio?.bindings);
   const liveConfig = JSON.parse(await readFile(configPath,"utf8"));
   console.log("Applying reviewed D1 migrations before publishing the identity hostname.");
@@ -199,7 +200,8 @@ async function provision(forceApply=false) {
     if (verified.bindings?.NATHAN_ACCESS_AUD !== studio.bindings.NATHAN_ACCESS_AUD)
       throw Error("Studio Access changed during installation. Inspect the new plan before publishing");
   }
-  await runCli("npx",["wrangler","deploy","--config",configPath]);
+  if (snapshot.existingAuthWorker) await runCli("npx",["wrangler","deploy","--config",stagingPath]);
+  await publishIdentityDomains(client, cfg, liveConfig.routes.map(route => route.pattern));
   console.log("Identity Worker published. Configure a trusted login provider and verify OIDC discovery.");
 }
 

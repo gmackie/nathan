@@ -162,6 +162,32 @@ export function hostnameConflicts(records, domains, hostname, workerName) {
   const ownsHostname = domains.some(d => d.hostname === hostname && d.service === workerName);
   return ownsHostname ? [] : records;
 }
+/** Use the guarded custom-domain publish operation used by Wrangler itself. A single-host,
+ * non-replacing request lets the API check DNS and Worker ownership when it commits. */
+export async function publishIdentityDomains(client, cfg, hosts) {
+  const worker = cfg.name + "-auth";
+  const base = "/accounts/" + client.accountId + "/workers";
+  const zones = await client.zones();
+  for (const hostname of hosts) {
+    const zone = zoneForHostname(zones, hostname);
+    if (!zone || zone.status !== "active") throw Error("Cannot publish a hostname outside an active zone");
+    const path = base + "/domains?hostname=" + encodeURIComponent(hostname);
+    const attached = await client.request(path);
+    if (!Array.isArray(attached)) throw Error("Invalid Worker domain inventory");
+    const matches = attached.filter(d => d.hostname === hostname);
+    const owns = d => d.service === worker && d.zone_id === zone.id && d.enabled !== false && !d.previews_enabled;
+    if (matches.length === 1 && owns(matches[0])) continue;
+    if (matches.length) throw Error("Existing Worker custom domain differs from the installation");
+    const origins = [{ hostname, zone_id: zone.id, enabled: true, previews_enabled: false }];
+    await client.request(base + "/scripts/" + worker + "/domains/records", { method: "PUT", body: {
+      origins, override_scope: false, override_existing_origin: false, override_existing_dns_record: false
+    } });
+    const readback = await client.request(path);
+    if (!Array.isArray(readback) || !readback.some(d => d.hostname === hostname && owns(d)))
+      throw Error("Worker domain attachment could not be verified");
+  }
+}
+
 export async function inspectDeployment(client, cfg) {
   const [zones, workers, existingDatabase] = await Promise.all([
     client.zones(), client.workers(), client.databaseNamed(cfg.database.name)

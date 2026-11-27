@@ -1,3 +1,6 @@
+import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { join } from "node:path";
 import { normalizeEmail } from "../../src/auth/admission-policy.mjs";
 import { zoneForHostname } from "./cloudflare.mjs";
 import { validateDomainName } from "../../src/shared/realm.mjs";
@@ -60,9 +63,37 @@ export async function inspectStudioHostname(api, cfg) {
   return existing.length > 0;
 }
 
-export async function inspectStudioInstallation(api, cfg, snapshot) {
-  const { hostname, emails } = studioAccessOptions(cfg);
+// A receipt ties retries before the first migration to the exact D1 returned by Cloudflare.
+function databaseReceipt(cfg, folder) {
+  const intent = JSON.stringify([cfg.accountId, cfg.name, cfg.database.name, cfg.hostname, normalizeEmail(cfg.adminEmails?.[0])]);
+  return join(folder, createHash("sha256").update(intent).digest("hex") + ".json");
+}
+
+export async function rememberStudioDatabase(cfg, db, folder = ".nathan/installations") {
+  await mkdir(folder, { recursive: true, mode: 0o700 });
+  const path = databaseReceipt(cfg, folder);
+  const tmp = path + "." + randomUUID();
+  await writeFile(tmp, JSON.stringify({ db }), { mode: 0o600, flag: "wx" });
+  await rename(tmp, path);
+}
+
+async function createdStudioDatabase(cfg, db, folder) {
+  try { return JSON.parse(await readFile(databaseReceipt(cfg, folder), "utf8")).db === db; }
+  catch (error) { if (error.code === "ENOENT") return false; throw error; }
+}
+
+export async function inspectStudioInstallation(api, cfg, snapshot, folder = ".nathan/installations") {
   const worker = cfg.name + "-auth";
+  const settings = snapshot.existingAuthWorker
+    ? await api.request("/accounts/" + api.accountId + "/workers/scripts/" + worker + "/settings")
+    : null;
+  if (snapshot.existingAuthWorker && !Array.isArray(settings?.bindings)) throw Error("Existing Worker bindings could not be verified");
+  if (!cfg.studioAccess) {
+    if (settings?.bindings.some(b => ["NATHAN_ADMIN_ORIGIN", "NATHAN_ACCESS_TEAM_DOMAIN", "NATHAN_ACCESS_AUD"].includes(b.name)))
+      throw Error("Existing Worker requires Cloudflare Access. Restore its Studio Access configuration before deploying");
+    return;
+  }
+  const { hostname, emails } = studioAccessOptions(cfg);
   const attached = await inspectStudioHostname(api, cfg);
   if (!snapshot.existingAuthWorker) {
     if (!emails.includes(normalizeEmail(cfg.adminEmails[0]))) throw Error("A fresh CLI installation requires its initial owner in the Access policy");
@@ -70,10 +101,15 @@ export async function inspectStudioInstallation(api, cfg, snapshot) {
     if (!snapshot.existingDatabase) return;
   }
   const db = snapshot.existingDatabase?.uuid ?? snapshot.existingDatabase?.id;
-  const settings = snapshot.existingAuthWorker && await api.request("/accounts/" + api.accountId + "/workers/scripts/" + worker + "/settings");
   if (!db || (settings && (!settings.bindings?.some(b => b.name === "DB" && b.type === "d1" && b.id === db) ||
       !settings.bindings.some(b => b.name === "NATHAN_ISSUER" && b.type === "plain_text" && b.text === "https://" + cfg.hostname))))
     throw Error("Existing Worker issuer or database differs from the Studio installation");
+  if (!settings && await createdStudioDatabase(cfg, db, folder)) {
+    const schema = await api.queryDatabase(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='nathan_bootstrap_status'");
+    if (!schema.length) return;
+    const seed = await api.queryDatabase(db, "SELECT id FROM nathan_bootstrap_status LIMIT 1");
+    if (!seed.length) return;
+  }
   const owners = await api.queryDatabase(db, "SELECT state,admin_email,cloudflare_user_id FROM nathan_bootstrap_status WHERE id='primary'");
   if (owners.length !== 1 || owners[0].cloudflare_user_id !== "cli:" + api.accountId ||
       owners[0].admin_email !== normalizeEmail(cfg.adminEmails[0])) throw Error("Existing Worker has a different installation owner");
@@ -106,7 +142,8 @@ function verifyApplication(app, policies, desired) {
       !sameValues(app.allowed_idps, desired.allowed_idps) || app.allow_authenticate_via_warp || app.options_preflight_bypass ||
       !app.mfa_config || app.mfa_config.mfa_disabled === true ||
       !sameValues(app.mfa_config.allowed_authenticators, desired.mfa_config.allowed_authenticators) ||
-      app.mfa_config.session_duration !== desired.mfa_config.session_duration ||
+      app.mfa_config.session_duration !== desired.mfa_config.session_duration || app.session_duration !== desired.session_duration ||
+      (policy?.session_duration != null && policy.session_duration !== desired.session_duration) ||
       policy?.decision !== "allow" || policy.require?.length || policy.exclude?.length || policy.mfa_config ||
       !sameValues(selectors, expectedPolicy.include.map(rule => rule.email.email)) || !/^[a-f0-9]{64}$/.test(app.aud ?? "")) {
     throw Error("Existing Access application or policy differs from the Studio plan. No existing application is modified");
