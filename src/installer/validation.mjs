@@ -39,7 +39,7 @@ export function validateInstallPlan(input){
   let scim=null;
   if(input.scimEnabled===true)
     scim=validateScimConnection({id:input.scimConnectionId,domain:input.scimDomain});
-  return {accountId,hostname,name,securityProfile:input.securityProfile||"business",realmApex,scim};
+  return {accountId,hostname,name,securityProfile:input.securityProfile||"standard",realmApex,scim};
 }
 export function isAllowedOrigin(origin,expected){
   if(typeof origin!=="string"||typeof expected!=="string")return false;

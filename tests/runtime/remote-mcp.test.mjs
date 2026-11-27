@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
-import { authFixtureModules, migrate, randomKey, base64url, start, COMPAT } from "./helpers.mjs";
+import { authFixtureModules, migrate, randomKey, base64url, start, COMPAT, studioShell } from "./helpers.mjs";
 import { providerEntryFromDocs, gatekeeper, invalidCredentials } from "./gatekeeper-verifier.mjs";
 
 const PROVIDER = providerEntryFromDocs();
@@ -245,10 +245,11 @@ test("only an enrolled administrator registers an MCP server, and its catalog ca
   const overview = await (await auth.fetch(ORIGIN + "/studio/api/mcp", { headers: { Cookie: admin.cookie } })).json();
   assert.deepEqual(overview.resources[0].scopes.map(s => s.scope), SCOPES, "nathan:* permissions are never scopes");
   assert.equal(overview.resources[0].scopes.find(s => s.scope === "notes:export").sensitive, true);
-  const page = await (await auth.fetch(ORIGIN + "/studio", { headers: { Cookie: admin.cookie } })).text();
-  const script = [...page.matchAll(/<script nonce="[^"]+">([\s\S]*?)<\/script>/g)].map(m => m[1]).join("\n");
-  assert.doesNotThrow(() => new Function(script), "studio script must be valid JavaScript");
-  assert.match(script, /\/studio\/api\/mcp/);
+  // NATH-39: Studio is a Kumo SPA; its code is the SRI-pinned island bundle the Worker serves.
+  const { html, code } = await studioShell(auth, ORIGIN, await auth.fetch(ORIGIN + "/studio", { headers: { Cookie: admin.cookie } }));
+  assert.ok(html.includes('href="#/mcp"'));
+  assert.match(code, /Remote MCP servers/);
+  assert.match(code, /"\/mcp"/);
 });
 
 test("discovery: protected-resource metadata, 401 challenges and authorization-server metadata", async () => {

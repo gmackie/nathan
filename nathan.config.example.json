@@ -1,7 +1,7 @@
 {
   "name": "nathan",
   "hostname": "login.example.com",
-  "securityProfile": "business",
+  "securityProfile": "standard",
   "database": {
     "type": "d1",
     "name": "nathan-auth"

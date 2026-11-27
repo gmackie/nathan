@@ -6,11 +6,13 @@ import { passkey } from "@better-auth/passkey";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { sso } from "@better-auth/sso";
 import { sendAuthEmail } from "./email";
-import { managementEmail, ownerInvitation, type AuthEnv } from "./env";
+import { allowsAdminTotp, managementEmail, ownerInvitation, type AuthEnv } from "./env";
 import { sendOwnerVerification, verifyOwnerMailbox } from "./owner-verification";
 import type { SocialCredentials } from "./provider-store";
 import { recordProviderSignIn } from "./provider-store";
 import { ACCOUNT_LINKING, buildSocialProviders } from "../shared/providers.mjs";
+import { allowRequests } from "./request-limit";
+import { adminTotpFactor, recordAdminTotp, type TotpFactor } from "./admin-totp";
 import {mayAdminister, mayEnrollManagementFactor} from "./bootstrap";
 import {isAdminPrincipal} from "./admin-service";
 import { nathanAccessTokenExtension, guardAuthorizationScopes, MAX_ACCESS_TOKEN_SECONDS, API_SCOPE } from "./tokens";
@@ -79,11 +81,42 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
           const current = await getSessionFromCtx(ctx);
           if (current?.user && "role" in current.user && current.user.role === "admin" &&
               (await isEmailSession(env.DB, current.session.id) ||
-                (operator && !await mayEnrollManagementFactor(env, current.user.id, current.session.id, ctx.path))))
+                ((operator || allowsAdminTotp(env)) && !await mayEnrollManagementFactor(env, current.user.id, current.session.id, ctx.path))))
             throw new APIError("FORBIDDEN", { message: "Sign in with an existing authenticator to manage administrator credentials." });
+          if (ctx.path === "/two-factor/verify-totp" && !email && allowsAdminTotp(env)) {
+            // A password sign-in can still be awaiting its second factor. Snapshot that challenge's
+            // subject solely to bind the factor below. Better Auth verifies and consumes it.
+            let subject = current?.user.id;
+            if (!subject) {
+              const cookie = ctx.context.createAuthCookie("two_factor");
+              const challenge = await ctx.getSignedCookie(cookie.name, ctx.context.secret);
+              if (challenge) subject = (await ctx.context.internalAdapter.findVerificationValue(challenge))?.value;
+            }
+            if (subject) {
+              const factor = await adminTotpFactor(env, subject);
+              if (factor && !await allowRequests(env, "admin-totp", subject, 5))
+                throw new APIError("TOO_MANY_REQUESTS", { message: "Wait a minute before trying another authenticator code." });
+              if (factor && current && !factor.verified &&
+                  !await mayEnrollManagementFactor(env, subject, current.session.id, "/two-factor/enable"))
+                throw new APIError("FORBIDDEN", { message: "Verify an enrolled authenticator before adding another." });
+              if (factor) return { context: { adminTotp: factor } };
+            }
+          }
         }
       }),
       after: createAuthMiddleware(async (ctx) => {
+        if (ctx.path === "/two-factor/verify-totp") {
+          const factor = (ctx as typeof ctx & { adminTotp?: TotpFactor }).adminTotp;
+          const result = ctx.context.returned as { user?: { id?: string }; token?: string } | null;
+          if (!factor || !result?.token || result.user?.id !== factor.userId) return;
+          // First enrollment and password sign-in issue a new session. Subsequent checks keep
+          // the current one. Never credit the pre-rotation cookie or an unsuccessful response.
+          const verified = ctx.context.newSession ?? ctx.context.session;
+          if (!verified || verified.user.id !== factor.userId ||
+              !await recordAdminTotp(env, factor, verified.session.id, ctx.body.code))
+            throw new APIError("FORBIDDEN", { message: "Use the next code from your enrolled authenticator app." });
+          return;
+        }
         // NATH-9: remember which social provider created a session, so a Studio test
         // sign-in can prove the provider round trip.
         if(ctx.path==="/callback/:id"){
