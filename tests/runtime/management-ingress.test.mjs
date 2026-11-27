@@ -230,6 +230,10 @@ test("a shared issuer keeps public OIDC on the login host and admits Studio oper
       const headers = assertion(await accessJwt(claims));
       assert.equal((await worker.dispatchFetch(adminOrigin + "/studio", { headers })).status, 403);
     }
+    // The public session has a current local admin role and step-up. OAuth management
+    // must still require the verified host, even when the caller uses a plugin route.
+    const publicClients = await worker.dispatchFetch(origin + "/api/auth/oauth2/get-clients", { headers: { Cookie: local.cookie } });
+    assert.equal(publicClients.status, 401);
     const api = adminOrigin + "/studio/api/v1";
     assert.equal((await fetcher.dispatchFetch(api + "/status", { headers: { Cookie: local.cookie } })).status, 401);
     const options = await fetcher.dispatchFetch(adminOrigin + "/api/auth/passkey/generate-authenticate-options");

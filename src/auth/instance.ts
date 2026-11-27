@@ -45,6 +45,12 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
       ? { github: { clientId: env.GITHUB_CLIENT_ID, clientSecret: env.GITHUB_CLIENT_SECRET } } : {})
   });
 
+  // OAuth provider management also has authenticated plugin entrypoints outside Studio.
+  // On a shared Access deployment, only the verified administrator host can authorize these.
+  const mayManageOAuth = async ({ user, session }: { user?: { id: string } | null; session?: { id: string } | null }) =>
+    (env.NATHAN_ADMIN_ORIGIN === undefined || Boolean(env[managementEmail])) &&
+    Boolean(user && await isAdminPrincipal(user, env) && await mayAdminister(env, user.id, session?.id));
+
   return betterAuth({
     // NATH-43: the name users see (TOTP issuer fallback, emails); "gmacko" at id.gmac.io.
     appName: instanceName(env),
@@ -208,13 +214,8 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
         allowUnauthenticatedClientRegistration: false,
         // Public dynamic registration is disabled; only verified and allowlisted
         // Nathan admins may use Better Auth's authenticated client CRUD API.
-        clientPrivileges: async ({ user, session }) => {
-          return Boolean(user && await isAdminPrincipal(user,env) && await mayAdminister(env,user.id,session?.id));
-        },
-        // NATH-15: resource (audience) admin calls are server-only; also require the same administrator.
-        resourcePrivileges: async ({ user, session }) => {
-          return Boolean(user && await isAdminPrincipal(user,env) && await mayAdminister(env,user.id,session?.id));
-        },
+        clientPrivileges: mayManageOAuth,
+        resourcePrivileges: mayManageOAuth,
         ...(env.NATHAN_PAIRWISE_SECRET ? { pairwiseSecret: env.NATHAN_PAIRWISE_SECRET } : {})
       }),
       // Hardened SAML/OIDC enterprise SSO options: see src/auth/saml-policy.mjs.
