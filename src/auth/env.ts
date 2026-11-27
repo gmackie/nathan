@@ -32,6 +32,11 @@ export interface AuthEnv {
   ENABLE_PASSWORD: string;
   /** NATH-49: "true" enables passwordless email sign-in codes (off by default; needs RESEND_API_KEY and EMAIL_FROM). */
   ENABLE_EMAIL_OTP?: string;
+  /**
+   * NATH-52: "single-app" lets the pinned app worker run email sign-in over the
+   * service binding and draw its own UI. Unset on a shared IdP (id.gmac.io).
+   */
+  AUTH_MODE?: string;
   ENTERPRISE_SSO: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
