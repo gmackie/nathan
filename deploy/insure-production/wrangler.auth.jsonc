@@ -1,0 +1,48 @@
+// Insure's dedicated production identity Worker at insure-id.gmac.io (NATH-50), deployed through ForgeGraph
+// (app "insure-id", stage "production"). AUTH_MODE=single-app (NATH-52): Insure draws sign-in and calls this
+// worker over a service binding. This hostname stays the instance's IdP management UI.
+// Not a template for customer installs. Secrets (BETTER_AUTH_SECRET, NATHAN_CONFIG_KEY,
+// NATHAN_ADMIN_EMAILS, RESEND_API_KEY, EMAIL_FROM) come from ForgeGraph's production secret store for
+// insure-id and are uploaded with the Worker; none are written here.
+// ENABLE_EMAIL_OTP mails a sign-in code to the bootstrap admin until a stronger factor exists.
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "nathan-insure-prod-auth",
+  "main": "../../src/auth/worker.ts",
+  // NATH-32: build the hashed Kumo UI assets the Worker bundles (src/ui/assets.ts). Wrangler runs
+  // this from the directory it is invoked in (the repository root), not this config's directory.
+  "build": { "command": "node scripts/build-ui.mjs" },
+  "compatibility_date": "2026-10-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "nathan-insure-prod-auth",
+      "database_id": "1290b09d-66a7-4b7a-bc67-87cb5e48f114",
+      "migrations_dir": "../../migrations"
+    }
+  ],
+  "vars": {
+    "NATHAN_ISSUER": "https://insure-id.gmac.io",
+    "NATHAN_SECURITY_PROFILE": "business",
+    "NATHAN_BOOTSTRAP_REQUIRED": "true",
+    "NATHAN_INSTALL_ACTIVE": "true",
+    "NATHAN_MCP_WRITE_ENABLED": "false",
+    "NATHAN_REALM_APEX": "",
+    "ENABLE_PASSWORD": "false",
+    "ENABLE_EMAIL_OTP": "true",
+    "AUTH_MODE": "single-app",
+    "ENTERPRISE_SSO": "true",
+    "NATHAN_ADMIN_STEPUP_REQUIRED": "true",
+    "NATHAN_INSTANCE_NAME": "insure"
+  },
+  "routes": [{ "pattern": "insure-id.gmac.io", "custom_domain": true }],
+  "triggers": { "crons": ["17 5 * * *"] },
+  "durable_objects": {
+    "bindings": [{ "name": "SCIM_DIRECTORY", "class_name": "NathanScimDirectory" }]
+  },
+  "migrations": [{ "tag": "nathan-scim-v1", "new_sqlite_classes": ["NathanScimDirectory"] }]
+}

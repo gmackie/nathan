@@ -44,7 +44,8 @@ export async function createGeneratedConfig(cfg, databaseId, gateway = null) {
     wrangler.vars.NATHAN_ADMIN_EMAILS = (cfg.adminEmails || []).join(",");
     wrangler.vars.NATHAN_SECURITY_PROFILE = cfg.securityProfile;
     wrangler.vars.NATHAN_BOOTSTRAP_REQUIRED = "true";
-    wrangler.vars.NATHAN_ADMIN_STEPUP_REQUIRED = cfg.securityProfile==="business"?"true":"false";
+    wrangler.vars.NATHAN_ADMIN_STEPUP_REQUIRED = "true";
+    wrangler.vars.NATHAN_ADMIN_STEPUP_METHOD = cfg.securityProfile === "standard" ? "passkey-or-totp" : "passkey";
     wrangler.d1_databases[0].database_name = cfg.database.name;
     wrangler.d1_databases[0].database_id = databaseId;
   } else {

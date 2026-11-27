@@ -12,7 +12,10 @@ export interface BootstrapStatus {
   totpVerified?: boolean;
   ready?: boolean;
   sessionReady?: boolean;
-  requirements?: { passkey?: boolean; totp?: boolean };
+  isAdministrator?: boolean;
+  requiresSignIn?: boolean;
+  requiresPasskeyRecovery?: boolean;
+  requirements?: { passkey?: boolean; totp?: boolean; recentPasskey?: boolean };
   warning?: string;
 }
 

@@ -149,13 +149,19 @@ node scripts/nathan.mjs providers add discord --apply
 
 The Worker secret then becomes the provider's only credential source: it takes effect on the next request and overrides credentials saved in Studio, which Studio reports as unused. It also voids the previous test sign-in. A provider disabled in Studio stays disabled. To hand control back to Studio, delete the secret (`npx wrangler secret delete NATHAN_PROVIDER_<ID>`) and save the credentials in Studio.
 
+## Passwordless email sign-in (email code)
+
+With `ENABLE_EMAIL_OTP=true` and a configured Resend sender, the hosted sign-in page offers a six-digit code and a one-tap link in the same message. The requesting browser can redeem either once. Nathan applies invitation, directory, verified enterprise domain and enrolled authenticator rules. See the [OIDC contract](oidc.md#hosted-email-sign-in) for integration, limits and session evidence.
+
+On an instance with `AUTH_MODE=single-app`, the pinned app calls `beginEmailSignIn` and `finishEmailSignIn` on `NathanVerifier` and draws its own form. Those methods return a subject and email, never a session cookie, a token, or an admin role. The identity hostname stays the IdP management UI. Leave `AUTH_MODE` unset on a shared IdP such as `id.gmac.io`.
+
 ## Enterprise SSO
 
 Better Auth's SSO plugin supports enterprise OIDC and SAML **as inbound identity sources**. The code enables the plugin via `ENTERPRISE_SSO=true`. Identity Studio registers enterprise OIDC providers and, since NATH-10, inbound SAML connections with metadata validation, DNS domain verification, disabled-by-default enablement, certificate rotation and per-connection provisioning; see [saml.md](saml.md) for Okta, Entra ID and Google Workspace setup. Nathan serving as a SAML IdP downstream is a separate future feature (NATH-12).
 
 ## Multi-factor authentication
 
-Passkeys and TOTP are enabled at the Better Auth plugin level. A successful social sign-in is not NIST AAL2: Nathan never derives an AAL claim from a social provider.
+Passkeys and TOTP are enabled at the Better Auth plugin level. A successful social or email-code sign-in is not NIST AAL2: Nathan never derives an AAL claim from a social provider or an emailed code.
 
 ## Not verified yet
 

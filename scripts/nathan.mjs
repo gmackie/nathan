@@ -76,7 +76,7 @@ async function init() {
      await yesNo("Use this as shared OIDC login for the root and authorized subdomains?",false)){
     realm=realmForLoginHostname(hostname);
   }
-  const profile = await ask("Security profile (standard/business/high)", existing?.securityProfile || "business");
+  const profile = await ask("Security profile (standard/business/high)", existing?.securityProfile || "standard");
   const adminEmail = await ask("Admin allowlist email (requires verified account + admin role)", existing?.adminEmails?.[0] || "");
   const appName = await ask("Worker to protect (blank to skip)", existing?.applications?.[0]?.workerName || detected?.name || availableWorkers[0] || "");
   const cfg = {

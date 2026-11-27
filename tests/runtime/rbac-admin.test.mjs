@@ -5,7 +5,7 @@
  */
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
-import { authWorker, randomKey } from "./helpers.mjs";
+import { authWorker, randomKey, studioShell } from "./helpers.mjs";
 import { grantRole, revokeRole, setAppStatus } from "../../scripts/lib/admin-cli.mjs";
 
 const HOST = "login.example.test";
@@ -268,14 +268,15 @@ test("the directory rejects missing, user-delegated, wrong-audience and disabled
   assert.equal((await mf.dispatchFetch(ORIGIN + "/directory/v1/changes", { method: "POST" })).status, 405);
 });
 
-test("Identity Studio renders the Roles and access section with a script that parses", async () => {
+// NATH-39: Studio is a Kumo SPA; its code is the SRI-pinned island bundle the Worker serves.
+test("Identity Studio renders the Roles and access panel from its SRI-pinned island bundle", async () => {
   const page = await get("/studio");
   assert.equal(page.status, 200, await page.clone().text());
-  const html = await page.text();
-  assert.match(html, /<h2>Roles and access<\/h2>/);
-  assert.doesNotMatch(html, /id="app-roles"/, "the legacy required-roles field is gone");
-  const script = html.match(/<script nonce="[^"]+">([\s\S]*)<\/script>/)[1];
-  assert.doesNotThrow(() => new Function(script), "studio script must be valid JavaScript");
-  assert.match(script, /\/studio\/api\/rbac/);
+  const { html, code } = await studioShell((u, i) => mf.dispatchFetch(u, i), ORIGIN, page);
+  assert.ok(html.includes('href="#/roles"'));
+  assert.match(code, /Roles and access/);
+  assert.doesNotMatch(html + code, /app-roles/, "the legacy required-roles field is gone");
+  assert.match(code, /"\/rbac"/);
+  assert.match(code, /\/studio\/api\/v1/);
   assert.equal((await get("/studio", member.cookie)).status, 403);
 });

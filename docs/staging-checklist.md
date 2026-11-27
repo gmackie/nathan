@@ -44,6 +44,12 @@
 - [ ] Verify a new subdomain can be explicitly onboarded without changing the original IdP's DNS or provider credentials.
 - [ ] Verify domain-wide setup never installs wildcard Worker Routes or changes existing apex/subdomain DNS without explicit operator approval.
 
+## Hosted email sign-in
+
+- [ ] On the staging issuer, record the deployed revision, all packaged migration receipts (including hosted email 0019–0022, shared logout 0023 and app lifecycle 0024–0026), the email feature flag and the configured Resend sender. Open a registered staging RP with S256 PKCE, state and nonce using an invited test mailbox.
+- [ ] Check the delivered subject, app name and any configured inline logo. Complete one authorization with the code and another with the link. Verify the exact callback, state, token signature, issuer, nonce and registered resource audience.
+- [ ] Confirm each email yields at most one session. Check that an email-authenticated administrator still needs a passkey for Studio. Check that a directory member outside a verified SSO domain still needs enrolled TOTP. Check a verified enterprise-domain refusal and one success audit per completed sign-in. Record delivery and round-trip results against the revision.
+
 ## OIDC/RP acceptance
 
 - [ ] Verify authorize code + S256 PKCE, exact redirect URI and consent flow with a confidential Worker gateway client.
@@ -58,6 +64,7 @@
 
 ## MFA/enterprise acceptance
 
+- [ ] With `ENABLE_EMAIL_OTP=true` and Resend configured: request a sign-in code for a real mailbox, check the mail (code, host, no link), sign in, and confirm an app authorization resumes; an uninvited address gets the same answer and no mail (NATH-49).
 - [ ] Enroll passkey, use it to authenticate, list and remove enrolled credential.
 - [ ] Enroll TOTP, store recovery codes, finish password+TOTP sign-in; verify wrong code rejects.
 - [ ] Verify SAML/OIDC enterprise discovery and account linking, including disabled/upstream deprovisioned accounts.

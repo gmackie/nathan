@@ -18,7 +18,7 @@ The optional selections at initial install:
 - **Domain-wide SSO:** one OIDC issuer for the root and approved subdomains.
 - **Enterprise SSO:** compile the SSO plugin; configure OIDC providers and DNS verification in Studio after bootstrap.
 - **SCIM directory:** optionally create a disabled transactional directory-only connection with a one-time bearer token.
-- **MFA profile:** Standard or Business. Business requires initial admin to enroll passkey and verified TOTP, plus recent passkey sign-in for privileged admin use. Federated AAL2/AAL3 assertion enforcement remains disabled until validated.
+- **MFA profile:** New installations default to Standard. Administrators enroll a passkey (recommended) or an authenticator app. Business requires both and a recent passkey sign-in. Federated AAL2/AAL3 assertion enforcement remains disabled until validated.
 
 The Worker is uploaded privately and starts with an inactive flag. The installer applies migrations, installs secrets, disables workers.dev/preview ingress, attaches the exact custom domain, activates the IdP, and checks discovery/JWKS.
 
@@ -29,8 +29,8 @@ The installer writes \`nathan_bootstrap_status\` with the Cloudflare account's u
 1. Signs into Nathan using the configured social provider (or a supported enterprise IdP once verified).
 2. Completes verified email authentication using **exactly the Cloudflare-verified bootstrap email**.
 3. Returns to the wizard. It checks the verified Better Auth user, binds its stable user ID to the original Cloudflare installer identity, and promotes only that account to the initial admin role.
-4. Opens \`https://login.example.com/security?setup=admin\`, enrolls a passkey and TOTP authenticator, saves backup codes privately, and confirms setup. For Standard, one enrolled method is acceptable; Business requires both.
-5. In Business, performs a **fresh passkey sign-in** before accessing privileged Identity Studio operations. Nathan records that signed-in session's successful passkey ceremony for a 15-minute window. Merely having a registered passkey or TOTP secret does not count as session assurance.
+4. Opens \`https://login.example.com/security?setup=admin\`, chooses a passkey or authenticator app, saves any recovery codes privately, and selects **Complete initial setup**. Business requires enrollment of both methods.
+5. Selects **Open Identity Studio** after verification. In new Standard installations, a successful passkey sign-in or authenticator code verifies the current session for 15 minutes. Confirming app enrollment with its first code counts. In Business, verification requires a passkey.
 6. Returns to the installer. It will not complete until the server-side bootstrap state says complete.
 
 Cloudflare identity verification, verified user identity, recorded bootstrap state and secure authenticator enrollment are independent controls.
@@ -53,6 +53,7 @@ Visit \`https://login.example.com/studio\` as a fully enrolled administrator. Se
 | SAML applications (Nathan as IdP) | Nothing until an administrator generates a signing key | Generate and rotate the IdP signing key, register SPs bound to an application (disabled), enable/disable, update ([saml-idp.md](saml-idp.md)) |
 | SCIM directory | Optional disabled initial directory connection | Create, list, enable/disable and rotate bearer token |
 | Passkeys / TOTP | Enrollment required to complete initial admin | Self-service enrollment, authenticator inspection and passkey reauthentication |
+| Hosted email sign-in | Off on a fresh installation | Configure the sender and enable `ENABLE_EMAIL_OTP` on the identity Worker. See [hosted email sign-in](oidc.md#hosted-email-sign-in). |
 | MFA posture | Standard or Business profile | View effective policy and *increase* admin requirements without redeploying |
 | Additional administrators | Not during initial install | Grant an existing verified user and revoke additional admins with session termination |
 | Plugin code changes | Pinned Worker release | Requires reviewed build/deploy, not hot-loaded arbitrary JavaScript |
@@ -85,11 +86,11 @@ Better Auth's official SCIM plugin depends on interactive transaction features u
 
 ### Additional administrators
 
-The root owner comes from Cloudflare-authorized bootstrap. Additional admins must first sign in and verify their email, then be explicitly approved in Studio by an already-enrolled admin performing a recent passkey step-up. The grant records the exact Better Auth user ID and verified email. Revoking a grant removes access and invalidates Better Auth sessions. The bootstrap root cannot be revoked by a normal Studio endpoint.
+The root owner comes from Cloudflare-authorized bootstrap. Additional admins must first sign in and verify their email, then be explicitly approved in Studio by an administrator whose session meets the installation’s verification policy. The grant records the exact Better Auth user ID and verified email. Revoking a grant removes access and invalidates Better Auth sessions. The bootstrap root cannot be revoked by a normal Studio endpoint.
 
 ### Authentication policy
 
-The wizard selects Standard or Business. Studio can tighten its effective policy from Standard, such as requiring both enrolled authenticators or a recent passkey for privileged management. A routine web toggle cannot lower a deployment's hard security floor. OAuth redirect validation, cookie protections, MFA proof verification and default-deny authorization are never tradeable convenience features.
+The wizard offers Standard or Business. The CLI and hosted wizard configure Standard with `NATHAN_ADMIN_STEPUP_REQUIRED=true` and `NATHAN_ADMIN_STEPUP_METHOD=passkey-or-totp`. On an existing deployment with step-up enabled, omitting the method keeps passkey-only verification. Studio can tighten its effective policy from Standard, such as requiring both enrolled authenticators or a recent passkey for privileged management. On shared issuers configured for passkey-or-TOTP verification, before requiring a recent passkey, the owner and every enabled delegate must enroll one. Future delegates must enroll a passkey before promotion. If a delegate was already locked out under an older override, revoke their grant, have them enroll a passkey as an ordinary user, then restore their grant. The initial owner uses Cloudflare operator recovery. Dedicated Access-protected management hosts keep their existing first-key enrollment after promotion. A routine web toggle cannot lower a deployment's hard security floor. OAuth redirect validation, cookie protections, MFA proof verification and default-deny authorization are never tradeable convenience features.
 
 ## 4. Recovery, upgrades and key custody
 
@@ -100,7 +101,7 @@ Before upgrades, back up D1, Worker secrets (through a proper secret-management 
 ## 5. Validation before production
 
 See [staging-checklist.md](staging-checklist.md). Integration tests must cover:
-- Cloudflare OAuth identity → Better Auth verified user → secure bootstrap → MFA enrollment → recent passkey reauthentication.
+- Cloudflare OAuth identity → Better Auth verified user → secure bootstrap → MFA enrollment → verification with the configured administrator authenticator.
 - Wrong Cloudflare owner, email mismatch, replayed installer job, forged session cookie and MFA-bypass attempts.
 - Setup and rotation of all six social providers from wizard, Studio and CLI without leaking client secrets or the Apple key.
 - Enterprise OIDC registration, TXT ownership verification, untrusted-provider rejection and account-linking safety.

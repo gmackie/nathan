@@ -68,7 +68,7 @@
 - [x] RFC 9068 JWT access tokens (`typ: at+jwt`, `client_id`, `jti`) with `principal_kind` (user / machine / agent), capped at 900 s for every access token.
 - [x] Token audiences registered in Identity Studio (migration 0014), optionally bound to an app for a `roles` hint from the NATH-13 evaluator. Clients are linked per audience. Machine and agent client-credentials clients use scope `nathan:api`.
 - [x] Administrator-set `agent` kind per client (admin-only, audited). Without a live user session a token is never `user`.
-- [x] `nathan_amr`/`nathan_acr`/`nathan_auth_time` only from verified passkey sign-in evidence for the token's session. Better Auth 1.7.14 reserves and strips `acr`/`amr`/`auth_time` on access tokens, so Gatekeeper `mfa` is never set by Nathan tokens.
+- [x] `nathan_amr`/`nathan_acr`/`nathan_auth_time` from verified passkey sign-in evidence for the token's session. Better Auth 1.7.14 reserves and strips `acr`/`amr`/`auth_time` on access tokens, so Gatekeeper `mfa` is never set by Nathan tokens.
 - [x] Ready-to-paste Gatekeeper provider entry ([gatekeeper.md](gatekeeper.md)), workerd-tested with user (authorization code + PKCE), machine and agent tokens, against Gatekeeper's own resolver (a pinned, unmodified copy in `tests/vendor/gatekeeper`, so CI runs it without a checkout).
 - [x] Security-review fixes: user tokens for registered audiences need a live, unexpired session of the same user (refresh after sign-out, session revocation or expiry gets `invalid_grant`), banned users get no tokens, `nathan:api` only for client credentials and administrator-marked agents, `roles` only when every requested audience is bound to the same app, audience removal drops client links, and docs say that Gatekeeper policies must check `principal_kind`. Passkey evidence is tested through a real software-authenticator sign-in.
 - [ ] Verify against a deployed Nathan and Gatekeeper on staging, including a live passkey sign-in.
@@ -117,7 +117,9 @@
 ## Required before first actual production-ready release
 
 - [ ] Verify root → nested-subdomain → root SSO against real Cloudflare Workers and non-Workers, including strict per-client audience isolation.
+- [x] Hosted passwordless email sign-in (NATH-49 and ClassCheck N1) with app-branded code and same-browser link, invitation and directory admission, enrolled TOTP and session-bound email evidence. [OIDC contract](oidc.md#hosted-email-sign-in).
 - [ ] Verify the complete OAuth/OIDC flow with real Cloudflare D1 and Workers.
+- [x] Passwordless email sign-in code (NATH-49): Better Auth's first-party `emailOTP` plugin, sign-in only, off by default (`ENABLE_EMAIL_OTP`), Resend required (fails closed); 6-digit hashed codes, 10 minutes, 3 attempts; per-IP, per-address (10 minutes and daily, hashed) and instance-wide refused-code limits; generic answers with background delivery; codes mailed only to addresses that may sign in by code; administrators, TOTP/passkey accounts, directory and SSO accounts never sign in by code (answered as a wrong code); email-code sessions never administer (migration 0019); admission as method `email-otp` (invitation claim, self-service, refusal, squatted unverified account); no assurance evidence; audited; hosted "Email me a code" path that resumes OIDC authorization. Workerd-tested with mocked Resend. [Guide](providers.md#passwordless-email-sign-in-email-code).
 - [ ] Complete real-account end-to-end tests for initial-admin claim, passkey/TOTP enrollment, session step-up, SSO linking and administrator recovery.
 - [ ] Complete the fail-closed provisioning sequence and all gateway deployment workflows.
 - [ ] Verify that `workers.dev`, previews, extra routes and direct origin paths cannot bypass gateways.

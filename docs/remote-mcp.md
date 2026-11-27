@@ -164,7 +164,7 @@ These clients exist only for the MCP authorization server. They are not Better A
 
 ## Account-token administration (CLI)
 
-`resource.register` and `resource.status` are also available to an operator holding a Cloudflare API token with D1 edit on the Nathan account, without an administrator session or passkey step-up:
+`resource.register` and `resource.status` are also available to an operator holding a Cloudflare API token with D1 edit on the Nathan account. The CLI authenticates these operations with the account token.
 
 ```sh
 export CLOUDFLARE_API_TOKEN=...   # from your secret manager; never a flag
@@ -183,7 +183,7 @@ The CLI runs the Studio operations' own code (`src/shared/admin-ops.mjs`): the s
 
 **One token issuer.** The authorization server has its own issuer, `https://login.example.com/mcp-oauth`, because Better Auth already serves `/.well-known/oauth-authorization-server/api/auth` for its own endpoints. Access tokens are issued under Nathan's token issuer, `https://login.example.com/api/auth`, with the same keys, so Gatekeeper, the Nathan SDKs and the directory see one issuer and one subject namespace (`<issuer>#<sub>`). An agent acting for Alice is `principal:<issuer>:sub:u-alice` with kind `agent` in Gatekeeper, not a second identity. MCP clients never read access tokens; resource servers are configured with `NATHAN_ISSUER`, and the authorization server metadata names the `jwks_uri`.
 
-**Nathan's own `/mcp` stays on its current machinery.** The admin MCP endpoint ([mcp.md](mcp.md)) requires a verified, allowlisted administrator whose Better Auth session (`sid`) still exists and holds a recent passkey step-up (`mayAdminister`), and writes need a live session. MCP grants deliberately outlive browser sessions (30 days with refresh) and carry no `sid`, so moving `/mcp` onto them would weaken those checks. `nathan:read` and `nathan:admin` are also Nathan administration scopes, not app permissions. Its clients are still registered by administrators in Studio.
+**Nathan's own `/mcp` stays on its current machinery.** The admin MCP endpoint ([mcp.md](mcp.md)) requires a verified, allowlisted administrator whose Better Auth session (`sid`) still exists and meets the installation’s administrator verification policy (`mayAdminister`), and writes need a live session. MCP grants deliberately outlive browser sessions (30 days with refresh) and carry no `sid`, so moving `/mcp` onto them would weaken those checks. `nathan:read` and `nathan:admin` are also Nathan administration scopes, not app permissions. Its clients are still registered by administrators in Studio.
 
 **Gatekeeper action catalogs (design only).** A later import can map a Gatekeeper `MCPProvider` action catalog onto this shape without changing the storage: each action becomes a permission key (the scope) on the app through the RBAC manifest, and its display data becomes scope metadata through `resource.register`:
 

@@ -137,6 +137,30 @@ test("schema enforces modes, principals and cascades, and passes the foreign-key
   db.close();
 });
 
+test("app suspension and restoration reach the directory even when Studio owns the member grant", () => {
+  const db = database(migrations);
+  addUser(db, "alice", "user");
+  addApp(db, "school", "[]");
+  db.exec("INSERT INTO nathan_rbac_roles(app_id,key) VALUES ('school','member')");
+  db.exec("INSERT INTO nathan_rbac_grants(id,app_id,role_key,principal_type,principal_id,created_by) VALUES ('g','school','member','user','alice','studio')");
+  db.exec("INSERT INTO nathan_app_provisions(app_id,external_id_hash,subject_hash,user_id,email) VALUES ('school','key','sub','alice','alice@example.test')");
+  const roleSet = db.prepare("UPDATE nathan_app_provisions SET grant_revision=?,desired_roles=? WHERE user_id='alice'");
+  const directory = () => directoryView({issuer:ISSUER,observedAt:"now",results:run(db,directoryQueries("alice"))});
+  assert.equal(directory().applications.school.allowed,true);
+  roleSet.run(1,"[]");
+  assert.equal(directory().applications.school.allowed,false);
+  assert.deepEqual(directory().applications.school.roles,[]);
+  roleSet.run(2,"[]");
+  roleSet.run(3,'["member"]');
+  assert.equal(directory().applications.school.allowed,true);
+  const events = changePage({issuer:ISSUER,observedAt:"now",cursor:0,limit:10,results:run(db,changeQueries(0,10))}).changes;
+  assert.deepEqual(events.map(e => [e.kind,e.app,e.principal?.id]),[
+    ["app.membership_suspended","school","alice"],["app.membership_restored","school","alice"]
+  ]);
+  assert.equal(db.prepare("SELECT created_by FROM nathan_rbac_grants WHERE id='g'").get().created_by,"studio");
+  db.close();
+});
+
 test("directory view uses the evaluator's answers and the change feed pages and prunes", () => {
   const db = database(migrations);
   addUser(db, "alice", "user");

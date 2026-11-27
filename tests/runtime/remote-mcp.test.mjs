@@ -13,7 +13,7 @@ import { createHash } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
-import { bundle, migrate, randomKey, base64url, start, COMPAT } from "./helpers.mjs";
+import { authFixtureModules, migrate, randomKey, base64url, start, COMPAT, studioShell } from "./helpers.mjs";
 import { providerEntryFromDocs, gatekeeper, invalidCredentials } from "./gatekeeper-verifier.mjs";
 import { registerMcp, setMcpStatus } from "../../scripts/lib/admin-cli.mjs";
 
@@ -96,6 +96,17 @@ function browserFormHeaders(page) {
   return { Origin: policy === "no-referrer" ? "null" : ORIGIN, "Sec-Fetch-Site": "same-origin" };
 }
 const formHeaders = new Map();
+/**
+ * The consent page's native `<input type="checkbox" name="scope" value=...>` for `scope`, whatever
+ * the attribute order (React 19 writes `checked` before `value`): { checked } or null when absent.
+ */
+function checkbox(html, scope) {
+  for (const [tag] of html.matchAll(/<input\b[^>]*>/g)) {
+    if (!/\btype="checkbox"/.test(tag) || !/\bname="scope"/.test(tag)) continue;
+    if (tag.includes(' value="' + scope + '"')) return { checked: /\schecked(=""|\s|\/|>)/.test(tag) };
+  }
+  return null;
+}
 async function consentPage(who, url) {
   const page = await auth.fetch(url, { redirect: "manual", headers: { Cookie: who.cookie } });
   const html = page.status === 200 ? await page.text() : "";
@@ -139,7 +150,7 @@ before(async () => {
   const mcpBindings = { NATHAN_ISSUER: PROVIDER.issuer, MCP_RESOURCE: RESOURCE, MCP_CACHE_SECONDS: "1" };
   mf = await start({
     workers: [
-      { name: "auth", modules: true, ...COMPAT, scriptPath: bundle("auth"), d1Databases: { DB: "mcp-auth-db" },
+      { name: "auth", modules: authFixtureModules(), ...COMPAT, d1Databases: { DB: "mcp-auth-db" },
         durableObjects: { SCIM_DIRECTORY: { className: "NathanScimDirectory", useSQLite: true } }, bindings: authBindings },
       { name: "mcp", modules: true, ...COMPAT, scriptPath: ".nathan/build-mcp/mcp-server.js",
         serviceBindings: { NATHAN: { name: "auth", entrypoint: "NathanVerifier", props: { applicationId: "notes" } } }, bindings: mcpBindings },
@@ -284,10 +295,11 @@ test("only an enrolled administrator registers an MCP server, and its catalog ca
   const overview = await (await auth.fetch(ORIGIN + "/studio/api/mcp", { headers: { Cookie: admin.cookie } })).json();
   assert.deepEqual(overview.resources[0].scopes.map(s => s.scope), SCOPES, "nathan:* permissions are never scopes");
   assert.equal(overview.resources[0].scopes.find(s => s.scope === "notes:export").sensitive, true);
-  const page = await (await auth.fetch(ORIGIN + "/studio", { headers: { Cookie: admin.cookie } })).text();
-  const script = [...page.matchAll(/<script nonce="[^"]+">([\s\S]*?)<\/script>/g)].map(m => m[1]).join("\n");
-  assert.doesNotThrow(() => new Function(script), "studio script must be valid JavaScript");
-  assert.match(script, /\/studio\/api\/mcp/);
+  // NATH-39: Studio is a Kumo SPA; its code is the SRI-pinned island bundle the Worker serves.
+  const { html, code } = await studioShell(auth, ORIGIN, await auth.fetch(ORIGIN + "/studio", { headers: { Cookie: admin.cookie } }));
+  assert.ok(html.includes('href="#/mcp"'));
+  assert.match(code, /Remote MCP servers/);
+  assert.match(code, /"\/mcp"/);
 });
 
 test("discovery: protected-resource metadata, 401 challenges and authorization-server metadata", async () => {
@@ -349,7 +361,7 @@ test("an MCP SDK client discovers, registers, gets narrowed consent and calls a 
   // no-referrer would make browsers send Origin: null with the form post, which Nathan refuses.
   assert.equal(page.headers.get("Referrer-Policy"), "same-origin");
   assert.doesNotMatch(html, /<script/);
-  for (const s of SCOPES) assert.match(html, new RegExp('value="' + s + '" checked'), s + " preselected from the request");
+  for (const s of SCOPES) assert.ok(checkbox(html, s)?.checked, s + " preselected from the request");
   const approved = await answer(alice, ticket, ["notes:read"]);
   assert.equal(approved.status, 303);
   const callback = new URL(approved.headers.get("Location"));
@@ -429,22 +441,23 @@ test("scopes outside the catalog, reserved scopes and non-public clients are ref
   assert.equal((await registerClient({ scope: "notes:basic offline_access" })).status, 201);
   const unregistered = await auth.fetch(authorizeUrl(client.client_id, { verifier }).replace(encodeURIComponent(REDIRECT), encodeURIComponent("http://127.0.0.1:1/other")), { headers: { Cookie: alice.cookie }, redirect: "manual" });
   assert.equal(unregistered.status, 400, "an unregistered redirect URI is never redirected to");
-  // Registration is rate-limited per address.
-  let limited = 0;
+  // Send all 22 attempts in one fixed minute, then advance the request clock to the next window.
+  const at = Date.now();
+  const registerAt = instant => auth.fetch(ORIGIN + "/mcp-oauth/register", { method: "POST",
+    headers: { "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.7", "X-Test-Now": String(instant) },
+    body: JSON.stringify({ redirect_uris: [REDIRECT] }) });
   for (let i = 0; i < 22; i++) {
-    const response = await auth.fetch(ORIGIN + "/mcp-oauth/register", { method: "POST", headers: { "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.7" },
-      body: JSON.stringify({ redirect_uris: [REDIRECT] }) });
-    if (response.status === 429) limited++;
+    assert.equal((await registerAt(at)).status, i < 20 ? 201 : 429, "registration " + (i + 1));
   }
-  assert.ok(limited >= 2, "more than 20 registrations a minute are refused");
+  assert.equal((await registerAt(at + 60_000)).status, 201, "the next minute has its own budget");
 });
 
 test("sensitive scopes are never granted through an alias or Full access, and need their own tick", async () => {
   const client = (await registerClient()).body;
   const verifier = base64url(crypto.getRandomValues(new Uint8Array(32)));
   const { html, ticket } = await consentPage(alice, authorizeUrl(client.client_id, { scope: "notes:full notes:basic", verifier }));
-  assert.match(html, /value="notes:full" checked/);
-  assert.match(html, /value="notes:export">/, "offered, but not preselected");
+  assert.ok(checkbox(html, "notes:full")?.checked);
+  assert.equal(checkbox(html, "notes:export")?.checked, false, "offered, but not preselected");
   const callback = new URL((await answer(alice, ticket, ["notes:full"])).headers.get("Location"));
   const exchanged = await token({ grant_type: "authorization_code", code: callback.searchParams.get("code"), redirect_uri: REDIRECT, code_verifier: verifier, client_id: client.client_id, resource: RESOURCE });
   assert.equal(exchanged.body.scope, "notes:read notes:share notes:write");
@@ -688,12 +701,12 @@ test("signing in during authorization returns to the consent page", async () => 
 });
 
 test("registration: only successful registrations count globally, unused clients are capped and pruned after a day", async () => {
+  const at = Date.now();
   const register = (body, address) => auth.fetch(ORIGIN + "/mcp-oauth/register", {
-    method: "POST", headers: { "Content-Type": "application/json", "CF-Connecting-IP": address }, body: JSON.stringify(body)
+    method: "POST", headers: { "Content-Type": "application/json", "CF-Connecting-IP": address, "X-Test-Now": String(at) }, body: JSON.stringify(body)
   }).then(async r => ({ status: r.status, headers: r.headers, body: await r.json() }));
-  const globalCount = async () => (await db.prepare("SELECT coalesce(max(request_count),0) AS n FROM nathan_mcp_limits WHERE id LIKE 'mcp-oauth:register-all:%' AND expires_at>unixepoch()").first()).n;
-  // Stay inside one fixed one-minute window.
-  if (Date.now() % 60000 > 50000) await sleep(60000 - (Date.now() % 60000) + 50);
+  const nowSeconds = Math.floor(at / 1000);
+  const globalCount = async () => (await db.prepare("SELECT coalesce(sum(request_count),0) AS n FROM nathan_mcp_limits WHERE id LIKE 'mcp-oauth:register-all:%'").first()).n;
 
   // Unknown fields are dropped; the stored row holds only bounded, known metadata.
   const extra = await register({ client_name: "Bounded", redirect_uris: [REDIRECT], jwks_uri: "https://agent.example/jwks", software_statement: "x".repeat(3000) }, "192.0.2.1");
@@ -717,14 +730,14 @@ test("registration: only successful registrations count globally, unused clients
   // One address may store at most MCP_DAILY_REGISTRATIONS_PER_ADDRESS (50) registrations a day, so a
   // single address cannot keep the unused-client pool full by itself.
   assert.equal((await register({ redirect_uris: [REDIRECT] }, "192.0.2.50")).status, 201);
-  await sql("UPDATE nathan_mcp_limits SET request_count=50 WHERE id LIKE 'mcp-oauth:register-day:%' AND expires_at>unixepoch()");
+  await sql("UPDATE nathan_mcp_limits SET request_count=50 WHERE id LIKE 'mcp-oauth:register-day:%' AND expires_at>?", nowSeconds);
   const daily = await register({ redirect_uris: [REDIRECT] }, "192.0.2.50");
   assert.equal(daily.status, 429, "the address's daily registrations are used up: " + JSON.stringify(daily.body));
   assert.equal((await register({ redirect_uris: [REDIRECT] }, "192.0.2.51")).status, 201, "other addresses are unaffected");
   await sql("UPDATE nathan_mcp_limits SET request_count=0 WHERE id LIKE 'mcp-oauth:register-day:%'");
 
   // The global limit on successful registrations (300 a minute).
-  await sql("UPDATE nathan_mcp_limits SET request_count=300 WHERE id LIKE 'mcp-oauth:register-all:%' AND expires_at>unixepoch()");
+  await sql("UPDATE nathan_mcp_limits SET request_count=300 WHERE id LIKE 'mcp-oauth:register-all:%' AND expires_at>?", nowSeconds);
   const overall = await register({ redirect_uris: [REDIRECT] }, "192.0.2.20");
   assert.equal(overall.status, 429, JSON.stringify(overall.body));
   await sql("UPDATE nathan_mcp_limits SET request_count=0 WHERE id LIKE 'mcp-oauth:register-all:%'");

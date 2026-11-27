@@ -91,7 +91,7 @@ export async function revokeRole({ api, databaseId, actor, apply, app, role, use
     const rows = await db.all("SELECT id FROM nathan_rbac_grants WHERE app_id=? AND role_key=? AND principal_type=? AND principal_id=? LIMIT 1",
       [appId, role, body.principalType, id]);
     if (!rows[0]) throw Error("Unknown grant");
-    return planGrantRevoke(db, { id: rows[0].id });
+    return planGrantRevoke(db, { id: rows[0].id, app: appId });
   } });
   return commitPlan({ api, databaseId, actor, plan, apply, confirm });
 }

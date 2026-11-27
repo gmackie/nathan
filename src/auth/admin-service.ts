@@ -1,4 +1,6 @@
-import type { AuthEnv } from "./env";
+import { resolveAppearance } from "../ui/appearance.ts";
+import { isReverseDomainPrivateUseRedirectUri } from "@better-auth/core/utils/redirect-uri";
+import { allowsAdminTotp, type AuthEnv } from "./env.ts";
 import { planAppStatus, appStatusConfirmation, committedStatements } from "../shared/admin-ops.mjs";
 
 export type AdminActor = { id:string; email:string; role:"admin"; emailVerified:true };
@@ -64,33 +66,46 @@ export async function setApplicationEnabled(env:AuthEnv,id:string,enabled:boolea
 }
 export async function createOAuthClient(auth:any,env:AuthEnv,headers:Headers,input:any,actor:string){
   if(typeof input?.name!=="string" || !input.name.trim() || input.name.length>100)throw Error("Invalid client name");
-  if(!["external","worker","gateway","mcp"].includes(input.kind))throw Error("Invalid client kind");
+  if(!["external","worker","gateway","mcp","native"].includes(input.kind))throw Error("Invalid client kind");
+  const native = input.kind === "native";
+  if(native && input.publicClient !== undefined && input.publicClient !== true)throw Error("Native clients must be public");
   if(input.publicClient && input.kind==="gateway")throw Error("Gateway must be confidential");
   let redirect:URL;
   try{redirect=new URL(input.redirectUri);}catch{throw Error("Invalid redirect URI");}
-  if(redirect.protocol!=="https:" || redirect.username || redirect.password || redirect.hash || redirect.origin==="null")
+  if(native) {
+    const privateUse = isReverseDomainPrivateUseRedirectUri(redirect) && redirect.protocol.length <= 254 &&
+      redirect.protocol.slice(0, -1).split(".").every(label => label.length <= 63);
+    if((redirect.protocol !== "https:" && !privateUse) || input.redirectUri !== redirect.href ||
+        input.redirectUri.length > 2048 || /[\s\\*#]|%2a/i.test(input.redirectUri) || redirect.username || redirect.password)
+      throw Error("Native clients require an exact app-claimed HTTPS or reverse-domain private-use callback");
+  } else if(typeof input.redirectUri !== "string" || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/i.test(redirect.hostname) ||
+      redirect.protocol!=="https:" || redirect.username || redirect.password || redirect.hash || redirect.origin==="null") {
     throw Error("Clients require an exact HTTPS redirect URL");
+  }
   if(input.kind==="gateway" && redirect.pathname!=="/__nathan/callback")throw Error("Gateway callback must use /__nathan/callback");
+  if (input.appearance !== undefined) resolveAppearance(env.NATHAN_APPEARANCE ? JSON.parse(env.NATHAN_APPEARANCE) : undefined, input.appearance);
   const extras=input.kind==="gateway" ? {backchannel_logout_uri:redirect.origin+"/__nathan/backchannel",enable_end_session:true} : {};
   const resource=input.kind==="mcp" ? {resources:[new URL(env.NATHAN_ISSUER).origin+"/mcp"]} : {};
-  await audit(env,actor,"client_create",input.kind+":"+redirect.origin,"attempted");
+  const target = input.kind + ":" + (redirect.origin === "null" ? redirect.protocol : redirect.origin);
+  await audit(env,actor,"client_create",target,"attempted");
   try {
     const client=await auth.api.adminCreateOAuthClient({
       headers,body:{
         client_name:input.name.trim(),
+        ...(input.appearance === undefined ? {} : { metadata: { appearance: input.appearance } }),
         redirect_uris:[redirect.href],
-        token_endpoint_auth_method:input.publicClient?"none":"client_secret_basic",
-        application_type:"web",
+        token_endpoint_auth_method:native || input.publicClient ? "none" : "client_secret_basic",
+        application_type:native ? "native" : "web",
         grant_types:["authorization_code","refresh_token"],
         require_pkce:true,
         skip_consent:false,
         ...extras,...resource
       }
     });
-    await audit(env,actor,"client_create",input.kind+":"+redirect.origin,"succeeded");
+    await audit(env,actor,"client_create",target,"succeeded");
     return client;
   } catch(e) {
-    await audit(env,actor,"client_create",input.kind+":"+redirect.origin,"failed");
+    await audit(env,actor,"client_create",target,"failed");
     throw e;
   }
 }
@@ -273,18 +288,26 @@ export async function grantAdmin(env:AuthEnv,input:any,actor:string){
   if(id===original?.admin_user_id)throw Error("Initial bootstrap owner already has administrator authority");
   await audit(env,actor,"admin_grant",id,"attempted");
   try {
-    await env.DB.batch([
-      env.DB.prepare('UPDATE "user" SET "role"=? WHERE "id"=? AND "emailVerified"=1')
-        .bind("admin",id),
+    // Check policy and insert the grant atomically with respect to tightening or factor removal.
+    const sharedPolicy = Number(allowsAdminTotp(env));
+    const [grant] = await env.DB.batch([
       env.DB.prepare(
-        "INSERT INTO nathan_admin_grants(user_id,email,granted_by,enabled) VALUES(?,?,?,1) "+
-        "ON CONFLICT(user_id) DO UPDATE SET email=excluded.email,granted_by=excluded.granted_by,"+
-        "enabled=1,updated_at=unixepoch()"
-      ).bind(id,email,actor)
+        "INSERT INTO nathan_admin_grants(user_id,email,granted_by,enabled) "+
+        "SELECT id,lower(email),?,1 FROM user WHERE id=? AND lower(email)=? AND emailVerified=1 AND COALESCE(banned,0)=0 "+
+        "AND (?=0 OR NOT EXISTS(SELECT 1 FROM nathan_security_overrides WHERE id='primary' AND require_recent_admin_passkey=1) "+
+        "OR EXISTS(SELECT 1 FROM passkey WHERE userId=user.id)) "+
+        "ON CONFLICT(user_id) DO UPDATE SET email=excluded.email,granted_by=excluded.granted_by,enabled=1,updated_at=unixepoch() "+
+        "RETURNING user_id"
+      ).bind(actor,id,email,sharedPolicy),
+      env.DB.prepare("UPDATE user SET role='admin' WHERE id=? AND changes()=1").bind(id),
+      // A deletion started as an ordinary user must see last-key protection once promotion commits.
+      env.DB.prepare("UPDATE nathan_security_overrides SET protect_last_passkey=1 WHERE id='primary' " +
+        "AND ?=1 AND changes()=1 AND require_recent_admin_passkey=1 AND protect_last_passkey=0").bind(sharedPolicy)
     ]);
+    if (!grant.results.length) throw Error("Check the verified user and their required passkey enrollment");
     await audit(env,actor,"admin_grant",id,"succeeded");
     return {id,email,enabled:true,
-      note:"Administrator added. Their current session must satisfy enrollment and recent passkey step-up before access."};
+      note:"Administrator added. Their session must meet the installation's enrollment and verification requirements."};
   }catch(e){await audit(env,actor,"admin_grant",id,"failed");throw e;}
 }
 export async function revokeAdminGrant(env:AuthEnv,input:any,actor:string){

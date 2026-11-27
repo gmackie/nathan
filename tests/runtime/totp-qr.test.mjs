@@ -68,7 +68,7 @@ test("GET /security is a renderPage page: nonce'd SRI island script, no inline s
   assert.equal(csp,
     "default-src 'none'; connect-src 'self'; img-src 'none'; style-src 'self' 'nonce-" + nonce + "'; script-src 'self' 'nonce-" + nonce + "'; " +
     "form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
-  for (const [name, value] of [["cache-control", "no-store"], ["referrer-policy", "same-origin"], ["x-content-type-options", "nosniff"],
+  for (const [name, value] of [["cache-control", "private, no-store, no-transform"], ["referrer-policy", "same-origin"], ["x-content-type-options", "nosniff"],
     ["x-frame-options", "DENY"], ["cross-origin-opener-policy", "same-origin"], ["strict-transport-security", "max-age=31536000"]])
     assert.equal(response.headers.get(name), value, name);
   assert.doesNotMatch(html, /\sstyle=/, "no style attributes");

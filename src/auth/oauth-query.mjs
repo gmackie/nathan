@@ -6,9 +6,9 @@
  * names it signed) and `sig`. A sign-in request carrying them as `oauth_query` lets Better Auth
  * resume that authorization once the session exists; without it the browser lands on "/".
  * Mirrors buildSignedOAuthQuery in @better-auth/oauth-provider's client plugin, which Nathan's
- * hand-written page does not load. The signature is verified server-side; this only selects.
+ * sign-in page does not load. The signature is verified server-side; this only selects.
  *
- * Self-contained (no free variables): the sign-in page inlines its source.
+ * Self-contained (no free variables). NATH-38: bundled into the sign-in island (src/ui/islands/sign-in.ts).
  */
 export function signedOAuthQuery(search) {
   const params = new URLSearchParams(search);

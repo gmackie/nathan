@@ -121,14 +121,14 @@ export function newRoleGrant(app, role, principalType, principalId, actor) {
   };
 }
 
-/** @param {AdminReader} db @param {any} body `{ id }` (the grant id) @returns {Promise<AdminPlan>} */
+/** @param {AdminReader} db @param {any} body `{ id, app? }` (the legacy Studio endpoint accepts the id alone) @returns {Promise<AdminPlan>} */
 export async function planGrantRevoke(db, body) {
   if (typeof body.id !== "string" || body.id.length > 200) throw Error("Invalid grant id");
   const grant = await first(db, "SELECT id, app_id AS app, role_key AS role, principal_type AS principalType, principal_id AS principalId FROM nathan_rbac_grants WHERE id=?", [body.id]);
-  if (!grant) throw Error("Unknown grant");
+  if (!grant || (body.app !== undefined && body.app !== grant.app)) throw Error("Unknown grant");
   return {
     action: "rbac_grant_revoke", target: grant.app + ":" + grant.role + ":" + grant.principalType + ":" + grant.principalId,
-    statements: [{ sql: "DELETE FROM nathan_rbac_grants WHERE id=?", params: [grant.id] }],
+    statements: [{ sql: "DELETE FROM nathan_rbac_grants WHERE id=? AND app_id=?", params: [grant.id, grant.app] }],
     change: { kind: "grant.revoked", appId: grant.app, principalType: grant.principalType, principalId: grant.principalId, detail: { role: grant.role } },
     result: { ...grant, revoked: true, note: "Nathan gateways stop honoring the grant within their access cache window (at most 60 s)" }
   };

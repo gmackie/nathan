@@ -1,8 +1,16 @@
 import { serveUiAsset } from "../ui/assets.ts";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { verifyOAuthQueryParams } from "@better-auth/oauth-provider";
+import { emailEnabled, emailSignIn } from "./email-sign-in";
+import { beginEmailSignIn as beginSingleAppSignIn, finishEmailSignIn as finishSingleAppSignIn } from "./single-app";
+import { isEmailSession } from "./email-sign-in-policy";
+import { emailSignInPage } from "./email-sign-in-page";
+import { pruneEmailOtpLimits } from "./email-otp-policy.mjs";
+import { signedOAuthQuery } from "./oauth-query.mjs";
+import { normalizeEmail } from "./admission-policy.mjs";
 import { createAuth } from "./instance";
 import {isRawManagementEndpoint} from "./management-boundary.mjs";
+import { managementIngress } from "./management-ingress";
 import { loadSocialCredentials, providerStatus, upsertSocialProvider, setSocialProviderEnabled } from "./provider-store";
 import { enabledProviderIds, beginProviderTest, completeProviderTest } from "./provider-store";
 import { providerTestResultPage } from "./provider-ui.mjs";
@@ -12,17 +20,19 @@ import {effectiveAdminPolicy,tightenAdminPolicy} from "./security-policy";
 import {handleScim} from "./scim/gateway";
 import {listScimConnections,createScimConnection,setScimConnectionEnabled,rotateScimToken} from "./scim/admin";
 import {samlProtocolGate,handleSamlRoutes} from "./saml-routes";
+export { NathanAppAuth } from "./app-auth";
 export {NathanScimDirectory} from "./scim/directory";
-import { signInPage, consentPage, studioPage } from "./ui";
+export { NathanAppProvisioner } from "./app-provisioning";
+import { studioPage } from "../ui/pages/studio/StudioPage.tsx";
+import { signInPage, consentPage } from "./hosted-pages.tsx";
 import { securityPage } from "./security-ui";
-import { loadVerifiedRealm, listRealmClients,registerRealmClient,registerRealmClientsBatch,updateRealmClientStatus } from "./domain-realm";
+import { loadVerifiedRealm, listRealmClients,registerRealmClient,registerRealmClientsBatch } from "./domain-realm";
 import type { AuthEnv } from "./env";
 import { scopedApplication, outOfScope, type BindingProps } from "./app-binding";
-import pluginCatalog from "../../plugins/catalog.json";
 import { handleMcp, protectedResourceMetadata } from "./mcp";
-import { isAdminUser, listApplications, listSso, upsertApplication,
-  setApplicationEnabled, registerEnterpriseOidc, requestEnterpriseVerification, verifyEnterpriseDomain,
-  createOAuthClient, listUsers, isAdminPrincipal, isBootstrapOwner, listAdminGrants, grantAdmin, revokeAdminGrant } from "./admin-service";
+import { listApplications, listSso, upsertApplication, registerEnterpriseOidc, requestEnterpriseVerification, verifyEnterpriseDomain,
+  createOAuthClient, listUsers, isAdminPrincipal, isBootstrapOwner, listAdminGrants, grantAdmin, revokeAdminGrant,
+  listClients, recentAudit } from "./admin-service";
 import { resolveAccess, directoryPrincipal, directoryChanges, pruneRbacChanges, rbacOverview, listGroups, groupMembers, applyRbacOperation } from "./rbac";
 import { handleDirectory, createDirectoryClient } from "./directory";
 import { tokenOverview, applyTokenOperation } from "./tokens";
@@ -30,9 +40,19 @@ import { isMcpOAuthPath, handleMcpOAuth, mcpReturnRedirect, mcpGrantStatus, mcpO
 import { updateScimSettings, changeScimMapping, scimConnectionView, SCIM_ADMIN_ERRORS } from "./scim/lifecycle-admin";
 import { deliverLogouts } from "./logout-queue";
 import { scimUserOperation, scimOutboxView, skipScimOutbox, SCIM_REVIEW_ERRORS } from "./scim/reviews";
-import { admissionOverview, applyAdmissionOperation, ADMISSION_ERRORS } from "./admission";
+import { admissionOverview, applyAdmissionOperation } from "./admission";
 import { healthResponse } from "./health";
 import { handleSamlIdp, samlIdpReturnRedirect, pruneSamlIdp } from "./saml-idp";
+// NATH-24: typed Identity Studio JSON API v1 and the service functions shared with the routes below.
+import { handleStudioApiV1, STUDIO_API_V1 } from "./studio-api";
+import { studioStatus, pluginCatalog } from "./studio-api/status";
+import { setOAuthClientStatus, setApplicationStatus, StudioInputError } from "./studio-api/clients";
+import { providerRefusalMessage } from "./studio-api/providers";
+import { scimMessage } from "./studio-api/scim";
+import { rbacRefusalMessage } from "./studio-api/rbac";
+import { tokenRefusalMessage } from "./studio-api/tokens";
+import { mcpRefusalMessage } from "./studio-api/mcp";
+import { admissionRefusalMessage } from "./studio-api/admission";
 
 function reject(status: number, reason: string) {
   return Response.json({ error: reason }, { status, headers: { "Cache-Control": "no-store" } });
@@ -41,7 +61,7 @@ async function isAdmin(session:any,env:AuthEnv):Promise<boolean>{
   return Boolean(session?.user && await isAdminPrincipal(session.user,env));
 }
 
-async function handle(request: Request, env: AuthEnv): Promise<Response> {
+async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Promise<Response> {
   const issuer = new URL(env.NATHAN_ISSUER);
   const url = new URL(request.url);
   if (url.origin !== issuer.origin || url.protocol !== "https:") return reject(421, "Misdirected request");
@@ -57,6 +77,13 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     return protectedResourceMetadata(env);
   }
   if(url.pathname.startsWith("/scim/v2/"))return handleScim(request,env);
+  if (url.pathname === "/sign-in/email/request") return emailSignIn(request, env, ctx, "request");
+  if (url.pathname === "/sign-in/email/verify") return emailSignIn(request, env, ctx, "verify");
+  if (url.pathname === "/sign-in/email" && request.method === "GET" && emailEnabled(env)) {
+    const query = signedOAuthQuery(url.search);
+    if (url.search && (!query || !await verifyOAuthQueryParams(query, env.BETTER_AUTH_SECRET))) return reject(400, "Invalid or expired sign-in request");
+    return emailSignInPage(query ? normalizeEmail(new URLSearchParams(query).get("login_hint")) : null);
+  }
   const socialProviders=await loadSocialCredentials(env);
   const auth = createAuth(env,socialProviders);
   // NATH-14: authorization server for remote MCP servers, consent and MCP connections (src/auth/mcp-oauth.ts).
@@ -83,17 +110,22 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
   if (url.pathname === "/sign-in" && request.method === "GET") {
     // With a session and no signed authorization to resume (an app's /oauth2/authorize adds `sig`),
     // there is nothing to sign in to; a prompt=login authorization keeps its signed query and the page.
+    const studioSignIn = !url.searchParams.has("sig") && url.searchParams.get("setup") === "admin";
     if (!url.searchParams.has("sig")) {
       const session = await auth.api.getSession({ headers: request.headers });
-      if (session?.user?.id) return Response.redirect(issuer.origin + "/security", 302);
+      if (session?.user?.id) return Response.redirect(issuer.origin + (studioSignIn ? "/studio" : "/security"), 302);
     }
     const providers = enabledProviderIds(socialProviders);
-    return signInPage(providers, env.ENABLE_PASSWORD === "true", env.ENTERPRISE_SSO === "true");
+    const query = signedOAuthQuery(url.search);
+    const emailHref = !studioSignIn && emailEnabled(env) ? "/sign-in/email" + (query ? "?" + query : "") : undefined;
+    return signInPage(providers, env.ENABLE_PASSWORD === "true", env.ENTERPRISE_SSO === "true",
+      { issuer: issuer.host, error: url.searchParams.get("error"), emailHref });
   }
   if (url.pathname === "/consent" && request.method === "GET") {
     const { secret } = await auth.$context;
     const verified = await verifyOAuthQueryParams(url.search.slice(1), secret);
-    return consentPage(Boolean(verified), url.searchParams.get("client_id") ?? "Application", url.searchParams.get("scope") ?? "");
+    return consentPage(Boolean(verified), url.searchParams.get("client_id") ?? "Application", url.searchParams.get("scope") ?? "",
+      { issuer: issuer.host });
   }
   if (url.pathname === "/security" && request.method === "GET") {
     const session=await auth.api.getSession({headers:request.headers});
@@ -108,8 +140,11 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
   if(url.pathname==="/security/api/bootstrap" && request.method==="GET"){
     const session=await auth.api.getSession({headers:request.headers});
     if(!session?.user?.id)return reject(401,"Authenticated session required");
-    return Response.json({...await bootstrapStatus(env,session.user.id),
-      sessionReady:await mayAdminister(env,session.user.id,session.session.id)},
+    const owner = await isBootstrapOwner(session.user, env);
+    const admin = owner || await isAdmin(session, env);
+    return Response.json({...await bootstrapStatus(env,session.user.id), isAdministrator:admin,
+      requiresSignIn:admin && await isEmailSession(env.DB, session.session.id),
+      sessionReady:admin && await mayAdminister(env,session.user.id,session.session.id)},
       {headers:{"Cache-Control":"no-store"}});
   }
   if(url.pathname==="/security/api/bootstrap/complete" && request.method==="POST"){
@@ -117,27 +152,29 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
       return reject(403,"Cross-origin request denied");
     const session=await auth.api.getSession({headers:request.headers});
     if(!await isBootstrapOwner(session?.user,env))return reject(403,"Verified initial admin account required");
+    if (await isEmailSession(env.DB, session!.session.id)) return reject(403,"Sign in with an existing authenticator to complete administrator enrollment");
     try{
       return Response.json(await completeBootstrap(env,session!.user.id),{headers:{"Cache-Control":"no-store"}});
-    }catch{return reject(409,"Complete verified passkey and TOTP enrollment first");}
+    }catch{return reject(409,"Finish the required authenticator enrollment first");}
   }
 
   if (url.pathname === "/studio" && request.method === "GET") {
     const session = await auth.api.getSession({ headers: request.headers });
-    if (!await isAdmin(session, env)) return reject(403, "Admin session required");
+    if (!session && request.headers.get("Accept")?.includes("text/html"))
+      return Response.redirect(issuer.origin + "/sign-in?setup=admin", 302);
+    if (!await isAdmin(session, env)) {
+      if (session && await isBootstrapOwner(session.user, env)) return Response.redirect(issuer.origin + "/security?setup=admin", 302);
+      return reject(403, "Admin session required");
+    }
     if (!await mayAdminister(env,session!.user.id,session!.session.id)) return Response.redirect(issuer.origin+"/security?setup=admin",302);
     return studioPage(session!.user.email);
   }
+  if (url.pathname === STUDIO_API_V1 || url.pathname.startsWith(STUDIO_API_V1 + "/")) return handleStudioApiV1(request, env, auth);
   if (["/studio/api/clients", "/studio/api/status", "/studio/api/plugins", "/studio/api/audit", "/studio/api/apps", "/studio/api/sso", "/studio/api/users", "/studio/api/realm", "/studio/api/realm/clients", "/studio/api/providers", "/studio/api/scim/connections", "/studio/api/admins", "/studio/api/security-policy"].includes(url.pathname) && request.method === "GET") {
     const session = await auth.api.getSession({ headers: request.headers });
     if (!await isAdmin(session, env) || !await mayAdminister(env,session!.user.id,session!.session.id)) return reject(403, "Admin enrollment incomplete");
     if (url.pathname === "/studio/api/status") {
-      return Response.json({
-        issuer: issuer.origin + "/api/auth",
-        providers: Object.fromEntries((await providerStatus(env)).map(p=>[p.id,p.enabled])),
-        features: {oidcProvider: true, passkeys: true, totp: true, enterpriseSso: env.ENTERPRISE_SSO === "true", password: env.ENABLE_PASSWORD === "true", scimDirectory: Boolean(env.SCIM_DIRECTORY)},
-        note: "Authentication assurance level enforcement and guided plugin installation are not yet available"
-      }, {headers: {"Cache-Control":"no-store"}});
+      return Response.json(await studioStatus(env), {headers: {"Cache-Control":"no-store"}});
     }
     if (url.pathname === "/studio/api/security-policy") {
       return Response.json(await effectiveAdminPolicy(env),{headers:{"Cache-Control":"no-store"}});
@@ -172,13 +209,9 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
       return Response.json(pluginCatalog,{headers:{"Cache-Control":"no-store"}});
     }
     if (url.pathname === "/studio/api/audit") {
-      const audit = await env.DB.prepare("SELECT id,actor,action,target,outcome,created_at FROM nathan_security_audit ORDER BY created_at DESC LIMIT 75")
-        .all<{id:string,actor:string,action:string,target:string,outcome:string,created_at:number}>();
-      return Response.json({events:audit.results},{headers:{"Cache-Control":"no-store"}});
+      return Response.json({events:await recentAudit(env)},{headers:{"Cache-Control":"no-store"}});
     }
-    const clients = await env.DB.prepare('SELECT "clientId" AS id, "name" AS name, "redirectUris" AS redirectUris, "disabled" AS disabled, "tokenEndpointAuthMethod" AS authMethod FROM "oauthClient" ORDER BY "createdAt" DESC LIMIT 100')
-      .all<{id:string,name:string,redirectUris:string,disabled:number,authMethod:string}>();
-    return Response.json({clients:clients.results.map(c => ({...c,redirectUris:JSON.parse(c.redirectUris || "[]")}))},{headers:{"Cache-Control":"no-store"}});
+    return Response.json({clients:await listClients(env)},{headers:{"Cache-Control":"no-store"}});
   }
 
   if (["/studio/api/apps","/studio/api/apps/status","/studio/api/sso/oidc","/studio/api/sso/token","/studio/api/sso/verify"].includes(url.pathname) && request.method === "POST") {
@@ -197,9 +230,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
         return Response.json(await upsertApplication(env,body,session!.user.id),{headers:{"Cache-Control":"no-store"}});
       }
       if(url.pathname==="/studio/api/apps/status") {
-        if(typeof body.enabled!=="boolean"||body.confirm!==("CONFIRM "+(body.enabled?"ENABLE ":"DISABLE ")+body.id))
-          return reject(400,"Explicit confirmation required");
-        return Response.json(await setApplicationEnabled(env,body.id,body.enabled,session!.user.id),{headers:{"Cache-Control":"no-store"}});
+        return Response.json(await setApplicationStatus(env,body,session!.user.id),{headers:{"Cache-Control":"no-store"}});
       }
       const value=url.pathname==="/studio/api/sso/token"
         ?await requestEnterpriseVerification(auth,env,request.headers,body,session!.user.id)
@@ -207,7 +238,8 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
           ?await verifyEnterpriseDomain(auth,env,request.headers,body,session!.user.id)
           :await registerEnterpriseOidc(auth,env,request.headers,body,session!.user.id);
       return Response.json(value,{headers:{"Cache-Control":"no-store"}});
-    }catch {
+    }catch(error){
+      if(error instanceof StudioInputError)return reject(400,"Explicit confirmation required");
       return reject(400,"Operation denied or rejected by identity provider");
     }
   }
@@ -267,8 +299,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
       return Response.json(updated,{headers:{"Cache-Control":"no-store"}});
     }catch(e){
       // Only registry/rule errors carry a publicMessage; they never contain submitted values.
-      const safe=(e as {publicMessage?:unknown})?.publicMessage;
-      return reject(409,typeof safe==="string"?safe:"Provider update denied. Check configuration encryption key and remaining login/recovery methods.");
+      return reject(409,providerRefusalMessage(e));
     }
   }
 
@@ -313,7 +344,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     try{
       const result=await tightenAdminPolicy(env,body,session!.user.id,session!.session.id);
       return Response.json(result,{headers:{"Cache-Control":"no-store"}});
-    }catch{return reject(409,"Cannot tighten policy until the required authenticators and recent verification are available");}
+    }catch{return reject(409,"Verify the required authenticator first. On shared issuers using passkey-or-TOTP, the owner and all enabled administrators must enroll a passkey before requiring it.");}
   }
 
   if(["/studio/api/admins/grant","/studio/api/admins/revoke"].includes(url.pathname)&&request.method==="POST"){
@@ -324,7 +355,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     const session=await auth.api.getSession({headers:request.headers});
     if(!await isAdminPrincipal(session?.user,env)||
        !await mayAdminister(env,session!.user.id,session!.session.id))
-      return reject(403,"Completed admin enrollment and recent passkey authentication required");
+      return reject(403,"Complete admin enrollment and verify your authenticator");
     const raw=await request.text();
     if(raw.length>4096)return reject(413,"Admin operation too large");
     let body:any;try{body=JSON.parse(raw)}catch{return reject(400,"Invalid JSON")}
@@ -345,24 +376,10 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     if (raw.length > 4096) return reject(413, "Request too large");
     let body: any;
     try { body = JSON.parse(raw); } catch { return reject(400, "Invalid JSON"); }
-    if (typeof body.clientId !== "string" || !/^[A-Za-z0-9._-]{1,200}$/.test(body.clientId) || typeof body.disabled !== "boolean")
-      return reject(400, "Invalid client status update");
-    const auditId = crypto.randomUUID();
-    const action = body.disabled ? "oauth_client_disable" : "oauth_client_enable";
-    await env.DB.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) VALUES (?,?,?,?,?)")
-      .bind(auditId,session!.user.id,action,body.clientId,"attempted").run();
     try {
-      await auth.api.adminUpdateOAuthClient({
-        headers: request.headers,
-        body: { client_id: body.clientId, update: { disabled: body.disabled } }
-      });
-      await updateRealmClientStatus(env,body.clientId,body.disabled);
-      await env.DB.prepare("UPDATE nathan_security_audit SET outcome=? WHERE id=?")
-        .bind("succeeded",auditId).run();
-      return Response.json({updated:true,clientId:body.clientId,disabled:body.disabled},{headers:{"Cache-Control":"no-store"}});
+      return Response.json(await setOAuthClientStatus(auth,env,request.headers,body,session!.user.id),{headers:{"Cache-Control":"no-store"}});
     } catch (error) {
-      await env.DB.prepare("UPDATE nathan_security_audit SET outcome=? WHERE id=?")
-        .bind("failed",auditId).run();
+      if (error instanceof StudioInputError) return reject(400, "Invalid client status update");
       return reject(400,"Client update failed or not authorized");
     }
   }
@@ -411,7 +428,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
         :await changeScimMapping(env,body,session!.user.id);
       return Response.json(value,{headers:{"Cache-Control":"no-store"}});
     }catch(error){
-      return reject(409,error instanceof Error&&SCIM_ADMIN_ERRORS.test(error.message)?error.message:"SCIM lifecycle change rejected");
+      return reject(409,scimMessage(SCIM_ADMIN_ERRORS,"SCIM lifecycle change rejected")(error));
     }
   }
 
@@ -422,7 +439,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     if(!await isAdminPrincipal(session?.user,env) || !await mayAdminister(env,session!.user.id,session!.session.id))
       return reject(403,"Admin enrollment incomplete");
     try{return Response.json(await scimOutboxView(env,url.searchParams.get("id")),{headers:{"Cache-Control":"no-store"}})}
-    catch(error){return reject(409,error instanceof Error&&SCIM_REVIEW_ERRORS.test(error.message)?error.message:"SCIM outbox unavailable");}
+    catch(error){return reject(409,scimMessage(SCIM_REVIEW_ERRORS,"SCIM outbox unavailable")(error));}
   }
   if (["/studio/api/scim/users","/studio/api/scim/outbox"].includes(url.pathname) && request.method === "POST") {
     if(request.headers.get("Origin")!==issuer.origin ||
@@ -441,7 +458,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
         :await skipScimOutbox(env,body,session!.user.id);
       return Response.json(value,{headers:{"Cache-Control":"no-store"}});
     }catch(error){
-      return reject(409,error instanceof Error&&SCIM_REVIEW_ERRORS.test(error.message)?error.message:"SCIM operation rejected");
+      return reject(409,scimMessage(SCIM_REVIEW_ERRORS,"SCIM operation rejected")(error));
     }
   }
 
@@ -474,9 +491,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
         :await applyRbacOperation(env,body,session!.user.id);
       return Response.json(value,{headers:{"Cache-Control":"no-store"}});
     }catch(error){
-      const message=error instanceof Error && /^(Invalid|Unknown|Explicit|Select|User not found|Declare|Too many|Permission keys|Role keys|Group ids|Grant a role|Membership|Description|Application is not registered)/.test(error.message)
-        ?error.message:"RBAC change rejected";
-      return reject(409,message);
+      return reject(409,rbacRefusalMessage(error));
     }
   }
 
@@ -498,8 +513,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     try{
       return Response.json(await applyTokenOperation(auth,env,request.headers,body,session!.user.id),{headers:{"Cache-Control":"no-store"}});
     }catch(error){
-      const message=error instanceof Error && /^(Invalid|Unknown|Explicit)/.test(error.message)?error.message:"Token change rejected";
-      return reject(409,message);
+      return reject(409,tokenRefusalMessage(error));
     }
   }
 
@@ -521,8 +535,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     try{
       return Response.json(await applyMcpOperation(env,body,session!.user.id),{headers:{"Cache-Control":"no-store"}});
     }catch(error){
-      const message=error instanceof Error && /^(Invalid|Unknown|Explicit|Give)/.test(error.message)?error.message:"MCP change rejected";
-      return reject(409,message);
+      return reject(409,mcpRefusalMessage(error));
     }
   }
   // NATH-16: account admission mode and invitations (admin + step-up; writes same-origin, confirmed and audited).
@@ -543,7 +556,7 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
     try{
       return Response.json(await applyAdmissionOperation(env,body,session!.user.id),{headers:{"Cache-Control":"no-store"}});
     }catch(error){
-      return reject(409,error instanceof Error&&ADMISSION_ERRORS.test(error.message)?error.message:"Admission change rejected");
+      return reject(409,admissionRefusalMessage(error));
     }
   }
   const saml=await handleSamlRoutes(request,env,auth,url);
@@ -553,9 +566,27 @@ async function handle(request: Request, env: AuthEnv): Promise<Response> {
 }
 
 export default {
-  fetch: (request: Request, env: AuthEnv) => handle(request, env),
-  scheduled: async (_: ScheduledEvent,env:AuthEnv) => {
+  async fetch(request: Request, env: AuthEnv, ctx: ExecutionContext) {
+    const response = await managementIngress(request, env, ctx, handle);
+    if (response.headers.get("Content-Type")?.split(";", 1)[0].trim().toLowerCase() !== "text/html") return response;
+    // Apply this after management ingress seals cookies and sets its own cache policy.
+    // Cloudflare Web Analytics respects no-transform on the final HTML response.
+    const page = new Response(response.body, response);
+    page.headers.set("Cache-Control", "private, no-store, no-transform");
+    return page;
+  },
+  scheduled: async (event: ScheduledEvent,env:AuthEnv) => {
+    if (event.cron === "* * * * *" && env.NATHAN_APP_ORIGIN) {
+      await deliverLogouts(env,{limit:100});
+      return;
+    }
     await env.DB.prepare("DELETE FROM nathan_mcp_limits WHERE expires_at < unixepoch()").run();
+    await pruneEmailOtpLimits(env.DB);
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM nathan_email_sign_ins WHERE expires_at<=unixepoch()"),
+      env.DB.prepare("DELETE FROM nathan_email_delivery_order WHERE expires_at<=unixepoch()"),
+      env.DB.prepare("DELETE FROM verification WHERE (identifier GLOB 'nathan-email:*' OR identifier GLOB 'hosted-email-*') AND unixepoch(expiresAt)<=unixepoch()")
+    ]);
     await pruneRbacChanges(env);
     await pruneMcp(env);
     await pruneSamlIdp(env);
@@ -624,6 +655,20 @@ export class NathanVerifier extends WorkerEntrypoint<AuthEnv, BindingProps> {
    * and returns the scopes it may use now = token ∩ live grant ∩ the user's current permissions.
    * Like every call here it is app-scoped: only resources of the pinned application are answered.
    */
+  /**
+   * NATH-52: email sign-in for a pinned single-app binding. The app draws the form.
+   * The answer is a subject and email, never a session cookie, token, or admin role.
+   */
+  async beginEmailSignIn(input: { email?: string; ip?: string }) {
+    const scope = scopedApplication(this.ctx.props, undefined);
+    if (!scope.ok) return { ok: false, error: "unavailable" as const };
+    return beginSingleAppSignIn(this.env, input, this.ctx);
+  }
+  async finishEmailSignIn(input: { email?: string; code?: string; ip?: string }) {
+    const scope = scopedApplication(this.ctx.props, undefined);
+    if (!scope.ok) return { ok: false, error: "unavailable" as const };
+    return finishSingleAppSignIn(this.env, input, this.ctx);
+  }
   async mcpGrant(input: { token: string; resource: string }) {
     const scope = scopedApplication(this.ctx.props, undefined);
     if (!scope.ok || !input || typeof input.token !== "string" || typeof input.resource !== "string") return { active: false };

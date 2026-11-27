@@ -9,7 +9,7 @@
  */
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
-import { authWorker, randomKey, insertSession, studioPost, cookiesOf } from "./helpers.mjs";
+import { authWorker, randomKey, insertSession, studioPost, cookiesOf, studioShell } from "./helpers.mjs";
 import { sealProviderCredentials } from "../../src/auth/config-crypto.mjs";
 
 const HOST = "login.example.test", ORIGIN = "https://" + HOST;
@@ -355,8 +355,12 @@ test("self-service admits verified sign-ins without an invitation; switching bac
 
 test("the sign-in page explains a refused sign-in", async () => {
   const html = await (await mf.dispatchFetch(ORIGIN + "/sign-in?error=ACCOUNT_NOT_ADMITTED")).text();
-  assert.match(html, /errorCallbackURL/, "social sign-in returns to the sign-in page on errors");
-  assert.match(html, /ACCOUNT_NOT_ADMITTED/);
+  // NATH-38: explained on the server (no script needed), with the reason code.
+  assert.match(html, /invitation only[^<]*\(ACCOUNT_NOT_ADMITTED\)/);
+  // The sign-in behaviour is the SRI-pinned sign-in island; its social sign-in returns here on errors.
+  const island = /<script type="module" src="(\/__nathan\/ui\/sign-in-[A-Za-z0-9]+\.js)"/.exec(html)?.[1];
+  assert.ok(island, "the sign-in island is loaded");
+  assert.match(await (await mf.dispatchFetch(ORIGIN + island)).text(), /errorCallbackURL:\w+\?"\/sign-in\?setup=admin":"\/sign-in"/, "social sign-in returns to the sign-in page on errors");
 });
 
 test("enterprise OIDC SSO: an invitation is claimed only for an address inside the connection's verified domain", async () => {
@@ -446,9 +450,13 @@ test("Studio: installations that had accounts before 0017 get a one-time notice 
   await db.prepare("UPDATE nathan_security_audit SET target='existing-users' WHERE action='admission_default_invitation_only'").run();
   await db.prepare("DELETE FROM nathan_security_audit WHERE action='admission_mode_change'").run();
   assert.match((await view()).upgradeNotice, /invitation.*SCIM just-in-time/s);
-  const page = await (await mf.dispatchFetch(ORIGIN + "/studio", { headers: { Cookie: admin.cookie } })).text();
-  assert.match(page, /href="#adm-mode"/, "the notice links to the setting");
-  assert.match(page, /enterprise SSO \(SAML and OIDC\)/);
+  // NATH-39: the Kumo Studio shows the notice above every panel, linking to the admission panel.
+  const { code } = await studioShell((u, i) => mf.dispatchFetch(u, i), ORIGIN,
+    await mf.dispatchFetch(ORIGIN + "/studio", { headers: { Cookie: admin.cookie } }));
+  assert.match(code, /#\/admission/, "the notice links to the setting");
+  assert.match(code, /Choose the admission mode/);
+  assert.match(code, /upgradeNotice/);
+  assert.match(code, /enterprise SSO \(SAML and OIDC\)/);
   assert.equal((await studio("/studio/api/admission", { op: "dismiss-upgrade-notice" })).status, 200);
   assert.equal((await view()).upgradeNotice, undefined, "shown once");
   assert.equal((await one("SELECT outcome FROM nathan_security_audit WHERE action='admission_upgrade_notice_dismiss'")).outcome, "succeeded");

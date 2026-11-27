@@ -2,7 +2,7 @@
  * NATH-37: the UI asset manifest written by scripts/build-ui.mjs (git-ignored, rebuilt by every
  * build:* script) and bundled into the Worker. It names each hashed asset and its SRI hash.
  */
-import data from "./generated/ui-manifest.json";
+import data from "./generated/ui-manifest.json" with { type: "json" };
 
 export interface UiAsset {
   /** Same-origin path under /__nathan/ui/. */
