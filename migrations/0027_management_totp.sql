@@ -7,19 +7,35 @@ CREATE TABLE nathan_management_totp (
 );
 CREATE INDEX nathan_management_totp_factor ON nathan_management_totp(factor_id);
 
--- Remember accepted time steps across session expiry and sign-out.
+-- Keep each accepted step through the code's validity window, even after sign-out.
 CREATE TABLE nathan_management_totp_steps (
-  factor_id TEXT PRIMARY KEY NOT NULL REFERENCES "twoFactor"(id) ON DELETE CASCADE,
-  last_step INTEGER NOT NULL,
-  passkey_proof_until INTEGER NOT NULL
+  factor_id TEXT NOT NULL REFERENCES "twoFactor"(id) ON DELETE CASCADE,
+  step INTEGER NOT NULL,
+  PRIMARY KEY (factor_id, step)
 );
--- Close the interval between checking enrollment policy and Better Auth's activation write.
-CREATE TRIGGER nathan_management_totp_activate BEFORE UPDATE OF verified ON "twoFactor"
-WHEN OLD.verified IS NOT 1 AND NEW.verified=1
-  AND EXISTS(SELECT 1 FROM nathan_management_totp_steps WHERE factor_id=NEW.id AND passkey_proof_until<unixepoch())
-  AND EXISTS(SELECT 1 FROM passkey WHERE userId=NEW.userId)
+
+-- An old NULL verification flag denotes enrollment only if the account enabled 2FA.
+-- Discard unfinished duplicate setups. Keep every possibly active secret for operator
+-- recovery if more than one survives; never select one of those secrets by row order.
+DELETE FROM "twoFactor" WHERE verified=0 AND userId IN (
+  SELECT userId FROM "twoFactor" GROUP BY userId HAVING count(*)>1
+) AND (userId IN (SELECT id FROM "user" WHERE twoFactorEnabled IS NOT 1)
+       OR userId IN (SELECT userId FROM "twoFactor" WHERE verified IS NOT 0));
+UPDATE "twoFactor" SET verified=1 WHERE verified IS NULL AND userId IN (SELECT id FROM "user" WHERE twoFactorEnabled=1)
+  AND userId IN (SELECT userId FROM "twoFactor" GROUP BY userId HAVING count(*)=1);
+
+-- The provider supports one authenticator per user. A trigger also protects new
+-- enrollments on installations that still have ambiguous historical rows.
+CREATE TRIGGER nathan_totp_single_enrollment BEFORE INSERT ON "twoFactor"
+WHEN EXISTS(SELECT 1 FROM "twoFactor" WHERE userId=NEW.userId)
 BEGIN
-  SELECT RAISE(ABORT,'Verify your enrolled passkey before activating this authenticator');
+  SELECT RAISE(ABORT,'Authenticator setup already exists');
+END;
+CREATE TRIGGER nathan_totp_protect_enrollment BEFORE UPDATE OF verified,secret,userId ON "twoFactor"
+BEGIN
+  SELECT RAISE(ABORT,'Authenticator enrollment changed')
+    WHERE OLD.userId<>NEW.userId OR (OLD.verified=1 AND NEW.verified IS NOT 1);
+  DELETE FROM nathan_management_totp WHERE factor_id=OLD.id AND NEW.secret<>OLD.secret;
 END;
 
 ALTER TABLE nathan_admin_grants ADD COLUMN grant_generation INTEGER NOT NULL DEFAULT 0;

@@ -11,6 +11,9 @@ export function isAdminUser(user: unknown, env:AuthEnv): user is AdminActor {
   return Boolean(u.emailVerified===true && u.role==="admin" && typeof u.id==="string"
     && typeof u.email==="string" && emails.includes(u.email.toLowerCase()));
 }
+function isManualAdmin(user: unknown, env: AuthEnv) {
+  return env.NATHAN_BOOTSTRAP_REQUIRED !== "true" && isAdminUser(user, env);
+}
 export async function audit(env:AuthEnv,actor:string,action:string,target:string,outcome:string) {
   await env.DB.prepare("INSERT INTO nathan_security_audit (id,actor,action,target,outcome) VALUES (?,?,?,?,?)")
     .bind(crypto.randomUUID(),actor,action,target,outcome).run();
@@ -183,7 +186,12 @@ export async function listUsers(env:AuthEnv, query = "", offset = 0, limit = 100
      FROM "user" u WHERE ?1='' OR instr(lower(u.email),lower(?1))>0 OR instr(lower(u.name),lower(?1))>0
      ORDER BY u.createdAt DESC,u.id LIMIT ?2 OFFSET ?3`
   ).bind(query,limit,offset).all<DirectoryUser>();
-  return rows.results.map(({banExpires,...u}) => ({...u,blocked:userBanned({...u,banExpires})}));
+  return rows.results.map(({banExpires,...u}) => {
+    const blocked = userBanned({...u,banExpires});
+    const administrator = !blocked && !u.deprovisioned && u.emailVerified === 1 && u.role === "admin" &&
+      (u.adminGrant === 1 || isManualAdmin({...u,emailVerified:true},env));
+    return {...u,blocked,administrator};
+  });
 }
 
 function validatedProviderId(value:any):string{
@@ -241,8 +249,8 @@ export async function verifyEnterpriseDomain(auth:any,env:AuthEnv,headers:Header
  * require a verified account, an admin role and an explicit current D1 grant.
  */
 export async function isBootstrapOwner(user:unknown,env:AuthEnv):Promise<boolean>{
+  if(env.NATHAN_BOOTSTRAP_REQUIRED!=="true")return isManualAdmin(user,env);
   if(!isAdminUser(user,env))return false;
-  if(env.NATHAN_BOOTSTRAP_REQUIRED!=="true")return true;
   const u=user as AdminActor;
   const row=await env.DB.prepare(
     "SELECT admin_user_id,admin_email,state FROM nathan_bootstrap_status WHERE id='primary' LIMIT 1"

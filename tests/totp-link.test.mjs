@@ -17,6 +17,13 @@ const { securityPage } = await import(pathToFileURL(bundle).href + "?" + Date.no
 
 const uri = "otpauth://totp/gmacko:owner%40example.com?secret=JBSWY3DPEHPK3PXP&issuer=gmacko&digits=6&period=30";
 
+test("management security renders operator recovery and a fresh sign-in for passkey enrollment before status loads", async () => {
+  const html = await securityPage("owner@example.com", true).text();
+  assert.ok(html.includes("Cloudflare account operator for recovery"));
+  assert.ok(html.includes("Sign in again to add a passkey"));
+  assert.ok(!html.includes("store backup codes") && !html.includes('id="recovery-codes"') && !html.includes("Copy recovery codes"));
+});
+
 test("authenticatorLink passes a TOTP otpauth URI through unchanged", () => {
   assert.equal(authenticatorLink(uri), uri);
 });

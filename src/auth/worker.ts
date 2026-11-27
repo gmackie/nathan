@@ -115,6 +115,7 @@ async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Pr
     const emailHref = emailEnabled(env) ? "/sign-in/email" + (query ? "?" + query : "") : undefined;
     return signInPage(providers, env.ENABLE_PASSWORD === "true", env.ENTERPRISE_SSO === "true",
       { issuer: issuer.host, error: url.searchParams.get("error"), emailHref, managementAccount: env[managementEmail],
+        passkeySetup: Boolean(env[managementEmail]) && !query && url.searchParams.get("setup") === "passkey",
         managementPasswordHref:await passwordGrant(env) ? managementPasswordPath : undefined });
   }
   if (url.pathname === "/consent" && request.method === "GET") {
@@ -126,7 +127,7 @@ async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Pr
   if (url.pathname === "/security" && request.method === "GET") {
     const session=await auth.api.getSession({headers:request.headers});
     if(!session?.user?.id)return Response.redirect(issuer.origin+"/sign-in",302);
-    return securityPage(session.user.email);
+    return securityPage(session.user.email, Boolean(env[managementEmail]));
   }
 
   if(url.pathname==="/security/api/totp-qr" && request.method==="POST"){

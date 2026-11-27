@@ -11,7 +11,7 @@ import { NathanMark } from "../../layouts/AuthLayout.tsx";
 import { renderPage } from "../../render.tsx";
 import { SecurityPanel } from "./SecurityPanel.tsx";
 
-export function SecurityPage({ email }: { email: string }) {
+export function SecurityPage({ email, managementHost = false }: { email: string; managementHost?: boolean }) {
   return (
     <main style={{ maxWidth: 600, margin: "0 auto", padding: "24px 16px 48px", boxSizing: "border-box", display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16 }}>
       <header style={{ display: "grid", gap: 8 }}>
@@ -25,11 +25,11 @@ export function SecurityPage({ email }: { email: string }) {
         <h1 className="nathan-title">Account security</h1>
         <p className="nathan-text">Signed in as <strong>{email}</strong>.</p>
       </header>
-      <Island id="security" component={SecurityPanel} props={{}} />
+      <Island id="security" component={SecurityPanel} props={{ managementHost }} />
     </main>
   );
 }
 
-export function securityPage(userEmail: string): Response {
-  return renderPage(<SecurityPage email={userEmail} />, { title: "Account security", islands: ["security"] });
+export function securityPage(userEmail: string, managementHost = false): Response {
+  return renderPage(<SecurityPage email={userEmail} managementHost={managementHost} />, { title: "Account security", islands: ["security"] });
 }

@@ -35,6 +35,7 @@ export interface HostedPageOptions {
 }
 
 export interface SignInOptions extends HostedPageOptions {
+  passkeySetup?: boolean;
   managementAccount?: string;
   managementPasswordHref?: string;
   /** The ?error= code a refused sign-in returned with (NATH-16/19). */
@@ -152,7 +153,7 @@ export function signInPage(providers: string[], passwordEnabled: boolean, enterp
 
   return renderPage(
     <AuthLayout title="Sign in" issuer={issuer} appearance={appearance}>
-      <div className="nathan-stack" data-nathan-sign-in="">
+      <div className="nathan-stack" data-nathan-sign-in="" data-passkey-setup={opts.passkeySetup ? "" : undefined}>
         <p className="nathan-muted">{opts.managementAccount && passwordEnabled
           ? "Sign in with your management password or an enrolled passkey."
           : "Use your configured identity provider, passkey, or approved enterprise account."}</p>

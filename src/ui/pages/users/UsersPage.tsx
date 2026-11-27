@@ -28,10 +28,10 @@ export function usersPage(users: User[], invites: OpenInvite[], actor: string, q
         <Table.Body>{users.slice(0,directoryPageSize).map(u => <Table.Row key={u.id}>
           <Table.Cell>{u.name || "—"}</Table.Cell><Table.Cell>{u.email}</Table.Cell>
           <Table.Cell>{u.deprovisioned ? "Deprovisioned" : u.blocked ? "Suspended" : u.emailVerified ? "Verified" : "Awaiting verification"}</Table.Cell>
-          <Table.Cell>{u.owner ? "Owner" : u.role === "admin" && u.adminGrant ? "Administrator" : "User"}</Table.Cell>
+          <Table.Cell>{u.owner ? "Owner" : u.administrator ? "Administrator" : "User"}</Table.Cell>
           <Table.Cell>{!u.owner && u.id !== actor && <>
             {Boolean(u.adminGrant) && <Button type="button" size="sm" variant="secondary-destructive" data-operation="revoke-admin" data-id={u.id} data-email={u.email} disabled>Revoke admin</Button>}
-            {Boolean(u.emailVerified && !u.blocked && !u.deprovisioned && (!u.adminGrant || u.role !== "admin")) &&
+            {Boolean(u.emailVerified && !u.blocked && !u.deprovisioned && !u.administrator) &&
               <Button type="button" size="sm" variant="secondary" data-operation="grant" data-id={u.id} data-email={u.email} disabled>Grant admin</Button>}
           </>}</Table.Cell>
         </Table.Row>)}</Table.Body>

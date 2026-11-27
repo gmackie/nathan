@@ -32,11 +32,11 @@ import type { ComponentType } from "react";
 import { authenticatorLink } from "../../../auth/totp-link.mjs";
 import { ICON_SIZE, ICON_WEIGHT, iconA11y } from "../../icon-defaults.ts";
 import {
-  addPasskey, bootstrapStatus, completeBootstrap, enableTotp, listPasskeys, passkeyStepUp, qrPath, totpQr, totpSecret,
+  addPasskey, api, bootstrapStatus, completeBootstrap, enableTotp, listPasskeys, passkeyStepUp, qrPath, totpQr, totpSecret,
   verifyTotp, type BootstrapStatus, type PasskeySummary, type QrMatrix
 } from "./security-client.ts";
 
-export type SecurityPanelProps = Record<string, never>;
+export type SecurityPanelProps = { managementHost?: boolean };
 
 type Tone = "info" | "success" | "error";
 interface Message { tone: Tone; text: string; lines?: string[] }
@@ -112,7 +112,7 @@ function QrCode({ matrix }: { matrix: QrMatrix }) {
   );
 }
 
-export function SecurityPanel(_props: SecurityPanelProps) {
+export function SecurityPanel({ managementHost = false }: SecurityPanelProps) {
   const [hydrated, setHydrated] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -186,7 +186,7 @@ export function SecurityPanel(_props: SecurityPanelProps) {
       const uri = String(result.totpURI || "");
       setTotpUri(uri);
       setQr(null);
-      setRecoveryCodes(Array.isArray(result.backupCodes) ? result.backupCodes.map(String) : []);
+      if (!managementHost) setRecoveryCodes(Array.isArray(result.backupCodes) ? result.backupCodes.map(String) : []);
       setTotpMessage({ tone: "info", text: "Enter the 6-digit code to verify enrollment." });
       setQr((await totpQr(uri)) ?? "unavailable");
     } catch (e) { setTotpMessage({ tone: "error", text: errorText(e) }); }
@@ -226,6 +226,13 @@ export function SecurityPanel(_props: SecurityPanelProps) {
     } catch (e) { setPasskeyMessage({ tone: "error", text: errorText(e) }); }
   });
 
+  const signInForPasskey = run("passkey-sign-in", async () => {
+    try {
+      await api("/sign-out", "POST", {});
+      location.assign("/sign-in?setup=passkey");
+    } catch (e) { setPasskeyMessage({ tone: "error", text: errorText(e) }); }
+  });
+
   return (
     <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16 }}>
       <Section id="admin-setup" title={admin?.state === "complete" ? "Administrator access" : "Administrator setup"}
@@ -256,7 +263,7 @@ export function SecurityPanel(_props: SecurityPanelProps) {
       </Section>
 
       <Section id="totp" title="Authenticator application (TOTP)" icon={DeviceMobile}>
-        {admin?.managementHost ? <p style={S.muted}>
+        {managementHost ? <p style={S.muted}>
           Use an authenticator app for six-digit codes. If you lose your only Studio authenticator, contact your Cloudflare account operator for recovery.
         </p> : <p style={S.muted}>
           Enroll and confirm an authenticator app, then store backup codes offline. Nathan only asserts MFA assurance after an actual
@@ -303,7 +310,7 @@ export function SecurityPanel(_props: SecurityPanelProps) {
             <code id="totp-secret" style={S.mono}>{grouped}</code>
           </div>
 
-          <div id="totp-setup" style={{ display: recoveryCodes && !admin?.managementHost ? "grid" : "none", gap: 8 }}>
+          {!managementHost && <div id="totp-setup" style={{ display: recoveryCodes ? "grid" : "none", gap: 8 }}>
             <Banner variant="alert" icon={icon(Key)} title="Recovery codes"
               description="Shown once. Copy them to a secure offline manager now; each code works one time." />
             {recoveryCodes && recoveryCodes.length ? (
@@ -315,7 +322,7 @@ export function SecurityPanel(_props: SecurityPanelProps) {
                 </div>
               </>
             ) : null}
-          </div>
+          </div>}
         </div>
 
         <TextField id="totp-code" label="Six-digit code">
@@ -330,6 +337,10 @@ export function SecurityPanel(_props: SecurityPanelProps) {
 
       <Section id="passkeys-section" title="Passkeys" icon={Fingerprint}>
         <p style={S.muted}>Use a platform authenticator or hardware security key. Passkeys may be used as a login method.</p>
+        {managementHost && <>
+          <p style={S.muted}>If your last sign-in was over 24 hours ago, sign in again. You’ll return here to add your passkey.</p>
+          <Button variant="secondary" disabled={disabled("passkey-sign-in")} onClick={signInForPasskey}>Sign in again to add a passkey</Button>
+        </>}
         <div style={S.actions}>
           <Button id="passkey-add" variant="primary" icon={icon(Fingerprint)} disabled={disabled("passkey-add")}
             onClick={enrol("passkey-add", "", "Passkey")}>Add passkey</Button>

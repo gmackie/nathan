@@ -41,6 +41,33 @@ test("upgrading pins a unique original owner invitation and leaves replacement h
   }
 });
 
+test("upgrading keeps enrolled authenticators and lets unfinished duplicate enrollments start again", () => {
+  const db = database("0026");
+  const user = db.prepare("INSERT INTO user(id,name,email,emailVerified,twoFactorEnabled,createdAt,updatedAt) VALUES (?1,'',?1||'@example.test',1,?2,0,0)");
+  const factor = db.prepare("INSERT INTO twoFactor(id,userId,secret,backupCodes,verified) VALUES (?1,?2,'fixture','fixture',?3)");
+  for (const [id, enabled, factors] of [
+    ["legacy",1,[null]], ["mixed",1,[0,null]], ["pending",0,[null]],
+    ["restart",0,[0,0]], ["ambiguous",1,[null,null]], ["enrolled",1,[1,0]], ["inconsistent",1,[0,0]]
+  ]) {
+    user.run(id, enabled);
+    factors.forEach((verified, i) => factor.run(id + i, id, verified));
+  }
+  db.exec(readFileSync(new URL("../migrations/0027_management_totp.sql", import.meta.url), "utf8"));
+  const states = id => db.prepare("SELECT verified FROM twoFactor WHERE userId=? ORDER BY id").all(id).map(f => f.verified);
+  assert.deepEqual(states("legacy"), [1]);
+  assert.deepEqual(states("mixed"), [1]);
+  assert.deepEqual(states("pending"), [null]);
+  assert.deepEqual(states("restart"), []);
+  assert.deepEqual(states("enrolled"), [1]);
+  assert.deepEqual(states("ambiguous"), [null,null]);
+  assert.deepEqual(states("inconsistent"), [0,0]);
+  factor.run("new", "restart", 0);
+  assert.throws(() => factor.run("duplicate", "restart", 0));
+  assert.throws(() => db.exec("UPDATE twoFactor SET verified=0,secret='replacement' WHERE id='legacy0'"));
+  assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
+  db.close();
+});
+
 for (const stage of ["staging", "production"]) {
   test("install seeds only the dedicated " + stage + " issuer and preserves management enrollment", async () => {
     const spec = await readStage(stage);

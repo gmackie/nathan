@@ -35,7 +35,8 @@ function init(root: HTMLElement) {
   const oauthQuery = signedOAuthQuery(location.search);
   const withOAuth = (b: Json): Json => (oauthQuery ? { ...b, oauth_query: oauthQuery } : b);
   // After a sign-in, follow the resumed authorization when Better Auth returns one.
-  const land = (d: Json | null | undefined) => location.assign(d && typeof d.url === "string" && d.url ? d.url : "/");
+  const landingPage = root.hasAttribute("data-passkey-setup") ? "/security?setup=admin#passkeys-section" : "/";
+  const land = (d: Json | null | undefined) => location.assign(d && typeof d.url === "string" && d.url ? d.url : landingPage);
   const unwrap = (x: Json) => (x && x.data) || x;
 
   async function request(path: string, payload: Json): Promise<Json> {
@@ -63,7 +64,7 @@ function init(root: HTMLElement) {
   for (const button of Array.from(root.querySelectorAll<HTMLButtonElement>("button[data-provider]"))) {
     button.addEventListener("click", () => {
       (async () => {
-        const d = await request("/sign-in/social", withOAuth({ provider: button.dataset.provider, callbackURL: "/", errorCallbackURL: "/sign-in" }));
+        const d = await request("/sign-in/social", withOAuth({ provider: button.dataset.provider, callbackURL: landingPage, errorCallbackURL: "/sign-in" }));
         if (!d.url) throw Error("No OAuth redirect URL");
         location.assign(d.url);
       })().catch(fail);

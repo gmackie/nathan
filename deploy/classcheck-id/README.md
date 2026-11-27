@@ -57,6 +57,8 @@ The ClassCheck web Worker serves end-user pages and calls its own stage’s name
 
 Both stage configs select `NATHAN_MANAGEMENT_AUTHENTICATORS=passkey-or-totp`. Apply identity migration `0027_management_totp.sql` before enabling this Worker. An existing Studio policy requiring both factors or a recent passkey continues to apply.
 
+The migration preserves an enabled account’s sole legacy authenticator. Someone with duplicate unfinished setups can start enrollment again. If multiple possibly active secrets remain, Studio asks the person to contact the Cloudflare account operator. The operator verifies the account and uses the audited recovery procedure before re-enrollment. [Administrator recovery](../../docs/setup-lifecycle.md#authentication-policy)
+
 ## Release and rollback
 
 Use the **classcheck-id** ForgeGraph target for subsequent Nathan releases. Verify the app binding and API audience for the stage. Preserve host-only cookie settings and the prior ClassCheck web and Nathan Worker versions. Roll back a Worker version while retaining its D1 and expand-only application data. The one-time bootstrap leaves completed ownership, revoked invitations, disabled clients and all later grants intact on re-execution.
