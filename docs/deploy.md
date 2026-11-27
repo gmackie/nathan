@@ -83,7 +83,7 @@ Create an ordinary verified account through the configured IdP, then promote it 
 
 ### ForgeGraph installations
 
-Use the configuration for the target stage and specify the identifier written by its deployment seed. For example, to claim the staging installation, run:
+Apply migration `0030_operator_owner_claim.sql` using the normal deployment workflow. Use the configuration for the target stage and specify the identifier written by its deployment seed. This example claims the staging installation.
 
 ```sh
 node scripts/nathan.mjs admin promote nathan.staging.config.json --seed forgegraph:nathan:staging --apply

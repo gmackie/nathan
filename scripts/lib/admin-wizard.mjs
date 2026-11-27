@@ -15,37 +15,12 @@ function deploymentSeed(accountId, forgegraphSeed) {
   return forgegraphSeed ?? "cli:" + accountId;
 }
 
-// The same identity and ownership predicates guard both writes and the final read.
+// The database trigger validates ownership and applies the grant and audit as one SQL statement.
 export async function promoteBootstrapOwner(api, dbId, accountId, email, userId, forgegraphSeed) {
   const seed = deploymentSeed(accountId, forgegraphSeed);
-  const actor = forgegraphSeed ? "operator:" + forgegraphSeed : seed;
-  const params = [userId, email, seed];
-  const eligible = `SELECT u.id
-    FROM "user" u JOIN nathan_bootstrap_status b ON b.id = 'primary'
-    WHERE u.id = ? AND lower(u.email) = ? AND b.cloudflare_user_id = ?
-      AND b.admin_email = lower(u.email) AND u.emailVerified = 1 AND coalesce(u.banned, 0) = 0
-      AND (b.admin_user_id IS NULL OR b.admin_user_id = u.id)
-      AND b.state IN ('pending', 'identity_verified', 'authenticators_enrolled', 'complete')
-      AND (SELECT count(*) FROM "user" other WHERE lower(other.email) = lower(u.email)) = 1`;
-  const bound = eligible + " AND b.admin_user_id = u.id AND b.state <> 'pending'";
-  const statements = [
-    {sql: `INSERT INTO nathan_security_audit (id,actor,action,target,outcome)
-      SELECT ?, ?, 'admin_bootstrap', ?, 'succeeded'
-      WHERE EXISTS (${eligible} AND (u.role IS NOT 'admin' OR b.admin_user_id IS NULL OR b.state = 'pending'))`,
-      params: [crypto.randomUUID(), actor, userId, ...params]},
-    {sql: `UPDATE nathan_bootstrap_status SET admin_user_id = ?,
-      state = CASE WHEN state = 'pending' THEN 'identity_verified' ELSE state END,
-      updated_at = unixepoch()
-      WHERE id = 'primary' AND (admin_user_id IS NULL OR state = 'pending') AND EXISTS (${eligible})`,
-      params: [userId, ...params]},
-    {sql: `UPDATE "user" SET role = 'admin' WHERE id IN (${bound}) AND role IS NOT 'admin'`, params},
-    {sql: bound + " AND u.role = 'admin'", params}
-  ];
-  const results = await api.batchDatabase(dbId, statements);
-  const verified = results.at(-1);
-  if (verified.length !== 1 || verified[0].id !== userId) {
-    throw Error("The verified account and selected seed must match the installation's bootstrap owner");
-  }
+  await api.queryDatabase(dbId,
+    "INSERT INTO nathan_operator_owner_claim(user_id, email, seed, audit_id) VALUES (?, ?, ?, ?)",
+    [userId, email, seed, crypto.randomUUID()]);
 }
 
 export async function adminCommand(args, file, apply) {
@@ -72,7 +47,7 @@ export async function adminCommand(args, file, apply) {
   if (rows.length !== 1 || rows[0].emailVerified !== 1) {
     throw Error("The verified user was not found. Complete an upstream OAuth sign-in and email verification first.");
   }
-  if (!(await yesNo("Bind " + email + " as owner of " + cfg.database.name + " (" + seed + ")?", false))) throw Error("Cancelled");
+  if (!(await yesNo("Bind " + email + " as owner of " + cfg.database.name + " (" + seed + ")?"))) throw Error("Cancelled");
   await promoteBootstrapOwner(api, dbId, cfg.accountId, email, rows[0].id, forgegraphSeed);
   console.log("Verified administrator bound. Complete authenticator enrollment at /security.");
 }

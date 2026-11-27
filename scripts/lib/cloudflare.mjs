@@ -109,16 +109,6 @@ export class CloudflareClient {
       throw Error("Cloudflare D1 query failed");
     return result.flatMap(r => Array.isArray(r.results) ? r.results : []);
   }
-  async batchDatabase(id, statements) {
-    if (!/^[a-f0-9-]{36}$/.test(id) || !statements.length) throw Error("Invalid D1 batch");
-    const result = await this.request("/accounts/" + this.accountId + "/d1/database/" + id + "/query",
-      { method: "POST", body: { batch: statements } });
-    if (!Array.isArray(result) || result.length !== statements.length ||
-        result.some(row => row.success !== true || !Array.isArray(row.results))) {
-      throw Error("Cloudflare D1 batch failed");
-    }
-    return result.map(row => row.results);
-  }
   /** Names (never values) of the secrets bound to a Worker script. */
   async workerSecretNames(workerName) {
     if (!/^[a-z0-9-]{1,63}$/.test(workerName)) throw Error("Invalid Worker name");
