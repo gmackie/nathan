@@ -12,9 +12,10 @@ export class CloudflareClient {
       method: options.method || "GET",
       headers,
       body: options.body ? JSON.stringify(options.body) : undefined,
-      redirect: "error",
+      redirect: "manual",
       signal: AbortSignal.timeout(12000)
     });
+    if (response.status >= 300 && response.status < 400) throw Error("Cloudflare API redirect refused");
     const json = await response.json();
     if (!response.ok || json.success === false) {
       const code = json.errors?.map(e => e.code + ": " + e.message).join("; ") || String(response.status);

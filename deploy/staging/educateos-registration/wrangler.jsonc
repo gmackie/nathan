@@ -1,0 +1,19 @@
+{
+  "name": "nathan-stg-educateos-registration",
+  "main": "worker.mjs",
+  "account_id": "c07a7e704db1808e1fff91bed2b1cd49",
+  "compatibility_date": "2026-10-27",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "keep_vars": true,
+  "browser": { "binding": "BROWSER" },
+  "workflows": [
+    {
+      "name": "nathan-stg-educateos-registration",
+      "binding": "REGISTRATION",
+      "class_name": "EducateOSRegistration",
+      "concurrency": { "limit": 1 }
+    }
+  ]
+}

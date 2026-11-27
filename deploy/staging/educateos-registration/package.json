@@ -1,0 +1,9 @@
+{
+  "name": "nathan-stg-educateos-registration",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@cloudflare/puppeteer": "1.4.0"
+  }
+}

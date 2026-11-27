@@ -99,15 +99,25 @@ export async function planGrantCreate(db, body, actor) {
   if (await count(db, "SELECT count(*) AS n FROM nathan_rbac_grants WHERE app_id=? AND role_key=? AND principal_type=? AND principal_id=?",
     [app, body.role, principalType, principalId]))
     return { action: "rbac_grant_create", target, result: { app, role: body.role, principalType, principalId, created: false, note: "Already granted" } };
+  return newRoleGrant(app, body.role, principalType, principalId, actor);
+}
+
+/**
+ * Statements for an already validated principal and role, including the directory change.
+ * @param {string} app @param {string} role @param {"user"|"group"} principalType
+ * @param {string} principalId @param {string} actor @returns {AdminPlan}
+ */
+export function newRoleGrant(app, role, principalType, principalId, actor) {
+  const target = app + ":" + role + ":" + principalType + ":" + principalId;
   const id = crypto.randomUUID();
   return {
     action: "rbac_grant_create", target,
     statements: [{
       sql: "INSERT INTO nathan_rbac_grants(id,app_id,role_key,principal_type,principal_id,created_by) VALUES (?,?,?,?,?,?)",
-      params: [id, app, body.role, principalType, principalId, actor]
+      params: [id, app, role, principalType, principalId, actor]
     }],
-    change: { kind: "grant.created", appId: app, principalType, principalId, detail: { role: body.role } },
-    result: { id, app, role: body.role, principalType, principalId, created: true }
+    change: { kind: "grant.created", appId: app, principalType, principalId, detail: { role } },
+    result: { id, app, role, principalType, principalId, created: true }
   };
 }
 
@@ -133,7 +143,14 @@ export async function planAppStatus(db, body) {
   if (typeof body.id !== "string" || !isAppId(body.id)) throw Error("Invalid application id");
   if (typeof body.enabled !== "boolean" || body.confirm !== appStatusConfirmation(body.id, body.enabled)) throw Error("Explicit confirmation required");
   if (!await first(db, "SELECT id FROM nathan_applications WHERE id=?", [body.id])) throw Error("Unknown application");
-  const id = body.id, enabled = body.enabled;
+  return applicationStatusChange(body.id, body.enabled);
+}
+
+/**
+ * Statements for a confirmed change to an existing application or one created in the same batch.
+ * @param {string} id @param {boolean} enabled @returns {AdminPlan}
+ */
+export function applicationStatusChange(id, enabled) {
   return {
     action: enabled ? "application_enable" : "application_disable", target: id,
     statements: [{ sql: "UPDATE nathan_applications SET enabled=?,updated_at=unixepoch() WHERE id=?", params: [enabled ? 1 : 0, id] }],
@@ -157,7 +174,8 @@ export const mcpStatusConfirmation = (identifier, enabled) => "CONFIRM " + (enab
  * @param {AdminReader} db @param {any} body `{ identifier, app, name, full?, aliases?, scopes? }`
  * @param {string} issuerOrigin e.g. https://login.example.com @param {string} actor
  * @param {{ permissionKeys: string[] }} [assume] plan-only: validate against these permission keys of an app not
- *   registered yet (an app manifest that registers it first). Never used to commit.
+ *   registered yet. Before commit, replan against the live app or guard creation of that exact
+ *   app and permission set and the absence of audience collisions in the same transaction.
  * @returns {Promise<AdminPlan>}
  */
 export async function planMcpRegister(db, body, issuerOrigin, actor, assume) {
