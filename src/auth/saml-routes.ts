@@ -4,7 +4,7 @@
  * Identity Studio admin API. Kept out of worker.ts so it stays a small,
  * additive routing change.
  */
-import type { AuthEnv } from "./env";
+import { browserOrigin, type AuthEnv } from "./env";
 import { audit, isAdminPrincipal } from "./admin-service";
 import { mayAdminister } from "./bootstrap";
 import { samlProviderFromPath, samlConnectionUsable, resolveSsoConnection, inspectSamlMessage, formDataMatches } from "./saml-policy.mjs";
@@ -108,7 +108,7 @@ export const SAML_ADMIN_REFUSAL="SAML change rejected. Check the metadata, confi
 
 /** Nathan-owned SAML routes outside /api/auth. Returns null when not matched. */
 export async function handleSamlRoutes(request:Request,env:AuthEnv,auth:any,url:URL):Promise<Response|null>{
-  const issuer=new URL(env.NATHAN_ISSUER);
+  const issuer=new URL(browserOrigin(env));
   if(url.pathname==="/sign-in/sso/start"&&request.method==="POST"){
     if(env.ENTERPRISE_SSO!=="true")return reject(404,"Enterprise sign-in is not enabled");
     if(request.headers.get("Origin")!==issuer.origin||request.headers.get("Sec-Fetch-Site")==="cross-site")

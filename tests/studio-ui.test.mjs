@@ -44,7 +44,7 @@ function studioSources() {
 // ---- The shell under renderPage ------------------------------------------------------------------
 
 test("the Studio shell renders under renderPage: one island with SRI, nonce'd scripts and styles, no style=", async () => {
-  const response = ui.studioPage("admin@example.com");
+  const response = ui.studioPage("admin@example.com", "https://id.example.com");
   const html = await response.text();
   const nonce = nonceOf(response);
   assert.equal(response.status, 200);
@@ -77,10 +77,10 @@ test("the Studio shell renders under renderPage: one island with SRI, nonce'd sc
   const css = all.find(t => t.name === "link" && t.attrs.rel === "stylesheet");
   assert.deepEqual([css.attrs.href, css.attrs.integrity], [ui.UI_MANIFEST.css.src, ui.UI_MANIFEST.css.integrity]);
 
-  // The island container carries only the administrator's email.
+  // Only display data enters the island.
   const container = all.filter(t => t.attrs["data-nathan-island"] === "studio");
   assert.equal(container.length, 1);
-  assert.deepEqual(JSON.parse(container[0].attrs["data-props"]), { email: "admin@example.com" });
+  assert.deepEqual(JSON.parse(container[0].attrs["data-props"]), { email: "admin@example.com", issuerOrigin: "https://id.example.com" });
   // Server-rendered navigation for every panel, with real links.
   for (const group of ui.STUDIO_NAV) for (const p of group.panels) assert.ok(html.includes('href="#/' + p.id + '"'), "nav link for " + p.id);
   assert.match(html, /Overview/);
@@ -88,10 +88,10 @@ test("the Studio shell renders under renderPage: one island with SRI, nonce'd sc
 
 test("the administrator's email is escaped in the markup and in the island props", async () => {
   const hostile = "a\"<script>alert(1)</script>@example.com";
-  const html = await ui.studioPage(hostile).text();
+  const html = await ui.studioPage(hostile, "https://id.example.com").text();
   assert.doesNotMatch(html, /<script>alert/);
   const container = tags(html).find(t => t.attrs["data-nathan-island"] === "studio");
-  assert.deepEqual(JSON.parse(container.attrs["data-props"]), { email: hostile });
+  assert.deepEqual(JSON.parse(container.attrs["data-props"]), { email: hostile, issuerOrigin: "https://id.example.com" });
 });
 
 test("hash routing follows only known panels", () => {
@@ -217,7 +217,7 @@ test("/studio stays admin-only in the Worker and the legacy string-built Studio 
   assert.match(route, /if \(!await isAdmin\(session, env\)\) \{/);
   assert.match(route, /return reject\(403, "Admin session required"\);/);
   assert.match(route, /if \(!await mayAdminister\(env,session!\.user\.id,session!\.session\.id\)\) return Response\.redirect\(issuer\.origin\+"\/security\?setup=admin",302\);/);
-  assert.match(route, /return studioPage\(session!\.user\.email\);/);
+  assert.match(route, /return studioPage\(session!\.user\.email, new URL\(env\.NATHAN_ISSUER\)\.origin\);/);
   assert.match(worker, /import \{ studioPage \} from "\.\.\/ui\/pages\/studio\/StudioPage\.tsx";/);
   for (const gone of ["src/auth/ui.ts", "src/auth/mcp-ui.ts", "src/auth/saml-idp-ui.mjs", "src/auth/rbac-ui.ts", "src/auth/tokens-ui.ts", "src/auth/scim-ui.ts", "src/auth/saml-ui.mjs", "src/auth/admission-ui.ts"])
     assert.equal(existsSync(gone), false, gone + " (string-built Studio section) is removed");

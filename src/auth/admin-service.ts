@@ -1,6 +1,6 @@
 import { resolveAppearance } from "../ui/appearance.ts";
 import { isReverseDomainPrivateUseRedirectUri } from "@better-auth/core/utils/redirect-uri";
-import { allowsAdminTotp, type AuthEnv } from "./env.ts";
+import { allowsAdminTotp, managementEmail, type AuthEnv } from "./env.ts";
 
 export type AdminActor = { id:string; email:string; role:"admin"; emailVerified:true };
 export function isAdminUser(user: unknown, env:AuthEnv): user is AdminActor {
@@ -247,6 +247,7 @@ export async function isAdminPrincipal(user:unknown,env:AuthEnv):Promise<boolean
   const u=user as Record<string,unknown>;
   if(u.emailVerified!==true||u.role!=="admin" ||
      typeof u.id!=="string"||typeof u.email!=="string")return false;
+  if (env[managementEmail] && u.email.trim().toLowerCase() !== env[managementEmail]) return false;
   if(await isBootstrapOwner(u,env)){
     const b=await env.DB.prepare(
       "SELECT state FROM nathan_bootstrap_status WHERE id='primary' LIMIT 1"

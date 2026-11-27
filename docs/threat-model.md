@@ -10,6 +10,10 @@ Nathan is an identity provider. An attacker who compromises its signing keys, OA
 
 **Attackers:** unauthenticated Internet clients, malicious registered OAuth clients, compromised end-user sessions, tenants attempting cross-tenant impersonation, compromised OAuth providers, malicious npm plugins, insider admins and attackers with Cloudflare deploy permissions.
 
+### Shared Studio hostname
+
+The public issuer and the administrator hostname share a Worker and database. The public host refuses the Studio namespace. The administrator host checks the exact Cloudflare application assertion, local email allowlist and current custodian status before opening any management cookie. Nathan checks its session and factor policy for privileged calls. A separate Access policy controls external MFA. Access application or IdP policy changes therefore require an administrator sign-in rehearsal. The public issuer remains the audience and source of metadata for relying applications.
+
 ## Threat register
 
 | ID | Threat | Required defense | Current state |

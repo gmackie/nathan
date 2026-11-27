@@ -22,6 +22,8 @@ export interface AuthEnv {
   NATHAN_ISSUER: string;
   /** Dedicated installation. NATHAN_ISSUER is the management origin; the named app binding serves NATHAN_APP_ORIGIN. */
   NATHAN_APP_ORIGIN?: string;
+  /** Shared issuer's optional Access-protected Studio origin, https://admin.<issuer host>. */
+  NATHAN_ADMIN_ORIGIN?: string;
   NATHAN_ACCESS_TEAM_DOMAIN?: string;
   NATHAN_ACCESS_AUD?: string;
   /** NATH-43: what users see this identity provider called (TOTP issuer, appName, passkey name); default "Nathan". */
@@ -56,6 +58,12 @@ export interface AuthEnv {
   RESEND_API_KEY?: string;
   EMAIL_FROM?: string;
   NATHAN_PAIRWISE_SECRET?: string;
+}
+
+/** Browser redirects and same-origin checks use the verified entrypoint. Protocol audiences
+ * and downstream application configuration always use NATHAN_ISSUER. */
+export function browserOrigin(env: AuthEnv): string {
+  return new URL(env[managementEmail] && env.NATHAN_ADMIN_ORIGIN ? env.NATHAN_ADMIN_ORIGIN : env.NATHAN_ISSUER).origin;
 }
 
 /** Shared issuers allow self-service enrollment before an administrator grant. */

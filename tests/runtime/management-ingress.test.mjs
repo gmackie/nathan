@@ -196,3 +196,71 @@ test("incomplete standalone setup fails closed; an existing hosted deployment ke
   try { assert.equal((await legacy.dispatchFetch(origin + "/sign-in")).status, 200); }
   finally { await legacy.dispose(); }
 });
+
+test("a shared issuer keeps public OIDC on the login host and admits Studio operators on its Access host", async () => {
+  const adminOrigin = "https://admin." + host;
+  const worker = await authWorker(host, {
+    NATHAN_ADMIN_ORIGIN: adminOrigin, NATHAN_ACCESS_TEAM_DOMAIN: team, NATHAN_ACCESS_AUD: audience,
+    BETTER_AUTH_SECRET: secret, NATHAN_SECURITY_PROFILE: "standard", NATHAN_ADMIN_STEPUP_METHOD: "passkey-or-totp"
+  }, { outboundService(request) {
+    assert.equal(request.url, "https://" + team + "/cdn-cgi/access/certs");
+    return Response.json({ keys: [jwk] });
+  } });
+  try {
+    const database = await worker.getD1Database("DB");
+    const local = await enrollAdmin(database, secret);
+    const key = softwarePasskey();
+    await database.prepare("UPDATE passkey SET publicKey=?, credentialID=? WHERE userId=?")
+      .bind(key.publicKey, key.credentialId, "admin-1").run();
+    const fetcher = { dispatchFetch(url, init) {
+      return worker.dispatchFetch(url, { ...init, headers: { ...init?.headers, ...assertion(ownerJwt) } });
+    } };
+    const discoveryPath = "/api/auth/.well-known/openid-configuration";
+    const discovery = await worker.dispatchFetch(origin + discoveryPath);
+    assert.equal(discovery.status, 200);
+    assert.equal((await discovery.json()).issuer, origin + "/api/auth");
+    assert.equal((await worker.dispatchFetch(origin + "/sign-in")).status, 200);
+    for (const path of ["/studio", "/studio/api/clients", "/studio/api/v1/status"]) {
+      assert.equal((await fetcher.dispatchFetch(origin + path, { headers: { Cookie: local.cookie } })).status, 403);
+      assert.equal((await worker.dispatchFetch(adminOrigin + path)).status, 403);
+    }
+    assert.equal((await fetcher.dispatchFetch(adminOrigin + discoveryPath)).status, 404);
+    assert.equal((await fetcher.dispatchFetch("https://preview.example.test/studio")).status, 421);
+    for (const claims of [{ iss: "https://other.cloudflareaccess.com" }, { aud: "another-app" }, { exp: 1 }]) {
+      const headers = assertion(await accessJwt(claims));
+      assert.equal((await worker.dispatchFetch(adminOrigin + "/studio", { headers })).status, 403);
+    }
+    const api = adminOrigin + "/studio/api/v1";
+    assert.equal((await fetcher.dispatchFetch(api + "/status", { headers: { Cookie: local.cookie } })).status, 401);
+    const options = await fetcher.dispatchFetch(adminOrigin + "/api/auth/passkey/generate-authenticate-options");
+    assert.equal((await options.json()).rpId, host);
+    const session = await passkeySignIn(fetcher, adminOrigin, key, "admin-1");
+    const headers = { Cookie: session.cookie };
+    assert.equal((await fetcher.dispatchFetch(adminOrigin + "/studio", { headers })).status, 200);
+    const status = await fetcher.dispatchFetch(api + "/status", { headers });
+    assert.equal(status.status, 200);
+    assert.equal((await status.json()).data.issuer, origin + "/api/auth");
+    const register = from => fetcher.dispatchFetch(api + "/clients", {
+      method: "POST", headers: { ...headers, Origin: from, "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "native", publicClient: true, name: "Shared Studio check", redirectUri: "io.example.check:/oauth" })
+    });
+    assert.equal((await register(origin)).status, 403);
+    const result = await register(adminOrigin);
+    assert.equal(result.status, 200);
+    assert.ok((await result.json()).data.client_id);
+    await operator(database, "another-admin", "peer@example.test");
+    await database.prepare("INSERT INTO nathan_admin_grants(user_id,email,granted_by) VALUES ('another-admin','peer@example.test','admin-1')").run();
+    assert.equal((await worker.dispatchFetch(adminOrigin + "/healthz", { headers: assertion(await accessJwt({ email: "peer@example.test" })) })).status, 403);
+    await database.prepare("UPDATE user SET banned=1 WHERE id='admin-1'").run();
+    assert.equal((await fetcher.dispatchFetch(api + "/status", { headers })).status, 403);
+  } finally { await worker.dispose(); }
+});
+
+test("incomplete shared Access settings keep Studio closed and public discovery available", async () => {
+  const worker = await authWorker(host, { NATHAN_ADMIN_ORIGIN: "https://admin." + host });
+  try {
+    assert.equal((await worker.dispatchFetch(origin + "/studio")).status, 403);
+    assert.equal((await worker.dispatchFetch("https://admin." + host + "/studio")).status, 503);
+    assert.equal((await worker.dispatchFetch(origin + "/api/auth/.well-known/openid-configuration")).status, 200);
+  } finally { await worker.dispose(); }
+});

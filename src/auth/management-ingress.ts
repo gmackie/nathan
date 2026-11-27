@@ -21,13 +21,17 @@ function exactHttpsOrigin(value?: string): string | null {
   } catch { return null; }
 }
 
+function accessConfigured(env: AuthEnv) {
+  return teamDomain.test(env.NATHAN_ACCESS_TEAM_DOMAIN ?? "") && /^[a-f0-9]{64}$/.test(env.NATHAN_ACCESS_AUD ?? "") &&
+    /^[A-Za-z0-9_-]{43}$/.test(env.NATHAN_CONFIG_KEY ?? "") && env.NATHAN_BOOTSTRAP_REQUIRED === "true" &&
+    env.NATHAN_ADMIN_STEPUP_REQUIRED === "true";
+}
+
 /** Both entrypoints validate the same standalone configuration before serving either origin. */
 export function standaloneOrigins(env: AuthEnv) {
   const management = exactHttpsOrigin(env.NATHAN_ISSUER);
   const app = exactHttpsOrigin(env.NATHAN_APP_ORIGIN);
-  if (!management || !app || management === app || !isAppId(env.NATHAN_APP_ID) || !teamDomain.test(env.NATHAN_ACCESS_TEAM_DOMAIN ?? "") ||
-      !/^[a-f0-9]{64}$/.test(env.NATHAN_ACCESS_AUD ?? "") || !/^[A-Za-z0-9_-]{43}$/.test(env.NATHAN_CONFIG_KEY ?? "") ||
-      env.NATHAN_BOOTSTRAP_REQUIRED !== "true" || env.NATHAN_ADMIN_STEPUP_REQUIRED !== "true") return null;
+  if (!management || !app || management === app || !isAppId(env.NATHAN_APP_ID) || env.NATHAN_ADMIN_ORIGIN !== undefined || !accessConfigured(env)) return null;
   return { management, app };
 }
 
@@ -45,7 +49,7 @@ async function accessIdentity(request: Request, env: AuthEnv) {
     });
     const email = normalizeEmail(payload.email);
     if (payload.type !== "app" || !email || typeof payload.sub !== "string" || !payload.sub || payload.sub.length > 256) return null;
-    return { email, binding: JSON.stringify([env.NATHAN_ISSUER, issuer, env.NATHAN_ACCESS_AUD, payload.sub, email]) };
+    return { email, binding: JSON.stringify([env.NATHAN_ADMIN_ORIGIN ?? env.NATHAN_ISSUER, issuer, env.NATHAN_ACCESS_AUD, payload.sub, email]) };
   } catch { return null; }
 }
 
@@ -58,10 +62,10 @@ async function currentCustodian(env: AuthEnv, email: string) {
     "WHERE b.id='primary' " +
     'AND (SELECT COUNT(*) FROM "user" WHERE email=?1 COLLATE NOCASE)<=1 ' +
     "AND NOT EXISTS(SELECT 1 FROM nathan_scim_users d WHERE d.user_id=u.id AND d.link_state='deprovisioned' AND d.override_cause IS NULL) " +
-    "AND ((b.state='pending' AND b.admin_user_id IS NULL AND b.admin_email=?1 AND ?2=1) " +
+    "AND ((b.state='pending' AND ?3=1 AND b.admin_user_id IS NULL AND b.admin_email=?1 AND ?2=1) " +
     "OR (u.emailVerified=1 AND u.role='admin' AND ((b.state<>'pending' AND b.admin_user_id=u.id AND b.admin_email=?1 AND ?2=1) " +
     "OR (b.state='complete' AND EXISTS(SELECT 1 FROM nathan_admin_grants g WHERE g.user_id=u.id AND g.email=?1 AND g.enabled=1)))))"
-  ).bind(email, Number(Boolean(allowlistedOwner))).first();
+  ).bind(email, Number(Boolean(allowlistedOwner)), Number(env.NATHAN_ADMIN_ORIGIN === undefined)).first();
   return !userBanned(result);
 }
 
@@ -126,16 +130,32 @@ async function sealManagementResponse(response: Response, principal: string, key
 }
 
 export async function managementIngress(request: Request, env: AuthEnv, ctx: ExecutionContext, handle: Handler) {
-  if (env.NATHAN_APP_ID === undefined && env.NATHAN_APP_ORIGIN === undefined &&
-      env.NATHAN_ACCESS_TEAM_DOMAIN === undefined && env.NATHAN_ACCESS_AUD === undefined) {
-    return handle(request, env, ctx);
-  }
-  const origins = standaloneOrigins(env);
-  if (!origins) return denied(503, "Management configuration incomplete");
   const url = new URL(request.url);
-  if (url.origin !== origins.management) return denied(421, "Misdirected request");
+  const shared = env.NATHAN_ADMIN_ORIGIN !== undefined;
+  if (shared) {
+    const issuer = exactHttpsOrigin(env.NATHAN_ISSUER);
+    if (!issuer || env.NATHAN_APP_ID !== undefined || env.NATHAN_APP_ORIGIN !== undefined)
+      return denied(503, "Conflicting management configuration");
+    if (url.origin === issuer) {
+      if (url.pathname === "/studio" || url.pathname.startsWith("/studio/"))
+        return denied(403, "Studio requires the administrator hostname");
+      return handle(request, env, ctx);
+    }
+    if (env.NATHAN_ADMIN_ORIGIN !== "https://admin." + new URL(issuer).host || !accessConfigured(env))
+      return denied(503, "Management configuration incomplete");
+    if (url.origin !== env.NATHAN_ADMIN_ORIGIN) return denied(421, "Misdirected request");
+  } else {
+    if (env.NATHAN_APP_ID === undefined && env.NATHAN_APP_ORIGIN === undefined &&
+        env.NATHAN_ACCESS_TEAM_DOMAIN === undefined && env.NATHAN_ACCESS_AUD === undefined)
+      return handle(request, env, ctx);
+    const origins = standaloneOrigins(env);
+    if (!origins) return denied(503, "Management configuration incomplete");
+    if (url.origin !== origins.management) return denied(421, "Misdirected request");
+  }
   const identity = await accessIdentity(request, env);
   if (!identity) return denied(403, "Cloudflare Access required");
+  if (shared && !env.NATHAN_ADMIN_EMAILS?.split(",").map(normalizeEmail).includes(identity.email))
+    return denied(403, "Administrator access required");
   try {
     if (!await currentCustodian(env, identity.email)) return denied(403, "Administrator access required");
   } catch { return denied(503, "Management unavailable"); }

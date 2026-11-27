@@ -12,7 +12,7 @@
  *   - NATH-27: a parent Nathan's scoped client_credentials token (fleet management).
  * Each route passes its `action`, so a scoped principal can be limited to named actions.
  */
-import type { AuthEnv } from "../env";
+import { browserOrigin, type AuthEnv } from "../env";
 import { isAdminPrincipal } from "../admin-service";
 import { adminAssurance } from "../bootstrap";
 import { StudioApiError, studioError } from "./http";
@@ -42,7 +42,7 @@ export function auditActor(principal: StudioPrincipal): string {
 export async function authorizeStudioRequest(request: Request, env: AuthEnv, auth: any, options: StudioAuthorizeOptions): Promise<StudioAuthorization> {
   const deny = (status: number, code: StudioApiError["code"], message: string) => ({ ok: false as const, error: studioError(status, code, message) });
   if (options.write) {
-    if (request.headers.get("Origin") !== new URL(env.NATHAN_ISSUER).origin || request.headers.get("Sec-Fetch-Site") === "cross-site")
+    if (request.headers.get("Origin") !== browserOrigin(env) || request.headers.get("Sec-Fetch-Site") === "cross-site")
       return deny(403, "cross_origin", "Cross-origin request denied");
     if (request.headers.get("Content-Type")?.split(";")[0] !== "application/json")
       return deny(415, "unsupported_media_type", "JSON required");

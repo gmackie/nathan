@@ -7,16 +7,16 @@
  * Authorization happens before this is called: worker.ts serves /studio only to a verified,
  * granted administrator who passes mayAdminister (otherwise 403 or the admin setup redirect), and
  * every API call the SPA makes is authorized again by /studio/api/v1. The page itself carries no
- * data beyond the administrator's email.
+ * account data beyond the administrator's email.
  */
 import { renderPage } from "../../render.tsx";
 import { Island } from "../../island.tsx";
 import { StudioApp } from "./StudioApp.tsx";
 
-export function studioPage(userEmail: string): Response {
+export function studioPage(userEmail: string, issuerOrigin: string): Response {
   return renderPage(
     <>
-      <Island id="studio" component={StudioApp} props={{ email: userEmail }} />
+      <Island id="studio" component={StudioApp} props={{ email: userEmail, issuerOrigin }} />
       <noscript><p className="nathan-text nathan-studio-noscript">Turn on JavaScript to use Identity Studio.</p></noscript>
     </>,
     { title: "Identity Studio", islands: ["studio"], bodyClass: "nathan-studio-body" }

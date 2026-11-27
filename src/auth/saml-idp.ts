@@ -19,7 +19,7 @@
  * default), ban, SCIM and admission state, and the SP's passkey requirement (verified evidence only).
  * Every SP change and every issued or denied assertion is audited (SP, user, outcome; never content).
  */
-import type { AuthEnv } from "./env";
+import { browserOrigin, type AuthEnv } from "./env";
 import { audit, isAdminPrincipal } from "./admin-service";
 import { mayAdminister } from "./bootstrap";
 import { resolveAccess } from "./rbac";
@@ -585,7 +585,7 @@ export function publicMessage(e: unknown) {
 async function studio(request: Request, env: AuthEnv, auth: any): Promise<Response> {
   const reject = (status: number, error: string) => Response.json({ error }, { status, headers: noStore });
   if (request.method === "POST") {
-    if (request.headers.get("Origin") !== origin(env) || request.headers.get("Sec-Fetch-Site") === "cross-site") return reject(403, "Cross-origin request denied");
+    if (request.headers.get("Origin") !== browserOrigin(env) || request.headers.get("Sec-Fetch-Site") === "cross-site") return reject(403, "Cross-origin request denied");
     if (request.headers.get("Content-Type")?.split(";")[0] !== "application/json") return reject(415, "JSON required");
   } else if (request.method !== "GET") return reject(405, "Method not allowed");
   const session = await auth.api.getSession({ headers: request.headers });

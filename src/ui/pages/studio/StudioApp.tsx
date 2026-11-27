@@ -4,7 +4,7 @@
  * The server renders this component inside renderPage() (src/ui/pages/studio/StudioPage.tsx) with
  * the Overview panel; the island hydrates it and then follows the URL hash (#/users, #/scim, ...).
  * Panels talk only to the typed JSON API at /studio/api/v1 (./api.ts), which enforces admin,
- * step-up, same-origin and audit for every call. The props carry no secrets: only the email of
+ * step-up, same-origin and audit for every call. The props carry no secrets: the public issuer origin and email of
  * the signed-in administrator.
  */
 import { useEffect, useState, type ComponentType, type ReactElement } from "react";
@@ -45,6 +45,7 @@ import { Tokens } from "./panels/Tokens.tsx";
 export interface StudioAppProps {
   /** The signed-in administrator (display only). */
   email: string;
+  issuerOrigin: string;
 }
 
 type IconType = ComponentType<{ className?: string }>;
@@ -54,7 +55,7 @@ interface PanelDef { id: string; label: string; icon: IconType; render: (p: Stud
 
 export const STUDIO_NAV: { group: string; panels: PanelDef[] }[] = [
   { group: "Instance", panels: [
-    { id: "overview", label: "Overview", icon: ic(House), render: p => <Overview email={p.email} /> },
+    { id: "overview", label: "Overview", icon: ic(House), render: p => <Overview email={p.email} origin={p.issuerOrigin} /> },
     { id: "admins", label: "Administrators", icon: ic(ShieldStar), render: () => <Admins /> },
     { id: "audit", label: "Audit log", icon: ic(ClipboardText), render: () => <Audit /> }
   ] },
@@ -72,7 +73,7 @@ export const STUDIO_NAV: { group: string; panels: PanelDef[] }[] = [
   { group: "Connections", panels: [
     { id: "providers", label: "Social providers", icon: ic(SignIn), render: () => <Providers /> },
     { id: "sso", label: "Enterprise SSO (OIDC)", icon: ic(Buildings), render: () => <EnterpriseOidc /> },
-    { id: "saml", label: "Enterprise SAML", icon: ic(IdentificationCard), render: () => <SamlConnections /> },
+    { id: "saml", label: "Enterprise SAML", icon: ic(IdentificationCard), render: p => <SamlConnections origin={p.issuerOrigin} /> },
     { id: "saml-idp", label: "SAML applications", icon: ic(Key), render: () => <SamlIdp /> },
     { id: "scim", label: "SCIM directories", icon: ic(ArrowsClockwise), render: () => <Scim /> }
   ] }
@@ -87,7 +88,7 @@ export function panelFromHash(hash: string): string | null {
   return m && PANELS.has(m[1]) ? m[1] : null;
 }
 
-export function StudioApp({ email }: StudioAppProps) {
+export function StudioApp({ email, issuerOrigin }: StudioAppProps) {
   const [panel, setPanel] = useState(DEFAULT_PANEL);
   const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
@@ -139,7 +140,7 @@ export function StudioApp({ email }: StudioAppProps) {
             <Banner variant="alert" icon={<Info size={ICON_SIZE} weight={ICON_WEIGHT} {...iconA11y()} />} title="Account admission changed"
               description={notice} action={<LinkButton href="#/admission" variant="secondary" size="sm">Choose the admission mode</LinkButton>} />
           ) : null}
-          {current.render({ email, refreshNotice })}
+          {current.render({ email, issuerOrigin, refreshNotice })}
         </main>
       </Sidebar.Provider>
     </ConfirmProvider>

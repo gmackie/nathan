@@ -35,7 +35,8 @@ test("the Studio shell renders under renderPage with one SRI-pinned island and n
   assert.match(response.headers.get("content-security-policy"), /^default-src 'none'; connect-src 'self'; img-src 'none'; style-src 'self' 'nonce-[^']+'; script-src 'self' 'nonce-[^']+'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'$/);
   const { html, code } = await studioShell(fetcher, ORIGIN, response);
   assert.match(html, /<title>Identity Studio · Nathan<\/title>/);
-  assert.match(html, /data-props="\{&quot;email&quot;:&quot;admin@example\.test&quot;\}"/, "the island props carry only the administrator's email");
+  const props = JSON.parse(/data-nathan-island="studio"[^>]*data-props="([^"]+)"/.exec(html)[1].replaceAll("&quot;", '"'));
+  assert.deepEqual(props, { email: "admin@example.test", issuerOrigin: ORIGIN });
   // Every panel of today's Studio is in the bundle.
   for (const title of ["Administrators and recovery", "Register OIDC client", "Roles and access", "Protected applications", "Domain-wide SSO",
     "Access tokens", "Remote MCP servers", "Account admission and invitations", "Social login providers", "Enterprise SSO (OIDC)",

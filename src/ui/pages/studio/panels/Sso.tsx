@@ -3,7 +3,7 @@
  * (NATH-10, Nathan is the SP) and Nathan as a SAML IdP for downstream service providers (NATH-12).
  * SAML changes keep their typed confirmations: the administrator types the exact phrase.
  */
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Badge } from "@cloudflare/kumo/components/badge";
 import { Button } from "@cloudflare/kumo/components/button";
 import { apiGet, apiPost } from "../api.ts";
@@ -76,11 +76,9 @@ function Copyable({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function SamlConnections() {
+export function SamlConnections({ origin }: { origin: string }) {
   const list = useLoad(() => apiGet("/saml"));
   const action = useAction();
-  const [origin, setOrigin] = useState("");
-  useEffect(() => setOrigin(location.origin), []);
   const f = useFields({
     id: "", domain: "", preset: "okta" as keyof typeof PRESETS, provisioning: "invitation-only" as keyof typeof PROVISIONING,
     metadataUrl: "", metadataXml: "", nextCert: "", retire: ""

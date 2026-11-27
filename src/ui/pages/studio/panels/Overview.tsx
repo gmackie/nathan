@@ -1,5 +1,5 @@
 /** NATH-39 Studio: instance status, bootstrap and enrollment, capabilities, admin policy, plugins, MCP admin endpoint. */
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Badge } from "@cloudflare/kumo/components/badge";
 import { Button } from "@cloudflare/kumo/components/button";
 import { apiGet, apiPost } from "../api.ts";
@@ -8,7 +8,7 @@ import { Code, DataTable, JsonView, Loaded, Panel, Prose, RefreshButton, Row, Se
 
 const yes = (v: unknown) => <Badge variant={v ? "success" : "neutral"}>{v ? "On" : "Off"}</Badge>;
 
-export function Overview({ email }: { email: string }) {
+export function Overview({ email, origin }: { email: string; origin: string }) {
   const bootstrap = useLoad(() => apiGet("/bootstrap"));
   const status = useLoad(() => apiGet("/status"));
   return (
@@ -41,7 +41,7 @@ export function Overview({ email }: { email: string }) {
       </Section>
       <SecurityPolicy />
       <Plugins />
-      <McpEndpoint />
+      <McpEndpoint origin={origin} />
     </Panel>
   );
 }
@@ -86,9 +86,7 @@ function Plugins() {
   );
 }
 
-function McpEndpoint() {
-  const [origin, setOrigin] = useState("");
-  useEffect(() => setOrigin(location.origin), []);
+function McpEndpoint({ origin }: { origin: string }) {
   return (
     <Section title="MCP administration" description={<Prose>OAuth-protected stateless MCP endpoint. Register an MCP OIDC client for resource-bound access.</Prose>}>
       <DataTable label="MCP endpoint" empty="" rowKey={r => r.k} columns={[{ key: "k", label: "" }, { key: "v", label: "Value", render: r => <Code>{r.v}</Code> }]}

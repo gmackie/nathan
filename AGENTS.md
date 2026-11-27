@@ -36,6 +36,7 @@ Read `DESIGN.md` before visual or UI work. Nathan is stock Cloudflare Kumo (with
 
 - Validate redirect URIs exactly, prevent open redirects, require PKCE, verify JWKS signature, audience, issuer and nonce.
 - Fail closed for unknown/disabled users and apps; admin identity needs current verified email, admin role and an explicit allowlist.
+- On shared issuers using Cloudflare Access, verify the application JWT on every administrator-host request, require an allowlisted local administrator and enforce Nathan session assurance. Keep public OIDC on the issuer hostname.
 - Keep passwords, OAuth client secrets and access tokens out of logs, source and configuration files.
 - Never enable public ingress for an upstream application protected by a gateway.
 - Installers must not overwrite unrelated Workers, DNS records or D1 databases.

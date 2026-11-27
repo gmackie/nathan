@@ -27,7 +27,7 @@ import { studioPage } from "../ui/pages/studio/StudioPage.tsx";
 import { signInPage, consentPage } from "./hosted-pages.tsx";
 import { securityPage } from "./security-ui";
 import { loadVerifiedRealm, listRealmClients,registerRealmClient,registerRealmClientsBatch } from "./domain-realm";
-import type { AuthEnv } from "./env";
+import { browserOrigin, type AuthEnv } from "./env";
 import { scopedApplication, outOfScope, type BindingProps } from "./app-binding";
 import { handleMcp, protectedResourceMetadata } from "./mcp";
 import { listApplications, listSso, upsertApplication, registerEnterpriseOidc, requestEnterpriseVerification, verifyEnterpriseDomain,
@@ -62,7 +62,7 @@ async function isAdmin(session:any,env:AuthEnv):Promise<boolean>{
 }
 
 async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Promise<Response> {
-  const issuer = new URL(env.NATHAN_ISSUER);
+  const issuer = new URL(browserOrigin(env));
   const url = new URL(request.url);
   if (url.origin !== issuer.origin || url.protocol !== "https:") return reject(421, "Misdirected request");
   // NATH-17: also reports unusable social providers (id and reason only); see ./health.ts.
@@ -167,7 +167,7 @@ async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Pr
       return reject(403, "Admin session required");
     }
     if (!await mayAdminister(env,session!.user.id,session!.session.id)) return Response.redirect(issuer.origin+"/security?setup=admin",302);
-    return studioPage(session!.user.email);
+    return studioPage(session!.user.email, new URL(env.NATHAN_ISSUER).origin);
   }
   if (url.pathname === STUDIO_API_V1 || url.pathname.startsWith(STUDIO_API_V1 + "/")) return handleStudioApiV1(request, env, auth);
   if (["/studio/api/clients", "/studio/api/status", "/studio/api/plugins", "/studio/api/audit", "/studio/api/apps", "/studio/api/sso", "/studio/api/users", "/studio/api/realm", "/studio/api/realm/clients", "/studio/api/providers", "/studio/api/scim/connections", "/studio/api/admins", "/studio/api/security-policy"].includes(url.pathname) && request.method === "GET") {

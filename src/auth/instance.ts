@@ -6,7 +6,7 @@ import { passkey } from "@better-auth/passkey";
 import { oauthProvider } from "@better-auth/oauth-provider";
 import { sso } from "@better-auth/sso";
 import { sendAuthEmail } from "./email";
-import { allowsAdminTotp, managementEmail, ownerInvitation, type AuthEnv } from "./env";
+import { allowsAdminTotp, browserOrigin, managementEmail, ownerInvitation, type AuthEnv } from "./env";
 import { sendOwnerVerification, verifyOwnerMailbox } from "./owner-verification";
 import type { SocialCredentials } from "./provider-store";
 import { recordProviderSignIn } from "./provider-store";
@@ -48,7 +48,7 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
   return betterAuth({
     // NATH-43: the name users see (TOTP issuer fallback, emails); "gmacko" at id.gmac.io.
     appName: instanceName(env),
-    baseURL: issuer.origin,
+    baseURL: browserOrigin(env),
     basePath: "/api/auth",
     secret: env.BETTER_AUTH_SECRET,
     database: env.DB,
@@ -147,7 +147,7 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
         "/oauth2/token": { window: 60, max: 30 }
       }
     },
-    trustedOrigins: [issuer.origin],
+    trustedOrigins: [browserOrigin(env)],
     // NATH-16: a verified provider address supersedes a squatted provisional password account.
     socialProviders: withInviteeSupersession(env, resolvedSocialProviders ?? socialProviders),
     emailAndPassword: {
@@ -180,7 +180,8 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
       // NATH-43: authenticator apps label the TOTP entry with this issuer (Better Auth's default is "Better Auth").
       hostedTwoFactor(instanceName(env)),
       ...(email ? [hostedEmailOTP(email.browser + "." + email.flow.generation)] : []),
-      passkey({ rpID: issuer.hostname, rpName: passkeyRpName(env) }),
+      passkey({ rpID: issuer.hostname, rpName: passkeyRpName(env),
+        ...(env[managementEmail] && env.NATHAN_ADMIN_ORIGIN ? { origin: env.NATHAN_ADMIN_ORIGIN } : {}) }),
       jwt({disableSettingJwtHeader:true,jwks:{rotationInterval:30*24*60*60,gracePeriod:30*24*60*60}}),
       oauthProvider({
         loginPage: "/sign-in",
