@@ -45,9 +45,10 @@ export class CloudflareClient {
     }
     throw Error("D1 inventory exceeds the safe discovery limit");
   }
-  async workerDomains() {
+  async workerDomains(hostname) {
     if(!this.accountId)throw Error("Account ID required");
-    const rows=await this.request("/accounts/"+this.accountId+"/workers/domains");
+    const filter = hostname ? "?hostname=" + encodeURIComponent(hostname) : "";
+    const rows=await this.request("/accounts/"+this.accountId+"/workers/domains" + filter);
     if(!Array.isArray(rows))throw Error("Unexpected Worker custom-domain inventory");
     return rows;
   }
@@ -159,9 +160,16 @@ export async function ensureIdpSecrets(client, workerName, putSecret) {
  * DNS records at the identity hostname conflict unless they are the record Cloudflare
  * manages for this installation's own Worker custom domain (a re-run or upgrade).
  */
-export function hostnameConflicts(records, domains, hostname, workerName) {
-  const ownsHostname = domains.some(d => d.hostname === hostname && d.service === workerName);
-  return ownsHostname ? [] : records;
+export function hasIdentityDomain(domains, hostname, worker, zoneId) {
+  if (!Array.isArray(domains)) throw Error("Invalid Worker domain inventory");
+  const matches = domains.filter(domain => domain.hostname === hostname);
+  if (!matches.length) return false;
+  const [domain] = matches;
+  // The script endpoint publishes to the service's production environment.
+  if (matches.length !== 1 || domain.service !== worker || domain.zone_id !== zoneId ||
+      domain.environment !== "production" || domain.enabled === false || domain.previews_enabled)
+    throw Error("Existing Worker custom domain differs from the installation");
+  return true;
 }
 /** Use the guarded custom-domain publish operation used by Wrangler itself. A single-host,
  * non-replacing request lets the API check DNS and Worker ownership when it commits. */
@@ -173,23 +181,18 @@ export async function publishIdentityDomains(client, cfg, hosts) {
     const zone = zoneForHostname(zones, hostname);
     if (!zone || zone.status !== "active") throw Error("Cannot publish a hostname outside an active zone");
     const path = base + "/domains?hostname=" + encodeURIComponent(hostname);
-    const attached = await client.request(path);
-    if (!Array.isArray(attached)) throw Error("Invalid Worker domain inventory");
-    const matches = attached.filter(d => d.hostname === hostname);
-    const owns = d => d.service === worker && d.zone_id === zone.id && d.enabled !== false && !d.previews_enabled;
-    if (matches.length === 1 && owns(matches[0])) continue;
-    if (matches.length) throw Error("Existing Worker custom domain differs from the installation");
+    if (hasIdentityDomain(await client.request(path), hostname, worker, zone.id)) continue;
     const origins = [{ hostname, zone_id: zone.id, enabled: true, previews_enabled: false }];
     await client.request(base + "/scripts/" + worker + "/domains/records", { method: "PUT", body: {
       origins, override_scope: false, override_existing_origin: false, override_existing_dns_record: false
     } });
     const readback = await client.request(path);
-    if (!Array.isArray(readback) || !readback.some(d => d.hostname === hostname && owns(d)))
+    if (!hasIdentityDomain(readback, hostname, worker, zone.id))
       throw Error("Worker domain attachment could not be verified");
   }
 }
 
-export async function inspectDeployment(client, cfg) {
+export async function inspectDeployment(client, cfg, { verifyDomain = false } = {}) {
   const [zones, workers, existingDatabase] = await Promise.all([
     client.zones(), client.workers(), client.databaseNamed(cfg.database.name)
   ]);
@@ -197,12 +200,11 @@ export async function inspectDeployment(client, cfg) {
     throw Error("Cannot verify the existing Worker inventory");
   const zone = zoneForHostname(zones, cfg.hostname);
   const records = zone ? await client.dnsRecords(zone.id, cfg.hostname) : [];
-  // Custom-domain inventory is read only when there is something to explain, so a
-  // first install does not need Workers custom-domain read permission.
-  const conflicts = records.length
-    ? hostnameConflicts(records, await client.workerDomains(), cfg.hostname, cfg.name + "-auth")
-    : [];
   const authWorker = workers.find(w => w.id === cfg.name + "-auth");
+  const attached = zone && (verifyDomain || records.length > 0) &&
+    hasIdentityDomain(await client.workerDomains(cfg.hostname), cfg.hostname, cfg.name + "-auth", zone.id);
+  if (attached && !authWorker) throw Error("Existing identity domain requires its matching Worker");
+  const conflicts = attached ? [] : records;
   return {
     accountId: client.accountId,
     zone: zone ? { id: zone.id, name: zone.name, status: zone.status } : null,

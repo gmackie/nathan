@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { missingIdpSecrets, hostnameConflicts, ensureIdpSecrets, inspectDeployment, CloudflareClient } from "../scripts/lib/cloudflare.mjs";
+import { missingIdpSecrets, hasIdentityDomain, ensureIdpSecrets, inspectDeployment, CloudflareClient } from "../scripts/lib/cloudflare.mjs";
 import { redirectWithCookies, fetchNoRedirect } from "../src/shared/security.mjs";
 import { EMPTY_DATABASE_SQL } from "../src/installer/validation.mjs";
 
@@ -13,10 +13,12 @@ test("CLI installs only the identity Worker secrets that are missing", () => {
 });
 
 test("the installation's own custom-domain DNS record is not a conflict on re-run", () => {
-  const records = [{ id: "r1", type: "AAAA", name: "auth.example.com" }];
-  assert.deepEqual(hostnameConflicts(records, [{ hostname: "auth.example.com", service: "acme-auth" }], "auth.example.com", "acme-auth"), []);
-  assert.deepEqual(hostnameConflicts(records, [{ hostname: "auth.example.com", service: "someone-else" }], "auth.example.com", "acme-auth"), records);
-  assert.deepEqual(hostnameConflicts(records, [], "auth.example.com", "acme-auth"), records);
+  const host = "auth.example.com", worker = "acme-auth", zone = "zone";
+  const domain = { hostname: host, service: worker, zone_id: zone, environment: "production" };
+  assert.equal(hasIdentityDomain([domain], host, worker, zone), true);
+  assert.equal(hasIdentityDomain([], host, worker, zone), false);
+  for (const delta of [{ service: "other" }, { zone_id: "other" }, { environment: "staging" }, { environment: undefined }])
+    assert.throws(() => hasIdentityDomain([{ ...domain, ...delta }], host, worker, zone), /differs/);
 });
 
 test("cookie redirects keep mutable headers and every Set-Cookie", () => {

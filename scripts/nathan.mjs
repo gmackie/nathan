@@ -101,7 +101,7 @@ async function planOrDoctor(live) {
   const result = { proposalOnly:true, resources: buildPlan(cfg) };
   if (process.env.CLOUDFLARE_API_TOKEN && cfg.accountId) {
     const client = new CloudflareClient(process.env.CLOUDFLARE_API_TOKEN,cfg.accountId);
-    result.discovery = await inspectDeployment(client,cfg);
+    result.discovery = await inspectDeployment(client,cfg, { verifyDomain: true });
     await inspectStudioInstallation(client, cfg, result.discovery);
     if (cfg.studioAccess) {
       result.studioAccess = await reconcileStudioAccess(client, cfg);
@@ -130,7 +130,7 @@ async function provision(forceApply=false) {
   if (!cfg.accountId) throw Error("accountId required for deploy");
   if (!apply && !forceApply) throw Error("Explicit --apply required. First run 'npm run plan'.");
   const client = new CloudflareClient(process.env.CLOUDFLARE_API_TOKEN,cfg.accountId);
-  const snapshot = await inspectDeployment(client,cfg);
+  const snapshot = await inspectDeployment(client,cfg, { verifyDomain: true });
   if (!snapshot.zone || snapshot.zone.status !== "active") throw Error("Auth hostname is not in an active Cloudflare zone");
   if (snapshot.dnsConflicts.length) throw Error("Conflicting DNS records detected; resolve them manually before deploying");
   // The IdP is deployed independently. Per-application gateways are registered
@@ -143,7 +143,7 @@ async function provision(forceApply=false) {
   const database = snapshot.existingDatabase || await client.createDatabase(name);
   const dbId = database.uuid || database.id;
   if (!/^[a-f0-9-]{36}$/.test(dbId)) throw Error("Cloudflare did not return a valid D1 database UUID");
-  if (studio && !snapshot.existingDatabase) await rememberStudioDatabase(cfg, dbId);
+  if (!snapshot.existingDatabase) await rememberStudioDatabase(cfg, dbId);
   const configPath = await createGeneratedConfig(cfg,dbId,null,studio?.bindings);
   const liveConfig = JSON.parse(await readFile(configPath,"utf8"));
   console.log("Applying reviewed D1 migrations before publishing the identity hostname.");
@@ -191,6 +191,7 @@ async function provision(forceApply=false) {
     const value = name === "BETTER_AUTH_SECRET"
       ? (await secretPrompt("BETTER_AUTH_SECRET (blank to generate securely)")) || randomBytes(48).toString("base64url")
       : randomBytes(32).toString("base64url");
+    await verifyIdentityUpload(client, cfg, true, dbId, studio);
     await runCli("npx",["wrangler","secret","put",name,"--config",stagingPath],{input:value});
   });
   if (snapshot.existingAuthWorker) await upload();

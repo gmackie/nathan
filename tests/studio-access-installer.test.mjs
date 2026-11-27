@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { inspectStudioInstallation, rememberStudioDatabase, reconcileStudioAccess, studioAccessOptions, verifyIdentityUpload } from "../scripts/lib/studio-access.mjs";
+import { inspectStudioHostname, inspectStudioInstallation, rememberStudioDatabase, reconcileStudioAccess, studioAccessOptions, verifyIdentityUpload } from "../scripts/lib/studio-access.mjs";
 import { validateConfig, buildPlan } from "../scripts/lib/config.mjs";
 import { activateIdentityWorker, createGeneratedConfig } from "../scripts/lib/wrangler.mjs";
 import { publishIdentityDomains } from "../scripts/lib/cloudflare.mjs";
@@ -120,14 +120,27 @@ test("upgrade requires the existing Worker, database, seed and current local ope
   const api = { accountId: cfg.accountId, zones: async () => [{ id: "zone", name: "example.com", status: "active" }],
     dnsRecords: async () => [], request: async path => path.endsWith("/settings") ? { bindings } : [],
     queryDatabase: async (_db, sql) => sql.includes("cloudflare_user_id") ? [owner] : granted ? [{ id: "operator" }] : [] };
-  await inspectStudioInstallation(api, cfg, snapshot);
+  const legacy = { ...cfg, studioAccess: undefined };
+  for (const config of [legacy, cfg]) {
+    await inspectStudioInstallation(api, config, snapshot);
+    await assert.rejects(inspectStudioInstallation(api, config, { ...snapshot, existingDatabase: null }), /database/);
+    bindings[0].id = "unrelated";
+    await assert.rejects(inspectStudioInstallation(api, config, snapshot), /database/);
+    bindings[0].id = "db";
+    bindings[1].text = "https://other.example.com";
+    await assert.rejects(inspectStudioInstallation(api, config, snapshot), /issuer/);
+    bindings[1].text = "https://" + cfg.hostname;
+    owner.cloudflare_user_id = "another installation";
+    await assert.rejects(inspectStudioInstallation(api, config, snapshot), /owner/);
+    owner.cloudflare_user_id = "cli:" + cfg.accountId;
+    owner.admin_email = "elsewhere@example.test";
+    await assert.rejects(inspectStudioInstallation(api, config, snapshot), /owner/);
+    owner.admin_email = cfg.adminEmails[0];
+  }
   granted = false;
   await assert.rejects(inspectStudioInstallation(api, cfg, snapshot), /grants/);
-  granted = true;
-  owner.cloudflare_user_id = "another installation";
-  await assert.rejects(inspectStudioInstallation(api, cfg, snapshot), /owner/);
-  bindings[0].id = "unrelated";
-  await assert.rejects(inspectStudioInstallation(api, cfg, snapshot), /database/);
+  owner.state = "pending";
+  await inspectStudioInstallation(api, legacy, snapshot);
 });
 
 test("old manifests cannot implicitly remove an existing shared or dedicated Access boundary", async () => {
@@ -136,7 +149,7 @@ test("old manifests cannot implicitly remove an existing shared or dedicated Acc
   const api = { request: async () => ({ bindings: [{ name: "NATHAN_ADMIN_ORIGIN", type: "plain_text" }] }) };
   await assert.rejects(inspectStudioInstallation(api, old, snapshot), /Restore/);
   await assert.rejects(inspectStudioInstallation({ request: async () => ({}) }, old, snapshot), /bindings/);
-  await inspectStudioInstallation({ request: async () => ({ bindings: [] }) }, old, snapshot);
+  await assert.rejects(inspectStudioInstallation({ request: async () => ({ bindings: [] }) }, old, snapshot), /database/);
 });
 
 
@@ -153,6 +166,9 @@ test("only the recorded D1 can resume an interrupted Studio bootstrap before its
   try {
     const snapshot = { existingAuthWorker: false, existingDatabase: { uuid: "db" } };
     await rememberStudioDatabase(cfg, "db", folder);
+    const legacy = { ...cfg, studioAccess: undefined };
+    await inspectStudioInstallation(api, legacy, snapshot, folder);
+    await assert.rejects(inspectStudioInstallation(api, legacy, { ...snapshot, existingDatabase: { uuid: "other" } }, folder));
     await inspectStudioInstallation(api, cfg, snapshot, folder);
     hasSchema = true;
     await inspectStudioInstallation(api, cfg, snapshot, folder);
@@ -164,9 +180,9 @@ test("only the recorded D1 can resume an interrupted Studio bootstrap before its
 test("publishes only missing exact domains with all replacement flags disabled", async () => {
   const worker = cfg.name + "-auth";
   const zone = { id: "zone", name: "example.com", status: "active" };
-  const domains = new Map([[cfg.hostname, { hostname: cfg.hostname, service: worker, zone_id: zone.id }]]);
+  const domains = new Map([[cfg.hostname, { hostname: cfg.hostname, service: worker, zone_id: zone.id, environment: "production" }]]);
   const writes = [];
-  let reject = true;
+  let reject = true, environment = "production";
   const api = { accountId: cfg.accountId, zones: async () => [zone], async request(path, init) {
     if (!init) {
       const row = domains.get(new URL(path, "https://api.example").searchParams.get("hostname"));
@@ -178,7 +194,7 @@ test("publishes only missing exact domains with all replacement flags disabled",
     assert.deepEqual(origins, [{ hostname: host, zone_id: zone.id, enabled: true, previews_enabled: false }]);
     writes.push(host);
     if (reject) throw Error("Conflicting DNS record");
-    domains.set(host, { ...origins[0], service: worker });
+    domains.set(host, { ...origins[0], service: worker, environment });
   }};
   await assert.rejects(publishIdentityDomains(api, cfg, [cfg.hostname, host]), /Conflicting/);
   assert.equal(domains.has(host), false);
@@ -186,14 +202,30 @@ test("publishes only missing exact domains with all replacement flags disabled",
   await publishIdentityDomains(api, cfg, [cfg.hostname, host]);
   await publishIdentityDomains(api, cfg, [cfg.hostname, host]);
   assert.equal(writes.length, 2);
+  domains.get(host).environment = "staging";
+  await assert.rejects(publishIdentityDomains(api, cfg, [host]), /differs/);
+  const discovery = { ...api, dnsRecords: async () => [], request: async path =>
+    path.endsWith("/workers/routes") ? [] : [domains.get(host)] };
+  await assert.rejects(inspectStudioHostname(discovery, cfg), /differs/);
+  assert.equal(writes.length, 2);
+  domains.delete(host);
+  environment = "staging";
+  await assert.rejects(publishIdentityDomains(api, cfg, [host]), /differs/);
+  assert.equal(writes.length, 3);
 });
 
 test("last pre-upload discovery rejects inventory errors and an intervening Access cutover", async () => {
   const legacy = { ...cfg, studioAccess: undefined };
   const api = { accountId: cfg.accountId, databaseNamed: async () => ({ uuid: "db" }),
     zones: async () => [{ id: "zone", name: "example.com", status: "active" }], dnsRecords: async () => [],
-    workers: async () => [{ id: cfg.name + "-auth" }], request: async () => ({ bindings: [] }) };
+    workers: async () => [{ id: cfg.name + "-auth" }], workerDomains: async () => [],
+    request: async () => ({ bindings: [{ name: "DB", type: "d1", id: "db" },
+      { type: "plain_text", name: "NATHAN_ISSUER", text: "https://" + cfg.hostname }] }),
+    queryDatabase: async () => [{ admin_email: cfg.adminEmails[0], cloudflare_user_id: "cli:" + cfg.accountId }] };
   await verifyIdentityUpload(api, legacy, true, "db", null);
+  api.workerDomains = async () => [{ hostname: cfg.hostname, service: cfg.name + "-auth", zone_id: "zone", environment: "staging" }];
+  await assert.rejects(verifyIdentityUpload(api, legacy, true, "db", null), /domain differs/);
+  api.workerDomains = async () => [];
   api.request = async () => ({ bindings: [{ name: "NATHAN_ADMIN_ORIGIN", type: "plain_text" }] });
   await assert.rejects(verifyIdentityUpload(api, legacy, true, "db", null), /Restore/);
   await assert.rejects(verifyIdentityUpload(api, legacy, false, "db", null), /resources changed/);

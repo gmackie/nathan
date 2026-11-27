@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { normalizeEmail } from "../../src/auth/admission-policy.mjs";
-import { inspectDeployment, zoneForHostname } from "./cloudflare.mjs";
+import { hasIdentityDomain, inspectDeployment, zoneForHostname } from "./cloudflare.mjs";
 import { validateDomainName } from "../../src/shared/realm.mjs";
 
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
@@ -56,11 +56,10 @@ export async function inspectStudioHostname(api, cfg) {
     api.request("/zones/" + zone.id + "/workers/routes")]);
   if (!Array.isArray(routes) || routes.some(r => coversHost(r.pattern, hostname)))
     throw Error("A Worker route covers the Studio hostname or its route inventory is unavailable");
-  if (!Array.isArray(records) || !Array.isArray(domains)) throw Error("Incomplete hostname inventory");
-  const existing = domains.filter(d => d.hostname === hostname);
-  if (existing.length > 1 || existing.some(d => d.service !== worker || d.zone_id !== zone.id) ||
-      (records.length && !existing.length)) throw Error("Conflicting Studio DNS or Worker custom domain");
-  return existing.length > 0;
+  if (!Array.isArray(records)) throw Error("Incomplete hostname inventory");
+  const attached = hasIdentityDomain(domains, hostname, worker, zone.id);
+  if (records.length && !attached) throw Error("Conflicting Studio DNS record");
+  return attached;
 }
 
 // A receipt ties retries before the first migration to the exact D1 returned by Cloudflare.
@@ -88,34 +87,35 @@ export async function inspectStudioInstallation(api, cfg, snapshot, folder = ".n
     ? await api.request("/accounts/" + api.accountId + "/workers/scripts/" + worker + "/settings")
     : null;
   if (snapshot.existingAuthWorker && !Array.isArray(settings?.bindings)) throw Error("Existing Worker bindings could not be verified");
-  if (!cfg.studioAccess) {
-    if (settings?.bindings.some(b => ["NATHAN_ADMIN_ORIGIN", "NATHAN_ACCESS_TEAM_DOMAIN", "NATHAN_ACCESS_AUD"].includes(b.name)))
-      throw Error("Existing Worker requires Cloudflare Access. Restore its Studio Access configuration before deploying");
-    return;
+  if (!cfg.studioAccess && settings?.bindings.some(b =>
+    ["NATHAN_ADMIN_ORIGIN", "NATHAN_ACCESS_TEAM_DOMAIN", "NATHAN_ACCESS_AUD"].includes(b.name)))
+    throw Error("Existing Worker requires Cloudflare Access. Restore its Studio Access configuration before deploying");
+  const studio = cfg.studioAccess && studioAccessOptions(cfg);
+  const ownerEmail = normalizeEmail(cfg.adminEmails?.[0]);
+  if (studio) {
+    const attached = await inspectStudioHostname(api, cfg);
+    if (!settings && !studio.emails.includes(ownerEmail)) throw Error("A fresh CLI installation requires its initial owner in the Access policy");
+    if (!settings && attached) throw Error("Existing Studio custom domain requires a matching Nathan Worker");
   }
-  const { hostname, emails } = studioAccessOptions(cfg);
-  const attached = await inspectStudioHostname(api, cfg);
-  if (!snapshot.existingAuthWorker) {
-    if (!emails.includes(normalizeEmail(cfg.adminEmails[0]))) throw Error("A fresh CLI installation requires its initial owner in the Access policy");
-    if (attached) throw Error("Existing Studio custom domain requires a matching Nathan Worker");
-    if (!snapshot.existingDatabase) return;
-  }
+  if (!settings && !snapshot.existingDatabase) return;
   const db = snapshot.existingDatabase?.uuid ?? snapshot.existingDatabase?.id;
-  if (!db || (settings && (!settings.bindings?.some(b => b.name === "DB" && b.type === "d1" && b.id === db) ||
+  if (!db || (settings && (!settings.bindings.some(b => b.name === "DB" && b.type === "d1" && b.id === db) ||
       !settings.bindings.some(b => b.name === "NATHAN_ISSUER" && b.type === "plain_text" && b.text === "https://" + cfg.hostname))))
-    throw Error("Existing Worker issuer or database differs from the Studio installation");
-  if (!settings && await createdStudioDatabase(cfg, db, folder)) {
+    throw Error("Existing Worker issuer or database differs from the installation");
+  // A creation receipt is the only ownership evidence before this CLI seeds an owner.
+  if ((!settings || !ownerEmail) && await createdStudioDatabase(cfg, db, folder)) {
     const schema = await api.queryDatabase(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='nathan_bootstrap_status'");
-    if (!schema.length) return;
+    if (!schema.length && !settings) return;
     const seed = await api.queryDatabase(db, "SELECT id FROM nathan_bootstrap_status LIMIT 1");
     if (!seed.length) return;
   }
   const owners = await api.queryDatabase(db, "SELECT state,admin_email,cloudflare_user_id FROM nathan_bootstrap_status WHERE id='primary'");
-  if (owners.length !== 1 || owners[0].cloudflare_user_id !== "cli:" + api.accountId ||
-      owners[0].admin_email !== normalizeEmail(cfg.adminEmails[0])) throw Error("Existing Worker has a different installation owner");
-  // A retry can finish an interrupted first install after the private deployment or D1 seed.
-  // Only the seeded owner may complete bootstrap and the live Worker must already be Access-bound.
-  if (owners[0].state !== "complete" && emails.includes(owners[0].admin_email) &&
+  if (!ownerEmail || owners.length !== 1 || owners[0].cloudflare_user_id !== "cli:" + api.accountId ||
+      owners[0].admin_email !== ownerEmail) throw Error("Existing installation has a different owner");
+  if (!studio) return;
+  const { hostname, emails } = studio;
+  // An interrupted Access installation may resume before the owner finishes enrollment.
+  if (owners[0].state !== "complete" && emails.includes(ownerEmail) &&
       (!settings || settings.bindings.some(b => b.name === "NATHAN_ADMIN_ORIGIN" && b.text === "https://" + hostname))) return;
   for (const email of emails) {
     const matches = await api.queryDatabase(db,
@@ -201,7 +201,7 @@ export async function reconcileStudioAccess(api, cfg, apply = false) {
 /** Repeat discovery at publication. Wrangler also retains unspecified live variables on upload,
  * so a concurrent Access activation cannot lose its three bindings to a legacy manifest. */
 export async function verifyIdentityUpload(api, cfg, previouslyPresent, databaseId, studio) {
-  const current = await inspectDeployment(api, cfg);
+  const current = await inspectDeployment(api, cfg, { verifyDomain: true });
   if (!current.zone || current.zone.status !== "active" || current.dnsConflicts.length ||
       current.existingAuthWorker !== previouslyPresent ||
       (current.existingDatabase?.uuid ?? current.existingDatabase?.id) !== databaseId)
