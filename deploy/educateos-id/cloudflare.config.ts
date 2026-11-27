@@ -30,6 +30,7 @@ export async function configuration() {
       binding: "DB", database_name: workerName, database_id: "219478ac-318b-4af7-84d0-c8b83ebd7d70",
       migrations_dir: "../../migrations",
     }],
+    send_email: [{ name: "SEND_EMAIL", allowed_sender_addresses: ["sign-in@mail.staging.educateos.io"] }],
     vars: {
       NATHAN_ISSUER: "https://id-stg.educateos.io",
       NATHAN_APP_ORIGIN: applicationOrigin,

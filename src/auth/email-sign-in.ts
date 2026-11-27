@@ -5,7 +5,7 @@ import { isAllowedUnsafeRequest, makeCookie, parseCookie } from "../shared/secur
 import { normalizeEmail } from "./admission-policy.mjs";
 import { readBoundedText } from "./bounded-body.mjs";
 import { createAuth } from "./instance";
-import { sendSignInEmail, type EmailClient } from "./email";
+import { emailDeliveryConfigured, sendSignInEmail, type EmailClient } from "./email";
 import { EMAIL_ATTEMPTS, EMAIL_TTL, emailTarget, reserveEmailDelivery, publishEmailDelivery, type EmailDelivery, type EmailFlow } from "./email-sign-in-policy";
 import { consumeAddressLimit, reserveProofAttempt, releaseProofAttempt, auditRefusedProof } from "./email-otp-policy.mjs";
 import { allowRequests } from "./request-limit";
@@ -21,7 +21,7 @@ const reply = (status: number, body: object, headers = new Headers()) => {
   return Response.json(body, { status, headers });
 };
 const invalid = () => reply(400, { error: "This code or link is invalid or expired. Request a new email." });
-export const emailEnabled = (env: AuthEnv) => env.ENABLE_EMAIL_OTP === "true" && Boolean(env.RESEND_API_KEY && env.EMAIL_FROM);
+export const emailEnabled = (env: AuthEnv) => env.ENABLE_EMAIL_OTP === "true" && emailDeliveryConfigured(env);
 
 async function oauthClient(env: AuthEnv, query: string): Promise<EmailClient | null> {
   if (!await verifyOAuthQueryParams(query, env.BETTER_AUTH_SECRET)) return null;
@@ -54,7 +54,7 @@ async function requestEmail(request: Request, env: AuthEnv, ctx: ExecutionContex
   // A tab can only complete its original address and signed authorization. A throttled resend
   // leaves the tab's previously delivered proof usable and reveals no account-dependent state.
   const flowId = await sha256(JSON.stringify([browser, email, query]));
-  // Account lookup and Resend run after the neutral reply. The cookie and IP/address counters
+  // Account lookup and email delivery run after the neutral reply. The cookie and IP/address counters
   // have the same shape and behavior for unknown, blocked and eligible addresses.
   const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
   if (await allowRequests(env, "email-send-ip", ip, 10, 600) && email && (await consumeAddressLimit(env.DB, "send", email)).allowed) {

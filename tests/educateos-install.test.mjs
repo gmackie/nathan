@@ -44,6 +44,10 @@ test("the generated EducateOS Worker has private ingress and the dedicated D1 an
   assert.equal(config.workers_dev, false);
   assert.equal(config.preview_urls, false);
   assert.equal(config.vars.ENABLE_EMAIL_OTP, "true");
+  assert.deepEqual(config.send_email, [{
+    name: "SEND_EMAIL",
+    allowed_sender_addresses: ["sign-in@mail.staging.educateos.io"],
+  }]);
   for (const secret of ["EMAIL_FROM", "NATHAN_ADMIN_EMAILS", "BETTER_AUTH_SECRET", "NATHAN_CONFIG_KEY", "RESEND_API_KEY"]) {
     assert.equal(Object.hasOwn(config.vars, secret), false);
   }

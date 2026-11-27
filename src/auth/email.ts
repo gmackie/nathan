@@ -1,14 +1,44 @@
-import { resolveAppearance } from "../ui/appearance";
-import { escapeHtml } from "../ui/csp-styles";
+import { resolveAppearance } from "../ui/appearance.ts";
+import { escapeHtml } from "../ui/csp-styles.ts";
 import type { AuthEnv } from "./env";
 import { instanceName } from "./passkey-config.mjs";
 
-async function deliver(env: AuthEnv, to: string, message: { subject: string; text: string; html?: string; attachments?: object[] }) {
+export function emailDeliveryConfigured(env: AuthEnv): boolean {
+  return Boolean(env.EMAIL_FROM && (env.SEND_EMAIL || env.RESEND_API_KEY));
+}
+
+type InlineImage = { id: string; content: string };
+
+async function deliver(env: AuthEnv, to: string, message: { subject: string; text: string; html?: string }, image?: InlineImage) {
+  if (env.SEND_EMAIL && env.EMAIL_FROM) {
+    const from = { name: instanceName(env), email: env.EMAIL_FROM };
+    const payload: EmailMessageBuilder = {
+      from,
+      to,
+      ...message,
+      ...(image ? { attachments: [{
+        disposition: "inline", contentId: image.id, filename: image.id + ".png", type: "image/png", content: image.content,
+      }] } : {}),
+    };
+    try {
+      await env.SEND_EMAIL.send(payload);
+    } catch {
+      throw new Error("Authentication email delivery failed");
+    }
+    return;
+  }
   if (!env.RESEND_API_KEY || !env.EMAIL_FROM) throw new Error("Email delivery is not configured");
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST", redirect: "manual",
     headers: { Authorization: "Bearer " + env.RESEND_API_KEY, "Content-Type": "application/json" },
-    body: JSON.stringify({ from: env.EMAIL_FROM, to: [to], ...message })
+    body: JSON.stringify({
+      from: env.EMAIL_FROM,
+      to: [to],
+      ...message,
+      ...(image ? { attachments: [{
+        filename: image.id + ".png", content: image.content, content_type: "image/png", content_id: image.id,
+      }] } : {}),
+    })
   });
   if (!response.ok) throw new Error("Authentication email delivery failed: " + response.status);
 }
@@ -47,6 +77,5 @@ export async function sendSignInEmail(env: AuthEnv, to: string, code: string, ur
     html: (png ? '<img alt="" width="64" src="cid:' + logo + '">' : "") +
       "<h1>Sign in to " + escapeHtml(name) + "</h1><p>Your code is <strong>" + code + '</strong>.</p><p><a href="' +
       escapeHtml(url) + '">Sign in to ' + escapeHtml(name) + "</a></p><p>" + instructions + "</p><p>If you did not request this, ignore it.</p>",
-    ...(png ? { attachments: [{ filename: logo + ".png", content: png, content_type: "image/png", content_id: logo }] } : {})
-  });
+  }, logo && png ? { id: logo, content: png } : undefined);
 }

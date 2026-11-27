@@ -50,6 +50,14 @@
       "migrations_dir": "../../migrations"
     }
   ],
+  "send_email": [
+    {
+      "name": "SEND_EMAIL",
+      "allowed_sender_addresses": [
+        "sign-in@mail.staging.educateos.io"
+      ]
+    }
+  ],
   "vars": {
     "NATHAN_ISSUER": "https://id-stg.educateos.io",
     "NATHAN_APP_ORIGIN": "https://staging.educateos.io",
