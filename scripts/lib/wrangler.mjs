@@ -1,6 +1,7 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { resolve, join } from "node:path";
 
 export function stripJsonc(input) {
   let result = "", inside = false, escaped = false, line = false, block = false;
@@ -74,4 +75,37 @@ export async function createGeneratedConfig(cfg, databaseId, gateway = null, stu
   const path = ".nathan/generated/" + wrangler.name + ".json";
   await writeFile(path, JSON.stringify(wrangler, null, 2) + "\n", { mode: 0o600 });
   return path;
+}
+
+// Wrangler's ordinary deploy may upload a version and then activate it in a second API call.
+// A single script PUT retains omitted live bindings at the same instant that the code goes live.
+export async function uploadIdentityWorker(api, configPath, config, verify, run = runCli) {
+  const folder = await mkdtemp(join(tmpdir(), "nathan-worker-upload-"));
+  try {
+    const bundle = join(folder, "worker.multipart");
+    await run("npx", ["wrangler", "deploy", "--config", configPath, "--dry-run", "--outfile", bundle]);
+    const bytes = await readFile(bundle);
+    const header = bytes.subarray(0, 128).toString("latin1").match(/^--([A-Za-z0-9'-]{1,70})\r\n/);
+    if (!header) throw Error("Wrangler produced an invalid multipart Worker bundle");
+    const form = await new Response(bytes, { headers: { "Content-Type": "multipart/form-data; boundary=" + header[1] } }).formData();
+    const current = await verify();
+    await activateIdentityWorker(api, config, form, current.workerMigrationTag);
+    await run("npx", ["wrangler", "triggers", "deploy", "--config", configPath]);
+  } finally { await rm(folder, { recursive: true, force: true }); }
+}
+
+export async function activateIdentityWorker(api, config, form, currentTag) {
+  const part = form.get("metadata");
+  const metadata = JSON.parse(typeof part === "string" ? part : await part.text());
+  if (!form.has(metadata.main_module) || !["plain_text", "json", "secret_text"].every(t => metadata.keep_bindings?.includes(t)))
+    throw Error("Worker bundle must retain live variables and secrets");
+  const chain = config.migrations ?? [];
+  const index = currentTag ? chain.findIndex(step => step.tag === currentTag) : -1;
+  if (currentTag && index < 0) throw Error("Live Durable Object migration tag is unknown to this installer");
+  const pending = chain.slice(index + 1);
+  delete metadata.migrations;
+  if (pending.length) metadata.migrations = { ...(currentTag ? { old_tag: currentTag } : {}),
+    new_tag: pending.at(-1).tag, steps: pending.map(({ tag, ...operations }) => operations) };
+  form.set("metadata", new File([JSON.stringify(metadata)], "metadata.json", { type: "application/json" }));
+  await api.request("/accounts/" + api.accountId + "/workers/scripts/" + config.name, { method: "PUT", body: form });
 }

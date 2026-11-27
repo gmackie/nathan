@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { inspectStudioInstallation, rememberStudioDatabase, reconcileStudioAccess, studioAccessOptions, verifyIdentityUpload } from "../scripts/lib/studio-access.mjs";
 import { validateConfig, buildPlan } from "../scripts/lib/config.mjs";
-import { createGeneratedConfig } from "../scripts/lib/wrangler.mjs";
+import { activateIdentityWorker, createGeneratedConfig } from "../scripts/lib/wrangler.mjs";
 import { publishIdentityDomains } from "../scripts/lib/cloudflare.mjs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -199,4 +199,26 @@ test("last pre-upload discovery rejects inventory errors and an intervening Acce
   await assert.rejects(verifyIdentityUpload(api, legacy, false, "db", null), /resources changed/);
   api.workers = async () => ({ error: "cannot enumerate" });
   await assert.rejects(verifyIdentityUpload(api, legacy, true, "db", null), /inventory/);
+});
+
+
+test("script upload retains live bindings during activation and applies only outstanding Durable Object migrations", async () => {
+  const worker = { name: "private-test", migrations: [{ tag: "one", new_sqlite_classes: ["One"] }, { tag: "two", new_classes: ["Two"] }] };
+  const sends = [];
+  const api = { accountId: "example", async request(path, init) {
+    assert.equal(path, "/accounts/example/workers/scripts/private-test");
+    assert.equal(init.method, "PUT");
+    sends.push(JSON.parse(await init.body.get("metadata").text()));
+  }};
+  const form = new FormData();
+  form.set("metadata", JSON.stringify({ main_module: "index.js", keep_bindings: ["json", "plain_text", "secret_text"], migrations: { stale: true } }));
+  form.set("index.js", new File(["export default {}"], "index.js"));
+  await activateIdentityWorker(api, worker, form, "one");
+  assert.deepEqual(sends[0].migrations, { old_tag: "one", new_tag: "two", steps: [{ new_classes: ["Two"] }] });
+  await activateIdentityWorker(api, worker, form, "two");
+  assert.equal(sends[1].migrations, undefined);
+  await activateIdentityWorker(api, worker, form, null);
+  assert.deepEqual(sends[2].migrations.steps, [{ new_sqlite_classes: ["One"] }, { new_classes: ["Two"] }]);
+  await assert.rejects(activateIdentityWorker(api, worker, form, "newer"), /unknown/);
+  assert.equal(sends.length, 3);
 });

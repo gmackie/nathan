@@ -207,10 +207,13 @@ export async function verifyIdentityUpload(api, cfg, previouslyPresent, database
       (current.existingDatabase?.uuid ?? current.existingDatabase?.id) !== databaseId)
     throw Error("Installation resources changed before upload; review the deployment plan");
   await inspectStudioInstallation(api, cfg, current);
-  if (studio) {
-    const verified = await reconcileStudioAccess(api, cfg);
-    if (verified.bindings?.NATHAN_ACCESS_AUD !== studio.bindings.NATHAN_ACCESS_AUD ||
-        verified.bindings.NATHAN_ACCESS_TEAM_DOMAIN !== studio.bindings.NATHAN_ACCESS_TEAM_DOMAIN)
-      throw Error("Studio Access changed during installation; review the deployment plan");
-  }
+  if (studio) await verifyStudioPolicy(api, cfg, studio);
+  return current;
+}
+
+export async function verifyStudioPolicy(api, cfg, studio) {
+  const verified = await reconcileStudioAccess(api, cfg);
+  if (verified.bindings?.NATHAN_ACCESS_AUD !== studio.bindings.NATHAN_ACCESS_AUD ||
+      verified.bindings.NATHAN_ACCESS_TEAM_DOMAIN !== studio.bindings.NATHAN_ACCESS_TEAM_DOMAIN)
+    throw Error("Studio Access changed during installation; review the deployment plan");
 }

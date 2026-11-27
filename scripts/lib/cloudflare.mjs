@@ -7,11 +7,12 @@ export class CloudflareClient {
   async request(path, options = {}) {
     if (!path.startsWith("/") || path.startsWith("//")) throw Error("Invalid API path");
     const headers = { Authorization: "Bearer " + this.token };
-    if (options.body) headers["Content-Type"] = "application/json";
+    const multipart = options.body instanceof FormData;
+    if (options.body && !multipart) headers["Content-Type"] = "application/json";
     const response = await fetch("https://api.cloudflare.com/client/v4" + path, {
       method: options.method || "GET",
       headers,
-      body: options.body ? JSON.stringify(options.body) : undefined,
+      body: multipart ? options.body : options.body ? JSON.stringify(options.body) : undefined,
       redirect: "error",
       signal: AbortSignal.timeout(12000)
     });
@@ -201,10 +202,12 @@ export async function inspectDeployment(client, cfg) {
   const conflicts = records.length
     ? hostnameConflicts(records, await client.workerDomains(), cfg.hostname, cfg.name + "-auth")
     : [];
+  const authWorker = workers.find(w => w.id === cfg.name + "-auth");
   return {
     accountId: client.accountId,
     zone: zone ? { id: zone.id, name: zone.name, status: zone.status } : null,
-    existingAuthWorker: workers.some(w => w.id === cfg.name + "-auth"),
+    existingAuthWorker: Boolean(authWorker),
+    workerMigrationTag: authWorker?.migration_tag ?? null,
     existingDatabase,
     dnsConflicts: conflicts.map(x => ({ type: x.type, name: x.name, id: x.id })),
     warning: !zone ? "No active Cloudflare zone for requested hostname" : null

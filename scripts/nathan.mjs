@@ -4,12 +4,12 @@ import { randomBytes } from "node:crypto";
 import { loadConfig, validateConfig, buildPlan } from "./lib/config.mjs";
 import { CloudflareClient, inspectDeployment, ensureIdpSecrets, publishIdentityDomains } from "./lib/cloudflare.mjs";
 import { ask, yesNo, secretPrompt } from "./lib/prompts.mjs";
-import { discoverWrangler, runCli, createGeneratedConfig } from "./lib/wrangler.mjs";
+import { discoverWrangler, runCli, createGeneratedConfig, uploadIdentityWorker } from "./lib/wrangler.mjs";
 import { providerCommand } from "./lib/provider-wizard.mjs";
 import { PROVIDER_IDS } from "../src/shared/providers.mjs";
 import { protectCommand } from "./lib/protect-wizard.mjs";
 import { rbacCommand } from "./lib/rbac-wizard.mjs";
-import { inspectStudioHostname, inspectStudioInstallation, rememberStudioDatabase, reconcileStudioAccess, verifyIdentityUpload } from "./lib/studio-access.mjs";
+import { inspectStudioHostname, inspectStudioInstallation, rememberStudioDatabase, reconcileStudioAccess, verifyIdentityUpload, verifyStudioPolicy } from "./lib/studio-access.mjs";
 import { adminCommand } from "./lib/admin-wizard.mjs";
 import { domainCommand } from "./lib/domain-wizard.mjs";
 import { realmForLoginHostname } from "../src/shared/realm.mjs";
@@ -184,20 +184,19 @@ async function provision(forceApply=false) {
   const stagingPath = ".nathan/generated/" + liveConfig.name + ".staging.json";
   const stagingConfig = { ...liveConfig, keep_vars: true, routes:[], workers_dev:false, preview_urls:false };
   await writeFile(stagingPath,JSON.stringify(stagingConfig,null,2)+"\n",{mode:0o600});
-  if (!snapshot.existingAuthWorker) {
-    await runCli("npx",["wrangler","deploy","--config",stagingPath,"--dry-run"]);
-    await verifyIdentityUpload(client, cfg, false, dbId, studio);
-    await runCli("npx",["wrangler","deploy","--config",stagingPath]);
-  }
+  const upload = () => uploadIdentityWorker(client, stagingPath, stagingConfig,
+    () => verifyIdentityUpload(client, cfg, snapshot.existingAuthWorker, dbId, studio));
+  if (!snapshot.existingAuthWorker) await upload();
   await ensureIdpSecrets(client, liveConfig.name, async name => {
     const value = name === "BETTER_AUTH_SECRET"
       ? (await secretPrompt("BETTER_AUTH_SECRET (blank to generate securely)")) || randomBytes(48).toString("base64url")
       : randomBytes(32).toString("base64url");
     await runCli("npx",["wrangler","secret","put",name,"--config",stagingPath],{input:value});
   });
-  if (snapshot.existingAuthWorker) {
-    await verifyIdentityUpload(client, cfg, true, dbId, studio);
-    await runCli("npx",["wrangler","deploy","--config",stagingPath]);
+  if (snapshot.existingAuthWorker) await upload();
+  if (studio) {
+    await inspectStudioHostname(client, cfg);
+    await verifyStudioPolicy(client, cfg, studio);
   }
   await publishIdentityDomains(client, cfg, liveConfig.routes.map(route => route.pattern));
   console.log("Identity Worker published. Configure a trusted login provider and verify OIDC discovery.");
