@@ -102,8 +102,11 @@ export async function inspectStudioInstallation(api, cfg, snapshot, folder = ".n
   if (!db || (settings && (!settings.bindings.some(b => b.name === "DB" && b.type === "d1" && b.id === db) ||
       !settings.bindings.some(b => b.name === "NATHAN_ISSUER" && b.type === "plain_text" && b.text === "https://" + cfg.hostname))))
     throw Error("Existing Worker issuer or database differs from the installation");
-  // A creation receipt is the only ownership evidence before this CLI seeds an owner.
-  if ((!settings || !ownerEmail) && await createdStudioDatabase(cfg, db, folder)) {
+  // The CLI seed names the account and owner, which may be shared across installations.
+  // Without a matching Worker, the creation receipt binds this database to this issuer.
+  if (!settings || !ownerEmail) {
+    if (!await createdStudioDatabase(cfg, db, folder))
+      throw Error("Existing database requires this installation's creation receipt");
     const schema = await api.queryDatabase(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='nathan_bootstrap_status'");
     if (!schema.length && !settings) return;
     const seed = await api.queryDatabase(db, "SELECT id FROM nathan_bootstrap_status LIMIT 1");

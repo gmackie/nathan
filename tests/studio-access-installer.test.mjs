@@ -177,6 +177,25 @@ test("only the recorded D1 can resume an interrupted Studio bootstrap before its
   } finally { await rm(folder, { recursive: true }); }
 });
 
+test("a D1-only retry requires this issuer's receipt even when a sibling has the same account and owner", async () => {
+  const folder = await mkdtemp(join(tmpdir(), "nathan-seeded-retry-"));
+  const snapshot = { existingAuthWorker: false, existingDatabase: { uuid: "db" } };
+  const owner = { state: "pending", admin_email: cfg.adminEmails[0], cloudflare_user_id: "cli:" + cfg.accountId };
+  const api = { accountId: cfg.accountId, zones: async () => [{ id: "zone", name: "example.com", status: "active" }],
+    request: async () => [], dnsRecords: async () => [], queryDatabase: async (_id, sql) =>
+      sql.includes("sqlite_master") ? [{ name: "nathan_bootstrap_status" }] : sql.startsWith("SELECT id FROM") ? [{ id: "primary" }] : [owner] };
+  try {
+    await rememberStudioDatabase(cfg, "db", folder);
+    for (const config of [cfg, { ...cfg, studioAccess: undefined }]) {
+      await inspectStudioInstallation(api, config, snapshot, folder);
+      await assert.rejects(inspectStudioInstallation(api, { ...config, hostname: "other.example.com" }, snapshot, folder), /receipt/);
+      await assert.rejects(inspectStudioInstallation(api, config, { ...snapshot, existingDatabase: { uuid: "other" } }, folder), /receipt/);
+    }
+    owner.cloudflare_user_id = "other";
+    await assert.rejects(inspectStudioInstallation(api, cfg, snapshot, folder), /owner/);
+  } finally { await rm(folder, { recursive: true }); }
+});
+
 test("publishes only missing exact domains with all replacement flags disabled", async () => {
   const worker = cfg.name + "-auth";
   const zone = { id: "zone", name: "example.com", status: "active" };
