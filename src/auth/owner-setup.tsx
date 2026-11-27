@@ -17,12 +17,12 @@ function form(email: string, owner: Owner, error?: string, status = 200) {
   const title = owner.verified ? "Management email verified" : owner.id ? "Verify your management email" : "Set up your administrator account";
   return renderPage(<AuthLayout title={title}>
     {owner.verified ? <>
-      <p>Your email is verified. Complete the installer's administrator promotion for {email}, then sign in to enroll your passkey and authenticator app.</p>
+      <p>Your email is verified. Complete the installer's administrator promotion for {email}, then sign in to enroll your administrator authenticator.</p>
       <Link href="/sign-in">Continue to sign-in</Link>
     </> : <form method="post" action={path} className="nathan-stack">
       <p>{owner.id
         ? <>Open the verification link sent to {email}. To send it again, enter the password you chose.</>
-        : <>Choose a password for {email}. You will verify your mailbox before enrolling a passkey and authenticator app.</>}</p>
+        : <>Choose a password for {email}. You will verify your mailbox before setting up your administrator authenticator.</>}</p>
       <Label htmlFor="owner-password"><span id="owner-password-label">Management password</span></Label>
       <Input id="owner-password" aria-labelledby="owner-password-label" name="password" type="password" minLength={8} maxLength={128}
         required autoComplete={owner.id ? "current-password" : "new-password"} />
@@ -34,7 +34,7 @@ function form(email: string, owner: Owner, error?: string, status = 200) {
 
 /** A CLI/installer-approved owner signs up through Better Auth's existing admission and
  * verification flow. Only the installer can promote the verified account; enrollment and
- * recent passkey evidence remain mandatory for privileged access. */
+ * recent authenticator verification remain mandatory for privileged access. */
 export async function ownerSetup(request: Request, env: AuthEnv): Promise<Response | null> {
   const url = new URL(request.url);
   const onSetup = url.pathname === path;

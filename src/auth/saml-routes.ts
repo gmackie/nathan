@@ -16,7 +16,7 @@ function reject(status:number,reason:string,code?:string){
   return Response.json(code?{error:reason,code}:{error:reason},{status,headers:noStore});
 }
 /** Admin-readable reason from Nathan's validators; never database internals. */
-function reason(e:unknown,fallback:string){
+export function reason(e:unknown,fallback:string){
   const m=e instanceof Error?e.message:"";
   return m&&m.length<=300&&!/D1_|SQLITE|SQL|stack/i.test(m)?m:fallback;
 }
@@ -103,6 +103,9 @@ const POSTS:Record<string,(auth:any,env:AuthEnv,headers:Headers,body:any,actor:s
   "/studio/api/saml/certificates/retire":(_a,env,_h,body,actor)=>retireSamlCertificate(env,body,actor)
 };
 
+/** Safe message for a refused SAML admin change (shared with the Studio API v1). */
+export const SAML_ADMIN_REFUSAL="SAML change rejected. Check the metadata, confirmation text and domain verification.";
+
 /** Nathan-owned SAML routes outside /api/auth. Returns null when not matched. */
 export async function handleSamlRoutes(request:Request,env:AuthEnv,auth:any,url:URL):Promise<Response|null>{
   const issuer=new URL(env.NATHAN_ISSUER);
@@ -120,7 +123,7 @@ export async function handleSamlRoutes(request:Request,env:AuthEnv,auth:any,url:
     const headers=new Headers({"Content-Type":"application/json",Origin:issuer.origin});
     for(const h of ["Cookie","User-Agent","cf-connecting-ip"]){const v=request.headers.get(h);if(v)headers.set(h,v);}
     return auth.handler(new Request(issuer.origin+"/api/auth/sign-in/sso",{method:"POST",headers,
-      body:JSON.stringify({providerId:target.providerId,providerType:target.type,callbackURL:"/",
+      body:JSON.stringify({providerId:target.providerId,providerType:target.type,callbackURL:body.studio===true && !body.oauth_query?"/studio":"/",
         // Better Auth verifies the signature; anything else is dropped.
         ...(typeof body?.oauth_query==="string"&&body.oauth_query.length<=6144?{oauth_query:body.oauth_query}:{})})}));
   }
@@ -134,14 +137,14 @@ export async function handleSamlRoutes(request:Request,env:AuthEnv,auth:any,url:
       return reject(403,"Cross-origin request denied");
     if(request.headers.get("Content-Type")?.split(";")[0]!=="application/json")return reject(415,"JSON required");
     const session=await adminSession(auth,env,request);
-    if(!session)return reject(403,"Verified administrator with completed enrollment and recent passkey required");
+    if(!session)return reject(403,"Verified administrator with completed enrollment and recent authenticator verification required");
     const raw=await request.text();
     if(raw.length>160_000)return reject(413,"SAML configuration too large");
     let body:any;try{body=JSON.parse(raw)}catch{return reject(400,"Invalid JSON")}
     try{
       return Response.json(await op(auth,env,request.headers,body,session.user.id),{headers:noStore});
     }catch(e){
-      return reject(409,reason(e,"SAML change rejected. Check the metadata, confirmation text and domain verification."));
+      return reject(409,reason(e,SAML_ADMIN_REFUSAL));
     }
   }
   return null;

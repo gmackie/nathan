@@ -213,8 +213,9 @@ async function uploadWorker(
     // NATH-49: email sign-in codes stay off until the operator configures Resend and enables them.
     {type:"plain_text",name:"ENABLE_EMAIL_OTP",text:"false"},
     {type:"plain_text",name:"NATHAN_SECURITY_PROFILE",text:job.profile},
+    {type:"plain_text",name:"NATHAN_ADMIN_STEPUP_METHOD",text:job.profile==="standard"?"passkey-or-totp":"passkey"},
     {type:"plain_text",name:"NATHAN_BOOTSTRAP_REQUIRED",text:"true"},
-    {type:"plain_text",name:"NATHAN_ADMIN_STEPUP_REQUIRED",text:job.profile==="business"?"true":"false"},
+    {type:"plain_text",name:"NATHAN_ADMIN_STEPUP_REQUIRED",text:"true"},
     {type:"plain_text",name:"ENTERPRISE_SSO",text:job.enterprise_sso===1?"true":"false"}
   ];
   if(provider){
@@ -403,7 +404,9 @@ export async function advanceInstall(env:InstallerEnv,session:ApiSession,id:stri
           [rows[0].id]);
         if(state.length!==1 || state[0].state!=="complete") {
           actionRequired={kind:"security-enrollment",url:"https://"+job.hostname+"/security?setup=admin",
-            instruction:"Initial admin identity verified. Enroll a passkey and a TOTP authenticator, save backup codes, then click Complete initial setup on Nathan's security page and resume the wizard."};
+            instruction:job.profile==="standard"
+              ?"Open the security page and enroll a passkey (recommended) or an authenticator app. Complete initial setup, then resume this wizard."
+              :"Enroll a passkey and an authenticator app, save your recovery codes, and complete initial setup. Then resume this wizard."};
         }
         else if(job.scim_requested===1 && job.scim_connection_id && job.scim_domain){
           // Optional first connection uses the same D1 credential schema as Identity

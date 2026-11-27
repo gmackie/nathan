@@ -1,6 +1,7 @@
 import { liveAdminSession } from "./email-sign-in-policy";
-import type { AuthEnv } from "./env";
+import {allowsAdminTotp, type AuthEnv} from "./env";
 import { audit } from "./admin-service";
+import { recentAdminTotp } from "./admin-totp";
 import {effectiveAdminPolicy} from "./security-policy";
 
 type BootstrapRow={
@@ -10,8 +11,8 @@ type BootstrapRow={
 };
 export type AdminEnrollment={
   configured:boolean;state:string;isInitialAdmin:boolean;
-  passkeys:number;totpVerified:boolean;ready:boolean;
-  requirements:{passkey:boolean;totp:boolean};
+  passkeys:number;totpVerified:boolean;ready:boolean;requiresPasskeyRecovery:boolean;
+  requirements:{passkey:boolean;totp:boolean;recentPasskey:boolean};
   warning:string;
 };
 async function row(env:AuthEnv):Promise<BootstrapRow|null>{
@@ -28,8 +29,8 @@ async function enrollment(env:AuthEnv,userId:string) {
 export async function bootstrapStatus(env:AuthEnv,userId:string):Promise<AdminEnrollment>{
   const b=await row(env);
   if(!b)return {configured:false,state:"missing",isInitialAdmin:false,
-    passkeys:0,totpVerified:false,ready:false,
-    requirements:{passkey:true,totp:true},
+    passkeys:0,totpVerified:false,ready:false,requiresPasskeyRecovery:false,
+    requirements:{passkey:true,totp:true,recentPasskey:true},
     warning:"Admin bootstrap has not been initialized; use the Cloudflare-authorized wizard or recovery CLI."};
   const methods=await enrollment(env,userId);
   const policy=await effectiveAdminPolicy(env);
@@ -37,8 +38,8 @@ export async function bootstrapStatus(env:AuthEnv,userId:string):Promise<AdminEn
   const ready=business?(methods.passkeys>0 && methods.totpVerified)
     :(methods.passkeys>0 || methods.totpVerified);
   return {configured:true,state:b.state,isInitialAdmin:b.admin_user_id===userId,
-    ...methods,ready,
-    requirements:{passkey:business,totp:business},
+    ...methods,ready,requiresPasskeyRecovery:allowsAdminTotp(env) && policy.requireRecentPasskey && methods.passkeys===0,
+    requirements:{passkey:business,totp:business,recentPasskey:policy.requireRecentPasskey},
     warning:"Authenticator enrollment is a setup prerequisite, not proof that the current federated login satisfied a NIST AAL or step-up challenge."};
 }
 export async function completeBootstrap(env:AuthEnv,userId:string) {
@@ -47,7 +48,7 @@ export async function completeBootstrap(env:AuthEnv,userId:string) {
   if(!b||b.admin_user_id!==userId||b.state==="pending")
     throw Error("Only the verified installer-approved initial administrator may complete setup");
   const status=await bootstrapStatus(env,userId);
-  if(!status.ready)throw Error("Enroll the required passkey and authenticator before completing initial setup");
+  if(!status.ready)throw Error("Enroll the authenticator required by your installation before completing initial setup");
   const changed=await env.DB.prepare(
     "UPDATE nathan_bootstrap_status SET state='complete',completed_at=unixepoch(),updated_at=unixepoch() "+
     "WHERE id='primary' AND admin_user_id=? AND state IN ('identity_verified','authenticators_enrolled','complete')"
@@ -66,27 +67,55 @@ async function recentPasskey(env:AuthEnv,userId:string,sessionId?:string) {
   return Boolean(stepup);
 }
 
-/** The first enrollment is part of operator setup. Adding another key or replacing an
- * enrolled TOTP requires the administrator to authenticate with an existing passkey first. */
+const adminFactorChanges = new Set([
+  "/passkey/generate-register-options", "/passkey/verify-registration", "/passkey/delete-passkey",
+  "/two-factor/enable", "/two-factor/disable", "/two-factor/get-totp-uri", "/two-factor/generate-backup-codes"
+]);
+
+/** After the first factor, verify an already enrolled factor before revealing or changing
+ * credentials. Existing dedicated passkey-only installations keep their enrollment policy. */
 export async function mayEnrollManagementFactor(env: AuthEnv, userId: string, sessionId: string, path: string) {
-  const registerKey = path === "/passkey/generate-register-options" || path === "/passkey/verify-registration";
-  if (!registerKey && path !== "/two-factor/enable") return true;
+  if (!adminFactorChanges.has(path)) return true;
   const existing = await enrollment(env, userId);
-  const alreadyEnrolled = registerKey ? existing.passkeys > 0 : existing.totpVerified;
-  return !alreadyEnrolled || await recentPasskey(env, userId, sessionId);
+  if (!allowsAdminTotp(env)) {
+    const registerKey = path === "/passkey/generate-register-options" || path === "/passkey/verify-registration";
+    const replacing = registerKey ? existing.passkeys > 0 : path === "/two-factor/enable" && existing.totpVerified;
+    return !replacing || await recentPasskey(env, userId, sessionId);
+  }
+  const policy = await effectiveAdminPolicy(env);
+  if (policy.requireRecentPasskey && !existing.passkeys) return false;
+  if (!existing.passkeys && !existing.totpVerified)
+    return path === "/two-factor/enable" || path === "/passkey/generate-register-options" || path === "/passkey/verify-registration";
+  if (existing.passkeys && await recentPasskey(env, userId, sessionId)) {
+    // Also arm the SQL guard for shared installations that tightened before migration 0029.
+    if (policy.requireRecentPasskey && path === "/passkey/delete-passkey")
+      await env.DB.prepare("UPDATE nathan_security_overrides SET protect_last_passkey=1 WHERE id='primary' AND require_recent_admin_passkey=1 AND protect_last_passkey=0").run();
+    return true;
+  }
+  return !policy.requireRecentPasskey && existing.totpVerified && await recentAdminTotp(env, userId, sessionId);
 }
 
-/** For any administrator, enrollment is required before privileged UI and MCP. */
-export async function mayAdminister(env:AuthEnv,userId:string,sessionId?:string) {
-  if (!await liveAdminSession(env.DB, userId, sessionId)) return false;
-  if(env.NATHAN_BOOTSTRAP_REQUIRED!=="true")return true; // Legacy manual installations
+/**
+ * Why an administrator may or may not use privileged UI and MCP right now. `mayAdminister` is this
+ * decision as a boolean; the Studio API (src/auth/studio-api/authorize.ts) also reports the reason.
+ */
+export type AdminAssurance={ok:true}|{ok:false;reason:"session_required"|"enrollment_incomplete"|"step_up_required"};
+export async function adminAssurance(env:AuthEnv,userId:string,sessionId?:string):Promise<AdminAssurance> {
+  if (!await liveAdminSession(env.DB, userId, sessionId)) return {ok:false,reason:"session_required"};
+  if(env.NATHAN_BOOTSTRAP_REQUIRED!=="true")return {ok:true}; // Legacy manual installations
   const b=await row(env);
-  if(!b||b.state!=="complete")return false;
+  if(!b||b.state!=="complete")return {ok:false,reason:"enrollment_incomplete"};
   const auth=await enrollment(env,userId);
   const policy=await effectiveAdminPolicy(env);
   const enrolled=policy.requireBothAuthenticators
     ?(auth.passkeys>0&&auth.totpVerified):(auth.passkeys>0||auth.totpVerified);
-  if(!enrolled)return false;
-  if(!policy.requireRecentPasskey)return true;
-  return recentPasskey(env,userId,sessionId);
+  if(!enrolled)return {ok:false,reason:"enrollment_incomplete"};
+  if (!policy.requireRecentVerification) return {ok:true};
+  if (auth.passkeys && await recentPasskey(env, userId, sessionId)) return {ok:true};
+  if (!policy.requireRecentPasskey && auth.totpVerified && sessionId && await recentAdminTotp(env, userId, sessionId)) return {ok:true};
+  return {ok:false,reason:"step_up_required"};
+}
+/** For any administrator, enrollment is required before privileged UI and MCP. */
+export async function mayAdminister(env:AuthEnv,userId:string,sessionId?:string) {
+  return (await adminAssurance(env,userId,sessionId)).ok;
 }

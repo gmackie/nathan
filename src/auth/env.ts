@@ -18,6 +18,7 @@ export interface AuthEnv {
   NATHAN_SECURITY_PROFILE?: "standard"|"business"|"high";
   NATHAN_BOOTSTRAP_REQUIRED?: string;
   NATHAN_ADMIN_STEPUP_REQUIRED?: string;
+  NATHAN_ADMIN_STEPUP_METHOD?: string;
   NATHAN_ISSUER: string;
   /** Dedicated installation. NATHAN_ISSUER is the management origin; the named app binding serves NATHAN_APP_ORIGIN. */
   NATHAN_APP_ORIGIN?: string;
@@ -55,4 +56,11 @@ export interface AuthEnv {
   RESEND_API_KEY?: string;
   EMAIL_FROM?: string;
   NATHAN_PAIRWISE_SECRET?: string;
+}
+
+/** Shared issuers allow self-service enrollment before an administrator grant. */
+export function allowsAdminTotp(env: AuthEnv) {
+  return env.NATHAN_APP_ID === undefined && env.NATHAN_APP_ORIGIN === undefined &&
+    env.NATHAN_SECURITY_PROFILE === "standard" && env.NATHAN_ADMIN_STEPUP_REQUIRED === "true" &&
+    env.NATHAN_ADMIN_STEPUP_METHOD === "passkey-or-totp";
 }

@@ -46,7 +46,7 @@ const REPLAY_SECONDS = 900;
 /** A next key must be published this long before it may sign (SPs cache metadata). */
 export const ROTATION_OVERLAP_SECONDS = 86400;
 const noStore = { "Cache-Control": "no-store" };
-const STUDIO_MAX_BYTES = 160_000;
+export const STUDIO_MAX_BYTES = 160_000;
 
 type Attribute = { name: string; source: string };
 type Certificate = { der: string; sha256: string; notAfter: string };
@@ -576,7 +576,7 @@ export async function applySamlIdpOperation(env: AuthEnv, body: any, actor: stri
 }
 
 /** Admin-readable refusals only; never database internals. */
-function publicMessage(e: unknown) {
+export function publicMessage(e: unknown) {
   if (e instanceof AdminRefusal) return e.message;
   const m = e instanceof Error ? e.message : "";
   return m && m.length <= 300 && !/D1_|SQLITE|SQL|constraint|stack/i.test(m) ? m : "SAML application change rejected";
@@ -590,7 +590,7 @@ async function studio(request: Request, env: AuthEnv, auth: any): Promise<Respon
   } else if (request.method !== "GET") return reject(405, "Method not allowed");
   const session = await auth.api.getSession({ headers: request.headers });
   if (!await isAdminPrincipal(session?.user, env) || !await mayAdminister(env, session!.user.id, session!.session.id))
-    return reject(403, "Verified administrator with completed enrollment and recent passkey required");
+    return reject(403, "Verified administrator with completed enrollment and recent authenticator verification required");
   if (request.method === "GET") return Response.json(await samlIdpOverview(env), { headers: noStore });
   const raw = await readBoundedText(request, STUDIO_MAX_BYTES);
   if (raw === null) return reject(413, "Request too large");

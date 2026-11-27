@@ -32,7 +32,7 @@ import type { ComponentType } from "react";
 import { authenticatorLink } from "../../../auth/totp-link.mjs";
 import { ICON_SIZE, ICON_WEIGHT, iconA11y } from "../../icon-defaults.ts";
 import {
-  addPasskey, bootstrapStatus, completeBootstrap, enableTotp, listPasskeys, passkeyStepUp, qrPath, totpQr, totpSecret,
+  api, addPasskey, bootstrapStatus, completeBootstrap, enableTotp, listPasskeys, passkeyStepUp, qrPath, totpQr, totpSecret,
   verifyTotp, type BootstrapStatus, type PasskeySummary, type QrMatrix
 } from "./security-client.ts";
 
@@ -102,17 +102,44 @@ function Status({ id, message }: { id: string; message: Message | null }) {
   );
 }
 
-const yesNo = (v: unknown) => v ? "yes" : "no";
+function adminInstruction(status: BootstrapStatus) {
+  if (status.requiresSignIn) return "Sign in with your administrator identity provider, password, or passkey to continue.";
+  if (status.requiresPasskeyRecovery) return status.isInitialAdmin
+    ? "Contact your Cloudflare account operator for initial owner recovery. This installation requires a registered passkey."
+    : "Ask an administrator to revoke your administrator grant. Then enroll a passkey on your Security page and ask them to restore your grant.";
+  if (status.sessionReady) return "Your administrator session is verified.";
+  if (!status.ready && status.requirements?.totp && !status.totpVerified) return "This installation requires both a passkey and an authenticator app. Set up your authenticator app below.";
+  if ((!status.ready && status.requirements?.passkey) || (status.requirements?.recentPasskey && !status.passkeys))
+    return "Add a passkey below, then verify with it to open Studio.";
+  if (!status.ready) return "Choose a passkey (recommended) or set up an authenticator app below.";
+  if (status.state !== "complete") return status.isInitialAdmin ? "Your authenticator is enrolled. Complete initial setup to continue." : "The initial administrator needs to complete setup.";
+  if (status.requirements?.recentPasskey) return "Verify with your passkey to open Studio.";
+  return "Verify with your enrolled passkey or enter a six-digit code from your authenticator app to open Studio.";
+}
 
-function bootstrapSummary(s: BootstrapStatus): string[] {
-  return [
-    "Setup state: " + (s.state ?? "unknown"),
-    "Passkeys enrolled: " + (s.passkeys ?? 0),
-    "Authenticator app verified: " + yesNo(s.totpVerified),
-    "Both authenticators required: " + yesNo(s.requirements?.passkey && s.requirements?.totp),
-    "Ready to complete setup: " + yesNo(s.ready),
-    "This session may administer: " + yesNo(s.sessionReady)
-  ];
+function AdminSetup({ admin, busy, message, signIn, finishSetup, stepUp, checkStatus }: {
+  admin: BootstrapStatus | null; busy: boolean; message: Message | null;
+  signIn: () => void; finishSetup: () => void; stepUp: () => void; checkStatus: () => void;
+}) {
+  return (
+    <Section id="admin-setup" title="Administrator setup" icon={ShieldCheck} hidden={!admin}>
+      {admin && <p style={S.muted}>{adminInstruction(admin)}</p>}
+      <div style={S.actions}>
+        {admin?.requiresSignIn ? <Button variant="primary" disabled={busy} onClick={signIn}>Sign in for Studio</Button> : !admin?.requiresPasskeyRecovery && <>
+          {admin?.isInitialAdmin && admin.state !== "complete" && <Button id="admin-finish" variant="primary"
+            disabled={busy || !admin.ready} onClick={finishSetup}>Complete initial setup</Button>}
+          {admin?.sessionReady ? <LinkButton href="/studio" variant="primary">Open Identity Studio</LinkButton> : <>
+            {admin?.passkeys ? <Button id="admin-stepup" variant="secondary" icon={icon(Fingerprint)}
+              disabled={busy} onClick={stepUp}>Verify with passkey</Button> : <Link href="#passkeys-section">Set up a passkey</Link>}
+            {admin?.totpVerified && !admin.requirements?.recentPasskey && <Link href="#totp-code">Use an authenticator code</Link>}
+            {!admin?.totpVerified && <Link href="#totp">Set up an authenticator app</Link>}
+          </>}
+        </>}
+        <Button id="admin-status" variant="secondary" disabled={busy} onClick={checkStatus}>Refresh status</Button>
+      </div>
+      <Status id="admin-setup-status" message={message} />
+    </Section>
+  );
 }
 
 function QrCode({ matrix }: { matrix: QrMatrix }) {
@@ -125,12 +152,71 @@ function QrCode({ matrix }: { matrix: QrMatrix }) {
   );
 }
 
+function TotpSetup({ totpUri, qr, recoveryCodes, hydrated, copy }: {
+  totpUri: string | null; qr: QrMatrix | null | "unavailable"; recoveryCodes: string[] | null;
+  hydrated: boolean; copy: (text: string, done: string) => void;
+}) {
+  const { secret, grouped } = totpSecret(totpUri ?? "");
+  // The only href the built-in authenticator link ever gets.
+  const openHref = totpUri ? authenticatorLink(totpUri) : null;
+
+  return (
+    <div id="totp-enroll" hidden={totpUri == null} style={{ display: totpUri == null ? "none" : "grid", gap: 14 }}>
+      <h3 style={S.subheading}>Setting up on this phone?</h3>
+      <div style={{ display: "grid", gap: 8 }}>
+        <p style={{ margin: 0 }}><strong>Google Authenticator, Microsoft Authenticator or 1Password:</strong></p>
+        <div style={S.actions}>
+          <Button id="totp-copy" type="button" variant="primary" icon={icon(Copy)} disabled={!hydrated || !secret}
+            onClick={() => copy(secret, "Key copied. Paste it into your authenticator app, then enter the 6-digit code.")}>Copy key</Button>
+        </div>
+        <ol style={S.steps}>
+          <li>In the app tap <strong>+</strong>.</li>
+          <li>Choose <strong>Enter a setup key</strong> and paste the key.</li>
+          <li>Keep <strong>Time based</strong> and save.</li>
+        </ol>
+      </div>
+      <div style={{ display: "grid", gap: 8 }}>
+        <p style={{ margin: 0 }}><strong>Your phone&apos;s built-in code app:</strong></p>
+        <div style={S.actions}>
+          <LinkButton id="totp-open" variant="secondary" href={openHref ?? undefined} hidden={!openHref}>Add to built-in authenticator</LinkButton>
+        </div>
+        <p style={S.muted}>On iPhone this always opens Apple Passwords (iOS sends these links there, not to Google Authenticator); on Android it opens the app that handles authenticator links.</p>
+      </div>
+      <p style={{ margin: 0 }}>Then come back to this page and enter the 6-digit code the app shows.</p>
+
+      <h3 style={S.subheading}>On a computer?</h3>
+      <p style={S.muted}>Scan this code with your phone&apos;s authenticator app (or Yubico Authenticator for a YubiKey):</p>
+      <div id="totp-qr" role="img" aria-label="TOTP enrollment QR code" style={S.qr}>
+        {qr && qr !== "unavailable" ? <QrCode matrix={qr} /> : null}
+        {qr === "unavailable" ? <span>QR code unavailable; enter the key manually.</span> : null}
+      </div>
+      <div style={{ display: "grid", gap: 4 }}>
+        <span>Setup key (time-based, 6 digits):</span>
+        <code id="totp-secret" style={S.mono}>{grouped}</code>
+      </div>
+
+      <div id="totp-setup" style={{ display: recoveryCodes ? "grid" : "none", gap: 8 }}>
+        <Banner variant="alert" icon={icon(Key)} title="Recovery codes"
+          description="Shown once. Copy them to a secure offline manager now; each code works one time." />
+        {recoveryCodes && recoveryCodes.length ? (
+          <>
+            <ol id="recovery-codes" style={S.codes}>{recoveryCodes.map(c => <li key={c}>{c}</li>)}</ol>
+            <div style={S.actions}>
+              <Button id="recovery-copy" type="button" variant="secondary" icon={icon(Copy)} disabled={!hydrated}
+                onClick={() => copy(recoveryCodes.join("\n"), "Recovery codes copied. Store them offline.")}>Copy recovery codes</Button>
+            </div>
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export function SecurityPanel(_props: SecurityPanelProps) {
   const [hydrated, setHydrated] = useState(false);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  // Administrator onboarding: shown only to the verified initial administrator.
-  const [isInitialAdmin, setIsInitialAdmin] = useState(false);
+  const [admin, setAdmin] = useState<BootstrapStatus | null>(null);
   const [adminMessage, setAdminMessage] = useState<Message | null>(null);
 
   // TOTP
@@ -146,43 +232,51 @@ export function SecurityPanel(_props: SecurityPanelProps) {
   const [passkeys, setPasskeys] = useState<PasskeySummary[] | null>(null);
 
   const showBootstrap = (s: BootstrapStatus) => {
-    setIsInitialAdmin(Boolean(s.isInitialAdmin));
-    setAdminMessage({ tone: s.ready ? "success" : "info", text: s.warning || "Administrator setup requirements", lines: bootstrapSummary(s) });
+    setAdmin(s.isAdministrator ? s : null);
+    setAdminMessage(null);
   };
 
   useEffect(() => {
     setHydrated(true);
-    void bootstrapStatus().then(showBootstrap).catch(() => setIsInitialAdmin(false));
+    void bootstrapStatus().then(showBootstrap).catch(() => setAdmin(null));
   }, []);
 
-  const run = (name: string, work: () => Promise<void>) => async () => {
-    setBusy(name);
-    try { await work(); } finally { setBusy(null); }
+  const run = (work: () => Promise<void>) => async () => {
+    setBusy(true);
+    try { await work(); } finally { setBusy(false); }
   };
-  const disabled = (name: string) => !hydrated || busy === name;
+  const disabled = !hydrated || busy;
+  const factorsDisabled = disabled || admin?.requiresPasskeyRecovery || admin?.requiresSignIn;
 
-  const checkStatus = run("admin-status", async () => {
+  const signIn = run(async () => {
+    try { await api("/sign-out", "POST", {}); location.assign("/sign-in?setup=admin"); }
+    catch (e) { setAdminMessage({ tone: "error", text: errorText(e) }); }
+  });
+
+  const checkStatus = run(async () => {
     try { showBootstrap(await bootstrapStatus()); }
     catch (e) { setAdminMessage({ tone: "error", text: errorText(e) }); }
   });
 
-  const finishSetup = run("admin-finish", async () => {
-    if (!confirm("I securely saved my recovery codes and tested my passkey/TOTP enrollment. Complete admin setup?")) return;
+  const finishSetup = run(async () => {
+    if (!confirm(admin?.totpVerified ? "Have you saved your authenticator recovery codes? Complete administrator setup?" : "Complete administrator setup with your passkey?")) return;
     try {
-      const body = await completeBootstrap();
-      setAdminMessage({ tone: "success", text: body.note || "Initial admin setup is complete." });
+      await completeBootstrap();
+      showBootstrap(await bootstrapStatus());
     } catch (e) { setAdminMessage({ tone: "error", text: errorText(e) }); }
   });
 
-  const stepUp = run("admin-stepup", async () => {
+  const stepUp = run(async () => {
     try {
       await passkeyStepUp();
       setAdminMessage({ tone: "success", text: "Fresh passkey authentication completed. Redirecting to Identity Studio." });
-      location.assign("/studio");
+      const status = await bootstrapStatus();
+      if (status.sessionReady) location.assign("/studio");
+      else showBootstrap(status);
     } catch (e) { setAdminMessage({ tone: "error", text: errorText(e) }); }
   });
 
-  const startTotp = run("totp-start", async () => {
+  const startTotp = run(async () => {
     try {
       const result = await enableTotp(password);
       const uri = String(result.totpURI || "");
@@ -194,30 +288,29 @@ export function SecurityPanel(_props: SecurityPanelProps) {
     } catch (e) { setTotpMessage({ tone: "error", text: errorText(e) }); }
   });
 
-  const { secret, grouped } = totpSecret(totpUri ?? "");
-  // The only href the built-in authenticator link ever gets.
-  const openHref = totpUri ? authenticatorLink(totpUri) : null;
-
   const copy = async (text: string, done: string) => {
     try { await navigator.clipboard.writeText(text); setTotpMessage({ tone: "success", text: done }); }
     catch { setTotpMessage({ tone: "error", text: "Copy failed; select the text and copy it manually." }); }
   };
 
-  const verify = run("totp-verify", async () => {
+  const verify = run(async () => {
     try {
       await verifyTotp(code);
-      setTotpMessage({ tone: "success", text: "TOTP enrollment verified." });
+      setCode("");
+      setTotpMessage({ tone: "success", text: "Authenticator code verified." });
+      if (admin) showBootstrap(await bootstrapStatus());
     } catch (e) { setTotpMessage({ tone: "error", text: errorText(e) }); }
   });
 
-  const enrol = (name: string, attachment: "" | "cross-platform", label: string) => run(name, async () => {
+  const enrol = (attachment: "" | "cross-platform", label: string) => run(async () => {
     try {
       await addPasskey(attachment, label);
       setPasskeyMessage({ tone: "success", text: label + " successfully enrolled." });
+      if (admin) showBootstrap(await bootstrapStatus());
     } catch (e) { setPasskeyMessage({ tone: "error", text: errorText(e) }); }
   });
 
-  const list = run("passkey-list", async () => {
+  const list = run(async () => {
     try {
       const keys = await listPasskeys();
       setPasskeys(keys);
@@ -227,108 +320,43 @@ export function SecurityPanel(_props: SecurityPanelProps) {
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16 }}>
-      <Section id="admin-setup" title="Initial administrator onboarding" icon={ShieldCheck} hidden={!isInitialAdmin}>
-        <p style={S.muted}>
-          Only the verified, Cloudflare-authorized initial administrator can complete this step. Enroll your authenticators below,
-          save recovery codes, and return here to confirm setup.
-        </p>
-        <div style={S.actions}>
-          <Button id="admin-finish" variant="primary" disabled={disabled("admin-finish")} onClick={finishSetup}>Complete initial setup</Button>
-          <Button id="admin-status" variant="secondary" disabled={disabled("admin-status")} onClick={checkStatus}>Check setup requirements</Button>
-        </div>
-        <p style={S.muted}>
-          For business-profile installations, signing in through a social/enterprise provider is not enough to administer Nathan.
-          After enrolling a passkey, use a fresh passkey authentication ceremony to unlock sensitive operations for 15 minutes.
-        </p>
-        <div style={S.actions}>
-          <Button id="admin-stepup" variant="secondary" style={S.wrapButton} icon={icon(Fingerprint)} disabled={disabled("admin-stepup")} onClick={stepUp}>
-            Reauthenticate with passkey for administration
-          </Button>
-        </div>
-        <Status id="admin-setup-status" message={adminMessage} />
-        <p style={{ margin: 0 }}><Link href="/studio">Continue to Identity Studio once complete</Link></p>
-      </Section>
+      <AdminSetup admin={admin} busy={disabled} message={adminMessage} signIn={signIn}
+        finishSetup={finishSetup} stepUp={stepUp} checkStatus={checkStatus} />
 
       <Section id="totp" title="Authenticator application (TOTP)" icon={DeviceMobile}>
         <p style={S.muted}>
-          Enroll and confirm an authenticator app, then store backup codes offline. Nathan only asserts MFA assurance after an actual
-          verified authentication ceremony; enabling TOTP alone does not force MFA on social logins.
+          {admin?.totpVerified ? "Enter the current six-digit code from your authenticator app." : "Connect your authenticator app, save the recovery codes, and enter a six-digit code to verify setup."}
         </p>
-        <TextField id="password" label="Password (if this account uses password login)">
-          <Input id="password" aria-label="Password" type="password" autoComplete="current-password"
-            value={password} onChange={e => setPassword(e.currentTarget.value)} />
-        </TextField>
-        <div style={S.actions}>
-          <Button id="totp-start" variant="primary" disabled={disabled("totp-start")} onClick={startTotp}>Start TOTP enrollment</Button>
-        </div>
+        {!admin?.totpVerified && <>
+          <TextField id="password" label="Password (if this account uses password login)">
+            <Input id="password" aria-label="Password" type="password" autoComplete="current-password"
+              value={password} onChange={e => setPassword(e.currentTarget.value)} />
+          </TextField>
+          <div style={S.actions}>
+            <Button id="totp-start" variant="primary" disabled={factorsDisabled} onClick={startTotp}>Set up authenticator app</Button>
+          </div>
+        </>}
 
-        <div id="totp-enroll" hidden={totpUri == null} style={{ display: totpUri == null ? "none" : "grid", gap: 14 }}>
-          <h3 style={S.subheading}>Setting up on this phone?</h3>
-          <div style={{ display: "grid", gap: 8 }}>
-            <p style={{ margin: 0 }}><strong>Google Authenticator, Microsoft Authenticator or 1Password:</strong></p>
-            <div style={S.actions}>
-              <Button id="totp-copy" type="button" variant="primary" icon={icon(Copy)} disabled={!hydrated || !secret}
-                onClick={() => copy(secret, "Key copied. Paste it into your authenticator app, then enter the 6-digit code.")}>Copy key</Button>
-            </div>
-            <ol style={S.steps}>
-              <li>In the app tap <strong>+</strong>.</li>
-              <li>Choose <strong>Enter a setup key</strong> and paste the key.</li>
-              <li>Keep <strong>Time based</strong> and save.</li>
-            </ol>
-          </div>
-          <div style={{ display: "grid", gap: 8 }}>
-            <p style={{ margin: 0 }}><strong>Your phone&apos;s built-in code app:</strong></p>
-            <div style={S.actions}>
-              <LinkButton id="totp-open" variant="secondary" href={openHref ?? undefined} hidden={!openHref}>Add to built-in authenticator</LinkButton>
-            </div>
-            <p style={S.muted}>On iPhone this always opens Apple Passwords (iOS sends these links there, not to Google Authenticator); on Android it opens the app that handles authenticator links.</p>
-          </div>
-          <p style={{ margin: 0 }}>Then come back to this page and enter the 6-digit code the app shows.</p>
-
-          <h3 style={S.subheading}>On a computer?</h3>
-          <p style={S.muted}>Scan this code with your phone&apos;s authenticator app (or Yubico Authenticator for a YubiKey):</p>
-          <div id="totp-qr" role="img" aria-label="TOTP enrollment QR code" style={S.qr}>
-            {qr && qr !== "unavailable" ? <QrCode matrix={qr} /> : null}
-            {qr === "unavailable" ? <span>QR code unavailable; enter the key manually.</span> : null}
-          </div>
-          <div style={{ display: "grid", gap: 4 }}>
-            <span>Setup key (time-based, 6 digits):</span>
-            <code id="totp-secret" style={S.mono}>{grouped}</code>
-          </div>
-
-          <div id="totp-setup" style={{ display: recoveryCodes ? "grid" : "none", gap: 8 }}>
-            <Banner variant="alert" icon={icon(Key)} title="Recovery codes"
-              description="Shown once. Copy them to a secure offline manager now; each code works one time." />
-            {recoveryCodes && recoveryCodes.length ? (
-              <>
-                <ol id="recovery-codes" style={S.codes}>{recoveryCodes.map(c => <li key={c}>{c}</li>)}</ol>
-                <div style={S.actions}>
-                  <Button id="recovery-copy" type="button" variant="secondary" icon={icon(Copy)} disabled={!hydrated}
-                    onClick={() => copy(recoveryCodes.join("\n"), "Recovery codes copied. Store them offline.")}>Copy recovery codes</Button>
-                </div>
-              </>
-            ) : null}
-          </div>
-        </div>
+        <TotpSetup totpUri={totpUri} qr={qr} recoveryCodes={recoveryCodes} hydrated={hydrated} copy={copy} />
 
         <TextField id="totp-code" label="Six-digit code">
           <Input id="totp-code" aria-label="Six-digit code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}"
             maxLength={6} value={code} onChange={e => setCode(e.currentTarget.value)} />
         </TextField>
         <div style={S.actions}>
-          <Button id="totp-verify" variant="primary" disabled={disabled("totp-verify")} onClick={verify}>Verify TOTP</Button>
+          <Button id="totp-verify" variant="primary" disabled={factorsDisabled || !/^[0-9]{6}$/.test(code)} onClick={verify}>Verify code</Button>
         </div>
         <Status id="totp-status" message={totpMessage} />
       </Section>
 
       <Section id="passkeys-section" title="Passkeys" icon={Fingerprint}>
-        <p style={S.muted}>Use a platform authenticator or hardware security key. Passkeys may be used as a login method.</p>
+        <p style={S.muted}>We recommend a passkey for phishing-resistant sign-in. Use your device’s screen lock or a hardware security key.</p>
         <div style={S.actions}>
-          <Button id="passkey-add" variant="primary" icon={icon(Fingerprint)} disabled={disabled("passkey-add")}
-            onClick={enrol("passkey-add", "", "Passkey")}>Add passkey</Button>
-          <Button id="security-key-add" variant="secondary" icon={icon(Usb)} disabled={disabled("security-key-add")}
-            onClick={enrol("security-key-add", "cross-platform", "Security key")}>Add security key (YubiKey)</Button>
-          <Button id="passkey-list" variant="ghost" icon={icon(ListBullets)} disabled={disabled("passkey-list")}
+          <Button id="passkey-add" variant="primary" icon={icon(Fingerprint)} disabled={factorsDisabled}
+            onClick={enrol("", "Passkey")}>Add passkey</Button>
+          <Button id="security-key-add" variant="secondary" icon={icon(Usb)} disabled={factorsDisabled}
+            onClick={enrol("cross-platform", "Security key")}>Add security key (YubiKey)</Button>
+          <Button id="passkey-list" variant="ghost" icon={icon(ListBullets)} disabled={factorsDisabled}
             onClick={list}>List my passkeys</Button>
         </div>
         <Status id="passkeys" message={passkeyMessage} />
