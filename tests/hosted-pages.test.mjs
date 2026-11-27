@@ -84,7 +84,7 @@ test("sign-in island keeps the signed oauth_query on every request and follows d
     assert.ok(js.includes(path), path);
   assert.equal((js.match(/oauth_query/g) ?? []).length, 1, "one withOAuth helper");
   assert.match(js, /typeof \w+\.url\s*===?\s*"string"/, "land(d) follows the resumed authorization's d.url");
-  assert.match(js, /errorCallbackURL:\s*"\/sign-in"/);
+  assert.match(js, /errorCallbackURL:[^,}]*"\/sign-in"/);
   assert.match(js, /credentials:\s*"same-origin"/);
   assert.doesNotMatch(js, /innerHTML|insertAdjacentHTML|document\.write/, "messages use textContent");
   const chunks = ui.UI_MANIFEST.islands["sign-in"].imports.map(asset => readFileSync(".nathan/ui-assets" + asset.src, "utf8"));

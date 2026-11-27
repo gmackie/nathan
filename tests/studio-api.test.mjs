@@ -183,6 +183,24 @@ test("Studio registers a public native client with its exact callback", async ()
   assert.deepEqual(t.created[0].redirect_uris, [redirectUri]);
 });
 
+test("only opted-in Standard accepts authenticator-app proof and only for its live factor and non-email session", async () => {
+  const t = setup();
+  t.run("INSERT INTO nathan_admin_totp_assurance(factor_id,code_tag,user_id,session_id) VALUES('tf1',X'01',?,'s-nostep')", ADMIN.id);
+  const status = async () => (await call(t, "/clients", { session: "nostep" })).status;
+  t.env.NATHAN_ADMIN_STEPUP_METHOD = "passkey-or-totp";
+  assert.equal(await status(), 403, "Business");
+  t.env.NATHAN_SECURITY_PROFILE = "standard";
+  delete t.env.NATHAN_ADMIN_STEPUP_METHOD;
+  assert.equal(await status(), 403, "existing passkey-only deployment");
+  t.env.NATHAN_ADMIN_STEPUP_METHOD = "passkey-or-totp";
+  assert.equal(await status(), 200);
+  t.run("INSERT INTO nathan_email_otp_sessions(session_id,user_id,hosted) VALUES('s-nostep',?,1)", ADMIN.id);
+  assert.equal(await status(), 403, "email-origin session");
+  t.run("DELETE FROM nathan_email_otp_sessions");
+  t.run("DELETE FROM twoFactor WHERE id='tf1'");
+  assert.equal(await status(), 403, "removed authenticator");
+});
+
 test("a stepped-up administrator reads every GET route with the ok envelope", async () => {
   const t = setup();
   const query = { "/rbac": "?app=demo", "/rbac/group": "?id=team", "/scim/connection": "?id=acme", "/scim/outbox": "?id=acme" };

@@ -59,7 +59,7 @@ export async function authorizeStudioRequest(request: Request, env: AuthEnv, aut
     return deny(403, "not_admin", "Sign in with an administrator authenticator");
   if (!assurance.ok)
     return assurance.reason === "step_up_required"
-      ? deny(403, "step_up_required", "Verify with your passkey again; privileged actions need a passkey sign-in in the last 15 minutes")
+      ? deny(403, "step_up_required", "Verify your administrator authenticator again to continue. Verification lasts 15 minutes.")
       : deny(403, "enrollment_incomplete", "Complete admin setup and authenticator enrollment first");
   return { ok: true, principal: { kind: "nathan-admin", userId: user.id, email: user.email, sessionId } };
 }

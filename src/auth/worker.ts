@@ -110,13 +110,14 @@ async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Pr
   if (url.pathname === "/sign-in" && request.method === "GET") {
     // With a session and no signed authorization to resume (an app's /oauth2/authorize adds `sig`),
     // there is nothing to sign in to; a prompt=login authorization keeps its signed query and the page.
+    const studioSignIn = !url.searchParams.has("sig") && url.searchParams.get("setup") === "admin";
     if (!url.searchParams.has("sig")) {
       const session = await auth.api.getSession({ headers: request.headers });
-      if (session?.user?.id) return Response.redirect(issuer.origin + "/security", 302);
+      if (session?.user?.id) return Response.redirect(issuer.origin + (studioSignIn ? "/studio" : "/security"), 302);
     }
     const providers = enabledProviderIds(socialProviders);
     const query = signedOAuthQuery(url.search);
-    const emailHref = emailEnabled(env) ? "/sign-in/email" + (query ? "?" + query : "") : undefined;
+    const emailHref = !studioSignIn && emailEnabled(env) ? "/sign-in/email" + (query ? "?" + query : "") : undefined;
     return signInPage(providers, env.ENABLE_PASSWORD === "true", env.ENTERPRISE_SSO === "true",
       { issuer: issuer.host, error: url.searchParams.get("error"), emailHref });
   }
@@ -139,8 +140,11 @@ async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Pr
   if(url.pathname==="/security/api/bootstrap" && request.method==="GET"){
     const session=await auth.api.getSession({headers:request.headers});
     if(!session?.user?.id)return reject(401,"Authenticated session required");
-    return Response.json({...await bootstrapStatus(env,session.user.id),
-      sessionReady:await mayAdminister(env,session.user.id,session.session.id)},
+    const owner = await isBootstrapOwner(session.user, env);
+    const admin = owner || await isAdmin(session, env);
+    return Response.json({...await bootstrapStatus(env,session.user.id), isAdministrator:admin,
+      requiresSignIn:admin && await isEmailSession(env.DB, session.session.id),
+      sessionReady:admin && await mayAdminister(env,session.user.id,session.session.id)},
       {headers:{"Cache-Control":"no-store"}});
   }
   if(url.pathname==="/security/api/bootstrap/complete" && request.method==="POST"){
@@ -151,12 +155,17 @@ async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Pr
     if (await isEmailSession(env.DB, session!.session.id)) return reject(403,"Sign in with an existing authenticator to complete administrator enrollment");
     try{
       return Response.json(await completeBootstrap(env,session!.user.id),{headers:{"Cache-Control":"no-store"}});
-    }catch{return reject(409,"Complete verified passkey and TOTP enrollment first");}
+    }catch{return reject(409,"Finish the required authenticator enrollment first");}
   }
 
   if (url.pathname === "/studio" && request.method === "GET") {
     const session = await auth.api.getSession({ headers: request.headers });
-    if (!await isAdmin(session, env)) return reject(403, "Admin session required");
+    if (!session && request.headers.get("Accept")?.includes("text/html"))
+      return Response.redirect(issuer.origin + "/sign-in?setup=admin", 302);
+    if (!await isAdmin(session, env)) {
+      if (session && await isBootstrapOwner(session.user, env)) return Response.redirect(issuer.origin + "/security?setup=admin", 302);
+      return reject(403, "Admin session required");
+    }
     if (!await mayAdminister(env,session!.user.id,session!.session.id)) return Response.redirect(issuer.origin+"/security?setup=admin",302);
     return studioPage(session!.user.email);
   }
@@ -346,7 +355,7 @@ async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Pr
     const session=await auth.api.getSession({headers:request.headers});
     if(!await isAdminPrincipal(session?.user,env)||
        !await mayAdminister(env,session!.user.id,session!.session.id))
-      return reject(403,"Completed admin enrollment and recent passkey authentication required");
+      return reject(403,"Complete admin enrollment and verify your authenticator");
     const raw=await request.text();
     if(raw.length>4096)return reject(413,"Admin operation too large");
     let body:any;try{body=JSON.parse(raw)}catch{return reject(400,"Invalid JSON")}

@@ -96,7 +96,7 @@ These connection settings come on top of the installation's account admission po
 - **Just-in-time**: Nathan creates an account on first sign-in, only for an address inside the connection's verified domain (or its subdomains). Its email is marked verified, because the domain owner proved DNS control and its IdP signed the address.
 - An IdP can never create or link an account for an address outside its verified domain.
 - Existing accounts are linked only when the domain is verified and the address is inside it. The IdP's own `email_verified`-style attributes are never trusted.
-- A SAML session never grants admin rights on its own. Administrators still need Nathan enrollment and a recent passkey step-up.
+- A SAML session never grants admin rights on its own. Administrators still need Nathan enrollment and the verification required by their installation.
 
 Change the mode with **Apply provisioning mode** and `CONFIRM PROVISIONING <mode> <id>`.
 

@@ -300,7 +300,7 @@ export async function grantAdmin(env:AuthEnv,input:any,actor:string){
     ]);
     await audit(env,actor,"admin_grant",id,"succeeded");
     return {id,email,enabled:true,
-      note:"Administrator added. Their current session must satisfy enrollment and recent passkey step-up before access."};
+      note:"Administrator added. Their session must meet the installation's enrollment and verification requirements."};
   }catch(e){await audit(env,actor,"admin_grant",id,"failed");throw e;}
 }
 export async function revokeAdminGrant(env:AuthEnv,input:any,actor:string){

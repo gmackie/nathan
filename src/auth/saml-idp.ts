@@ -590,7 +590,7 @@ async function studio(request: Request, env: AuthEnv, auth: any): Promise<Respon
   } else if (request.method !== "GET") return reject(405, "Method not allowed");
   const session = await auth.api.getSession({ headers: request.headers });
   if (!await isAdminPrincipal(session?.user, env) || !await mayAdminister(env, session!.user.id, session!.session.id))
-    return reject(403, "Verified administrator with completed enrollment and recent passkey required");
+    return reject(403, "Verified administrator with completed enrollment and recent authenticator verification required");
   if (request.method === "GET") return Response.json(await samlIdpOverview(env), { headers: noStore });
   const raw = await readBoundedText(request, STUDIO_MAX_BYTES);
   if (raw === null) return reject(413, "Request too large");

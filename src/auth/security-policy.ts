@@ -2,9 +2,13 @@ import type {AuthEnv} from "./env";
 import {audit} from "./admin-service";
 
 export type EffectiveAdminPolicy={
-  profile:string;requireBothAuthenticators:boolean;requireRecentPasskey:boolean;
+  profile:string;requireBothAuthenticators:boolean;requireRecentPasskey:boolean;requireRecentVerification:boolean;
   source:{deployment:string;runtimeTightened:boolean};
 };
+export function allowsAdminTotp(env: AuthEnv) {
+  return env.NATHAN_SECURITY_PROFILE === "standard" && env.NATHAN_ADMIN_STEPUP_REQUIRED === "true" &&
+    env.NATHAN_ADMIN_STEPUP_METHOD === "passkey-or-totp";
+}
 export async function effectiveAdminPolicy(env:AuthEnv):Promise<EffectiveAdminPolicy>{
   const row=await env.DB.prepare(
     "SELECT require_both_admin_authenticators AS both,require_recent_admin_passkey AS recent "+
@@ -13,7 +17,8 @@ export async function effectiveAdminPolicy(env:AuthEnv):Promise<EffectiveAdminPo
   return {
     profile:env.NATHAN_SECURITY_PROFILE||"business",
     requireBothAuthenticators:env.NATHAN_SECURITY_PROFILE!=="standard"||row?.both===1,
-    requireRecentPasskey:env.NATHAN_ADMIN_STEPUP_REQUIRED==="true"||row?.recent===1,
+    requireRecentPasskey:(env.NATHAN_ADMIN_STEPUP_REQUIRED==="true" && !allowsAdminTotp(env))||row?.recent===1,
+    requireRecentVerification:env.NATHAN_ADMIN_STEPUP_REQUIRED==="true"||row?.recent===1,
     source:{deployment:env.NATHAN_SECURITY_PROFILE||"business",runtimeTightened:row?.both===1||row?.recent===1}
   };
 }
