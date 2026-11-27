@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { normalizeEmail } from "../../src/auth/admission-policy.mjs";
-import { zoneForHostname } from "./cloudflare.mjs";
+import { inspectDeployment, zoneForHostname } from "./cloudflare.mjs";
 import { validateDomainName } from "../../src/shared/realm.mjs";
 
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
@@ -196,4 +196,21 @@ export async function reconcileStudioAccess(api, cfg, apply = false) {
     } };
   }
   return { operation, hostname, identityProviderId, emails, methods };
+}
+
+/** Repeat discovery at publication. Wrangler also retains unspecified live variables on upload,
+ * so a concurrent Access activation cannot lose its three bindings to a legacy manifest. */
+export async function verifyIdentityUpload(api, cfg, previouslyPresent, databaseId, studio) {
+  const current = await inspectDeployment(api, cfg);
+  if (!current.zone || current.zone.status !== "active" || current.dnsConflicts.length ||
+      current.existingAuthWorker !== previouslyPresent ||
+      (current.existingDatabase?.uuid ?? current.existingDatabase?.id) !== databaseId)
+    throw Error("Installation resources changed before upload; review the deployment plan");
+  await inspectStudioInstallation(api, cfg, current);
+  if (studio) {
+    const verified = await reconcileStudioAccess(api, cfg);
+    if (verified.bindings?.NATHAN_ACCESS_AUD !== studio.bindings.NATHAN_ACCESS_AUD ||
+        verified.bindings.NATHAN_ACCESS_TEAM_DOMAIN !== studio.bindings.NATHAN_ACCESS_TEAM_DOMAIN)
+      throw Error("Studio Access changed during installation; review the deployment plan");
+  }
 }

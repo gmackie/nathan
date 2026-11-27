@@ -192,6 +192,8 @@ export async function inspectDeployment(client, cfg) {
   const [zones, workers, existingDatabase] = await Promise.all([
     client.zones(), client.workers(), client.databaseNamed(cfg.database.name)
   ]);
+  if (!Array.isArray(workers) || workers.some(w => !w || typeof w.id !== "string" || !w.id))
+    throw Error("Cannot verify the existing Worker inventory");
   const zone = zoneForHostname(zones, cfg.hostname);
   const records = zone ? await client.dnsRecords(zone.id, cfg.hostname) : [];
   // Custom-domain inventory is read only when there is something to explain, so a
@@ -202,7 +204,7 @@ export async function inspectDeployment(client, cfg) {
   return {
     accountId: client.accountId,
     zone: zone ? { id: zone.id, name: zone.name, status: zone.status } : null,
-    existingAuthWorker: Array.isArray(workers) && workers.some(w => w.id === cfg.name + "-auth"),
+    existingAuthWorker: workers.some(w => w.id === cfg.name + "-auth"),
     existingDatabase,
     dnsConflicts: conflicts.map(x => ({ type: x.type, name: x.name, id: x.id })),
     warning: !zone ? "No active Cloudflare zone for requested hostname" : null

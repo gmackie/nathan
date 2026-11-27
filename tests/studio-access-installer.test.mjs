@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { inspectStudioInstallation, rememberStudioDatabase, reconcileStudioAccess, studioAccessOptions } from "../scripts/lib/studio-access.mjs";
+import { inspectStudioInstallation, rememberStudioDatabase, reconcileStudioAccess, studioAccessOptions, verifyIdentityUpload } from "../scripts/lib/studio-access.mjs";
 import { validateConfig, buildPlan } from "../scripts/lib/config.mjs";
 import { createGeneratedConfig } from "../scripts/lib/wrangler.mjs";
 import { publishIdentityDomains } from "../scripts/lib/cloudflare.mjs";
@@ -186,4 +186,17 @@ test("publishes only missing exact domains with all replacement flags disabled",
   await publishIdentityDomains(api, cfg, [cfg.hostname, host]);
   await publishIdentityDomains(api, cfg, [cfg.hostname, host]);
   assert.equal(writes.length, 2);
+});
+
+test("last pre-upload discovery rejects inventory errors and an intervening Access cutover", async () => {
+  const legacy = { ...cfg, studioAccess: undefined };
+  const api = { accountId: cfg.accountId, databaseNamed: async () => ({ uuid: "db" }),
+    zones: async () => [{ id: "zone", name: "example.com", status: "active" }], dnsRecords: async () => [],
+    workers: async () => [{ id: cfg.name + "-auth" }], request: async () => ({ bindings: [] }) };
+  await verifyIdentityUpload(api, legacy, true, "db", null);
+  api.request = async () => ({ bindings: [{ name: "NATHAN_ADMIN_ORIGIN", type: "plain_text" }] });
+  await assert.rejects(verifyIdentityUpload(api, legacy, true, "db", null), /Restore/);
+  await assert.rejects(verifyIdentityUpload(api, legacy, false, "db", null), /resources changed/);
+  api.workers = async () => ({ error: "cannot enumerate" });
+  await assert.rejects(verifyIdentityUpload(api, legacy, true, "db", null), /inventory/);
 });

@@ -9,7 +9,7 @@ import { providerCommand } from "./lib/provider-wizard.mjs";
 import { PROVIDER_IDS } from "../src/shared/providers.mjs";
 import { protectCommand } from "./lib/protect-wizard.mjs";
 import { rbacCommand } from "./lib/rbac-wizard.mjs";
-import { inspectStudioHostname, inspectStudioInstallation, rememberStudioDatabase, reconcileStudioAccess } from "./lib/studio-access.mjs";
+import { inspectStudioHostname, inspectStudioInstallation, rememberStudioDatabase, reconcileStudioAccess, verifyIdentityUpload } from "./lib/studio-access.mjs";
 import { adminCommand } from "./lib/admin-wizard.mjs";
 import { domainCommand } from "./lib/domain-wizard.mjs";
 import { realmForLoginHostname } from "../src/shared/realm.mjs";
@@ -182,10 +182,11 @@ async function provision(forceApply=false) {
   // NATH-32: the identity Worker bundles its hashed UI assets (src/ui/assets.ts); build them now.
   await runCli(process.execPath, ["scripts/build-ui.mjs"]);
   const stagingPath = ".nathan/generated/" + liveConfig.name + ".staging.json";
-  const stagingConfig = { ...liveConfig, routes:[], workers_dev:false, preview_urls:false };
+  const stagingConfig = { ...liveConfig, keep_vars: true, routes:[], workers_dev:false, preview_urls:false };
   await writeFile(stagingPath,JSON.stringify(stagingConfig,null,2)+"\n",{mode:0o600});
   if (!snapshot.existingAuthWorker) {
     await runCli("npx",["wrangler","deploy","--config",stagingPath,"--dry-run"]);
+    await verifyIdentityUpload(client, cfg, false, dbId, studio);
     await runCli("npx",["wrangler","deploy","--config",stagingPath]);
   }
   await ensureIdpSecrets(client, liveConfig.name, async name => {
@@ -194,13 +195,10 @@ async function provision(forceApply=false) {
       : randomBytes(32).toString("base64url");
     await runCli("npx",["wrangler","secret","put",name,"--config",stagingPath],{input:value});
   });
-  if (studio) {
-    await inspectStudioInstallation(client, cfg, snapshot);
-    const verified = await reconcileStudioAccess(client, cfg);
-    if (verified.bindings?.NATHAN_ACCESS_AUD !== studio.bindings.NATHAN_ACCESS_AUD)
-      throw Error("Studio Access changed during installation. Inspect the new plan before publishing");
+  if (snapshot.existingAuthWorker) {
+    await verifyIdentityUpload(client, cfg, true, dbId, studio);
+    await runCli("npx",["wrangler","deploy","--config",stagingPath]);
   }
-  if (snapshot.existingAuthWorker) await runCli("npx",["wrangler","deploy","--config",stagingPath]);
   await publishIdentityDomains(client, cfg, liveConfig.routes.map(route => route.pattern));
   console.log("Identity Worker published. Configure a trusted login provider and verify OIDC discovery.");
 }
