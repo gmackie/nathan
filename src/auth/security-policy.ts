@@ -1,19 +1,28 @@
-import type {AuthEnv} from "./env";
+import {managementEmail, type AuthEnv} from "./env";
 import {audit} from "./admin-service";
 
 export type EffectiveAdminPolicy={
   profile:string;requireBothAuthenticators:boolean;requireRecentPasskey:boolean;
+  stepUp: "none" | "passkey" | "passkey-or-totp";
   source:{deployment:string;runtimeTightened:boolean};
 };
+export function managementAllowsTotp(env: AuthEnv) {
+  return Boolean(env[managementEmail]) && env.NATHAN_MANAGEMENT_AUTHENTICATORS === "passkey-or-totp" &&
+    env.NATHAN_SECURITY_PROFILE !== "high";
+}
 export async function effectiveAdminPolicy(env:AuthEnv):Promise<EffectiveAdminPolicy>{
   const row=await env.DB.prepare(
     "SELECT require_both_admin_authenticators AS both,require_recent_admin_passkey AS recent "+
     "FROM nathan_security_overrides WHERE id='primary' LIMIT 1"
   ).first<{both:number;recent:number}>();
+  const choice = managementAllowsTotp(env);
+  const recent = env.NATHAN_ADMIN_STEPUP_REQUIRED === "true" || row?.recent === 1;
+  const passkeyOnly = row?.recent === 1 || (recent && !choice);
   return {
     profile:env.NATHAN_SECURITY_PROFILE||"business",
-    requireBothAuthenticators:env.NATHAN_SECURITY_PROFILE!=="standard"||row?.both===1,
-    requireRecentPasskey:env.NATHAN_ADMIN_STEPUP_REQUIRED==="true"||row?.recent===1,
+    requireBothAuthenticators:(!choice && env.NATHAN_SECURITY_PROFILE!=="standard") || row?.both===1,
+    requireRecentPasskey:passkeyOnly,
+    stepUp:passkeyOnly ? "passkey" : recent ? "passkey-or-totp" : "none",
     source:{deployment:env.NATHAN_SECURITY_PROFILE||"business",runtimeTightened:row?.both===1||row?.recent===1}
   };
 }

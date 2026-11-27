@@ -68,7 +68,7 @@ async function currentCustodian(env: AuthEnv, email: string) {
 // Only the Studio and its operator sign-in, enrollment and account pages run on this host.
 const managementPaths = new Set([
   "/", "/healthz", "/studio", "/security", "/sign-in", "/sign-in/sso/start", "/api/auth/error",
-  "/security/setup-owner", "/api/auth/sign-in/social", "/api/auth/sign-in/email", "/api/auth/verify-email",
+  "/security/setup-owner", "/security/management-password", "/api/auth/sign-in/social", "/api/auth/sign-in/email", "/api/auth/verify-email",
   "/api/auth/sign-out", "/api/auth/get-session", "/api/auth/sso/callback",
   "/api/auth/passkey/generate-register-options", "/api/auth/passkey/verify-registration",
   "/api/auth/passkey/generate-authenticate-options", "/api/auth/passkey/verify-authentication", "/api/auth/passkey/list-user-passkeys",

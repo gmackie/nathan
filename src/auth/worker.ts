@@ -11,12 +11,13 @@ import { normalizeEmail } from "./admission-policy.mjs";
 import { createAuth } from "./instance";
 import {isRawManagementEndpoint} from "./management-boundary.mjs";
 import { managementIngress } from "./management-ingress";
+import { managementPassword, managementPasswordPath, passwordGrant } from "./management-password";
 import { loadSocialCredentials, providerStatus, upsertSocialProvider, setSocialProviderEnabled } from "./provider-store";
 import { enabledProviderIds, beginProviderTest, completeProviderTest } from "./provider-store";
 import { providerTestResultPage } from "./provider-ui.mjs";
 import {bootstrapStatus,completeBootstrap,mayAdminister} from "./bootstrap";
 import { totpQrResponse } from "./totp-qr";
-import {effectiveAdminPolicy,tightenAdminPolicy} from "./security-policy";
+import {effectiveAdminPolicy,managementAllowsTotp,tightenAdminPolicy} from "./security-policy";
 import {handleScim} from "./scim/gateway";
 import {listScimConnections,createScimConnection,setScimConnectionEnabled,rotateScimToken} from "./scim/admin";
 import {samlProtocolGate,handleSamlRoutes} from "./saml-routes";
@@ -24,10 +25,11 @@ export { NathanAppAuth } from "./app-auth";
 export {NathanScimDirectory} from "./scim/directory";
 export { NathanAppProvisioner } from "./app-provisioning";
 import { studioPage } from "./ui";
+import { directoryPageSize, usersPage, type OpenInvite } from "../ui/pages/users/UsersPage";
 import { signInPage, consentPage } from "./hosted-pages.tsx";
 import { securityPage } from "./security-ui";
 import { loadVerifiedRealm, listRealmClients,registerRealmClient,registerRealmClientsBatch,updateRealmClientStatus } from "./domain-realm";
-import type { AuthEnv } from "./env";
+import { managementEmail, type AuthEnv } from "./env";
 import { scopedApplication, outOfScope, type BindingProps } from "./app-binding";
 import pluginCatalog from "../../plugins/catalog.json";
 import { handleMcp, protectedResourceMetadata } from "./mcp";
@@ -77,6 +79,7 @@ async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Pr
   }
   const socialProviders=await loadSocialCredentials(env);
   const auth = createAuth(env,socialProviders);
+  if (url.pathname === managementPasswordPath) return managementPassword(request,env,auth);
   // NATH-14: authorization server for remote MCP servers, consent and MCP connections (src/auth/mcp-oauth.ts).
   if (isMcpOAuthPath(url.pathname)) return handleMcpOAuth(request, env, auth);
   if (url.pathname === "/mcp") return handleMcp(request,env,auth);
@@ -96,20 +99,23 @@ async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Pr
     // A signed-in browser with nothing to resume lands on its account page; sending it to
     // /sign-in looped every successful sign-in back to the sign-in page.
     const session = await auth.api.getSession({ headers: request.headers });
-    return Response.redirect(issuer.origin + (session?.user?.id ? "/security" : "/sign-in"), 302);
+    if (!session?.user?.id) return Response.redirect(issuer.origin + "/sign-in", 302);
+    if (env[managementEmail]) return Response.redirect(issuer.origin + "/studio/users", 302);
+    return Response.redirect(issuer.origin + "/security", 302);
   }
   if (url.pathname === "/sign-in" && request.method === "GET") {
     // With a session and no signed authorization to resume (an app's /oauth2/authorize adds `sig`),
     // there is nothing to sign in to; a prompt=login authorization keeps its signed query and the page.
     if (!url.searchParams.has("sig")) {
       const session = await auth.api.getSession({ headers: request.headers });
-      if (session?.user?.id) return Response.redirect(issuer.origin + "/security", 302);
+      if (session?.user?.id) return Response.redirect(issuer.origin + (env[managementEmail] ? "/" : "/security"), 302);
     }
     const providers = enabledProviderIds(socialProviders);
     const query = signedOAuthQuery(url.search);
     const emailHref = emailEnabled(env) ? "/sign-in/email" + (query ? "?" + query : "") : undefined;
     return signInPage(providers, env.ENABLE_PASSWORD === "true", env.ENTERPRISE_SSO === "true",
-      { issuer: issuer.host, error: url.searchParams.get("error"), emailHref });
+      { issuer: issuer.host, error: url.searchParams.get("error"), emailHref, managementAccount: env[managementEmail],
+        managementPasswordHref:await passwordGrant(env) ? managementPasswordPath : undefined });
   }
   if (url.pathname === "/consent" && request.method === "GET") {
     const { secret } = await auth.$context;
@@ -130,8 +136,11 @@ async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Pr
   if(url.pathname==="/security/api/bootstrap" && request.method==="GET"){
     const session=await auth.api.getSession({headers:request.headers});
     if(!session?.user?.id)return reject(401,"Authenticated session required");
-    return Response.json({...await bootstrapStatus(env,session.user.id),
-      sessionReady:await mayAdminister(env,session.user.id,session.session.id)},
+    const status = await bootstrapStatus(env,session.user.id);
+    const administrator = await isAdmin(session,env);
+    return Response.json({...status, managementHost:Boolean(env[managementEmail]), managementTotp:managementAllowsTotp(env),
+      isAdministrator:administrator || status.isInitialAdmin,
+      sessionReady:administrator && await mayAdminister(env,session.user.id,session.session.id)},
       {headers:{"Cache-Control":"no-store"}});
   }
   if(url.pathname==="/security/api/bootstrap/complete" && request.method==="POST"){
@@ -142,13 +151,28 @@ async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Pr
     if (await isEmailSession(env.DB, session!.session.id)) return reject(403,"Sign in with an existing authenticator to complete administrator enrollment");
     try{
       return Response.json(await completeBootstrap(env,session!.user.id),{headers:{"Cache-Control":"no-store"}});
-    }catch{return reject(409,"Complete verified passkey and TOTP enrollment first");}
+    }catch{return reject(409,"Complete the required authenticator enrollment first");}
   }
 
-  if (url.pathname === "/studio" && request.method === "GET") {
+  if ((url.pathname === "/studio" || url.pathname === "/studio/users") && request.method === "GET") {
     const session = await auth.api.getSession({ headers: request.headers });
-    if (!await isAdmin(session, env)) return reject(403, "Admin session required");
+    if (!session && env[managementEmail]) return Response.redirect(issuer.origin + "/sign-in", 302);
+    if (!await isAdmin(session, env)) {
+      if (env[managementEmail] && await isBootstrapOwner(session?.user,env)) return Response.redirect(issuer.origin+"/security?setup=admin",302);
+      return reject(403, "Admin session required");
+    }
     if (!await mayAdminister(env,session!.user.id,session!.session.id)) return Response.redirect(issuer.origin+"/security?setup=admin",302);
+    if (url.pathname === "/studio/users") {
+      const query = (url.searchParams.get("q") ?? "").trim();
+      const page = url.searchParams.get("page") ?? "1";
+      if (query.length > 254 || !/^[1-9]\d{0,5}$/.test(page)) return reject(400,"Invalid directory search");
+      const [users, invites] = await Promise.all([
+        listUsers(env,query,(Number(page)-1)*directoryPageSize,directoryPageSize+1),
+        env.DB.prepare("SELECT id,email,expires_at AS expiresAt FROM nathan_invitations WHERE uses=0 AND revoked_at IS NULL " +
+          "AND expires_at>unixepoch() AND instr(lower(email),lower(?))>0 ORDER BY created_at DESC,id LIMIT 51").bind(query).all<OpenInvite>()
+      ]);
+      return usersPage(users,invites.results,session!.user.id,query,Number(page),env.NATHAN_APP_ID === "classcheck");
+    }
     return studioPage(session!.user.email);
   }
   if (["/studio/api/clients", "/studio/api/status", "/studio/api/plugins", "/studio/api/audit", "/studio/api/apps", "/studio/api/sso", "/studio/api/users", "/studio/api/realm", "/studio/api/realm/clients", "/studio/api/providers", "/studio/api/scim/connections", "/studio/api/admins", "/studio/api/security-policy"].includes(url.pathname) && request.method === "GET") {
@@ -183,7 +207,9 @@ async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Pr
       catch{return reject(503,"Cannot load domain realm clients")}
     }
     if (url.pathname === "/studio/api/users") {
-      return Response.json({users:await listUsers(env)},{headers:{"Cache-Control":"no-store"}});
+      const query = (url.searchParams.get("q") ?? "").trim();
+      if (query.length>254) return reject(400,"Search is too long");
+      return Response.json({users:await listUsers(env,query)},{headers:{"Cache-Control":"no-store"}});
     }
     if (url.pathname === "/studio/api/apps") {
       return Response.json({applications:await listApplications(env)},{headers:{"Cache-Control":"no-store"}});
@@ -347,7 +373,7 @@ async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Pr
     const session=await auth.api.getSession({headers:request.headers});
     if(!await isAdminPrincipal(session?.user,env)||
        !await mayAdminister(env,session!.user.id,session!.session.id))
-      return reject(403,"Completed admin enrollment and recent passkey authentication required");
+      return reject(403,"Complete administrator enrollment and verify your session to manage administrators");
     const raw=await request.text();
     if(raw.length>4096)return reject(413,"Admin operation too large");
     let body:any;try{body=JSON.parse(raw)}catch{return reject(400,"Invalid JSON")}

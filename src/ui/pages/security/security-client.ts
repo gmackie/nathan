@@ -8,11 +8,14 @@ export interface BootstrapStatus {
   configured?: boolean;
   state?: string;
   isInitialAdmin?: boolean;
+  isAdministrator?: boolean;
+  managementHost?: boolean;
+  managementTotp?: boolean;
   passkeys?: number;
   totpVerified?: boolean;
   ready?: boolean;
   sessionReady?: boolean;
-  requirements?: { passkey?: boolean; totp?: boolean };
+  requirements?: { passkey?: boolean; totp?: boolean; stepUp?: "none" | "passkey" | "passkey-or-totp" };
   warning?: string;
 }
 

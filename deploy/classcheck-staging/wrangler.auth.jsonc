@@ -35,6 +35,7 @@
     "NATHAN_SECURITY_PROFILE": "business",
     "NATHAN_BOOTSTRAP_REQUIRED": "true",
     "NATHAN_ADMIN_STEPUP_REQUIRED": "true",
+    "NATHAN_MANAGEMENT_AUTHENTICATORS": "passkey-or-totp",
     "NATHAN_INSTALL_ACTIVE": "true",
     "NATHAN_MCP_WRITE_ENABLED": "false",
     "ENABLE_PASSWORD": "true",

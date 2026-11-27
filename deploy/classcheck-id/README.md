@@ -5,7 +5,7 @@
 | Staging | beta.classcheck.io | id-stg.classcheck.io | nathan-classcheck-stg-auth |
 | Production | classcheck.io | id.classcheck.io | nathan-classcheck-prod-auth |
 
-The ClassCheck web Worker serves end-user pages and calls its own stage’s named Nathan bindings. Cloudflare Access protects every path on the management custom domain. Nathan authenticates management independently and requires recent management-host passkey evidence for Studio. Each environment has its own D1, signing secret, configuration encryption key, confidential web registration, and Access audience.
+The ClassCheck web Worker serves end-user pages and calls its own stage’s named Nathan bindings. Cloudflare Access protects every path on the management custom domain. Nathan authenticates management independently and requires a passkey or an authenticator code verified on the management host within the last 15 minutes for Studio. Each environment has its own D1, signing secret, configuration encryption key, confidential web registration, and Access audience.
 
 ## Install and deploy
 
@@ -50,13 +50,12 @@ The ClassCheck web Worker serves end-user pages and calls its own stage’s name
 
 ## Management enrollment
 
-The single owner has a seven-day invitation for independent management password enrollment. At the management root, sign in through Cloudflare Access with the approved account and open `/security/setup-owner`. Choose a password and follow the verification email in that browser. The deployment operator can now promote the matching, verified owner using Nathan’s existing CLI. Use a local Nathan config for the same account, exact stage D1 and operator allowlist.
+1. Open the stage’s management hostname and sign in through Cloudflare Access with the invited owner address. Choose a management password and open the Nathan verification email in that browser.
+2. Sign in with that password and choose **Continue to account security**. Nathan binds the verified account to the original installer invitation and records the action. An installation with an owner account verified through another route can still use `node scripts/nathan.mjs admin promote "$stage_nathan_config_json" --apply` with its own Cloudflare account, D1 and allowlist.
+3. Choose an authenticator app or a passkey. For an app, scan the QR or copy the key and enter the six-digit code. For a passkey, register it and verify it when prompted. Choose **Complete initial setup** to open Studio. You can add a second method later. If you lose your only Studio authenticator, contact the authorized Cloudflare account operator for audited recovery. Studio accepts an enrolled method at sign-in. [Administrator recovery](../../docs/setup-lifecycle.md#authentication-policy)
+4. Open **Manage users** to search by name or email, create or revoke invitations, or change administrator access for a verified account. Additional administrators must also be admitted by the management host’s Cloudflare Access policy. On the management sign-in page they can choose **Set or reset your management password** and follow a one-time email link before enrolling their authenticator. Resetting their password ends their existing Nathan sessions. Use a separate address for someone who also needs to sign in as a ClassCheck customer. ClassCheck owns product roles and school assignments.
 
-```sh
-node scripts/nathan.mjs admin promote "$stage_nathan_config_json" --apply
-```
-
-Sign in at the management hostname, open `/security?setup=admin`, enroll a passkey and TOTP, retain the recovery codes, complete setup, and use the new passkey to open Studio. ClassCheck app roles do not grant Studio access.
+Both stage configs select `NATHAN_MANAGEMENT_AUTHENTICATORS=passkey-or-totp`. Apply identity migration `0027_management_totp.sql` before enabling this Worker. An existing Studio policy requiring both factors or a recent passkey continues to apply.
 
 ## Release and rollback
 

@@ -38,6 +38,7 @@ export function installStatements(spec, owner, secret) {
   const { stage, worker, origin, clientId } = spec;
   const app = worker.vars.NATHAN_APP_ID;
   const actor = "cli:" + worker.account_id;
+  const ownerInvitationId = randomUUID();
   const now = new Date().toISOString();
   const scopes = JSON.stringify(["openid", "email", "profile", "offline_access"]);
   // Better Auth's default storeClientSecret uses base64url(SHA-256(secret)), without padding.
@@ -56,8 +57,8 @@ export function installStatements(spec, owner, secret) {
     sql("INSERT INTO nathan_security_audit (id,actor,action,target,outcome) SELECT ?,?,'classcheck_install',?, " +
       "CASE WHEN NOT EXISTS (SELECT 1 FROM user) AND NOT EXISTS (SELECT 1 FROM nathan_applications) " +
       "AND NOT EXISTS (SELECT 1 FROM oauthClient) THEN 'succeeded' ELSE NULL END", receiptId(stage), actor, spec.name),
-    sql("INSERT INTO nathan_bootstrap_status(id,cloudflare_user_id,admin_email,state) VALUES('primary',?,?,'pending')", actor, owner),
-    sql("INSERT INTO nathan_invitations(id,email,created_by,expires_at) VALUES (?,?,?,unixepoch()+7*86400)", randomUUID(), owner, actor),
+    sql("INSERT INTO nathan_invitations(id,email,created_by,expires_at) VALUES (?,?,?,unixepoch()+7*86400)", ownerInvitationId, owner, actor),
+    sql("INSERT INTO nathan_bootstrap_status(id,cloudflare_user_id,admin_email,state,owner_invitation_id) VALUES('primary',?,?,'pending',?)", actor, owner, ownerInvitationId),
     auditStatement(actor, "invitation_create", "bootstrap-owner", "succeeded"),
     sql("INSERT INTO nathan_applications(id,hostname,roles,enabled,access_mode) VALUES (?,?,'[]',1,'approved')", app, new URL(origin).hostname),
     ...syncStatements(app, planSync(initial, manifest), actor),

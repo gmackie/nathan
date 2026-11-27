@@ -18,6 +18,7 @@
 import { Banner } from "@cloudflare/kumo/components/banner";
 import { Button } from "@cloudflare/kumo/components/button";
 import { Input } from "@cloudflare/kumo/components/input";
+import { Link } from "@cloudflare/kumo/components/link";
 import type { ReactNode } from "react";
 import { renderPage } from "../ui/render.tsx";
 import { AuthLayout } from "../ui/layouts/AuthLayout.tsx";
@@ -34,6 +35,8 @@ export interface HostedPageOptions {
 }
 
 export interface SignInOptions extends HostedPageOptions {
+  managementAccount?: string;
+  managementPasswordHref?: string;
   /** The ?error= code a refused sign-in returned with (NATH-16/19). */
   error?: string | null;
   emailHref?: string;
@@ -76,7 +79,7 @@ const needsScript = { "data-needs-script": "", disabled: true } as const;
 
 export function signInPage(providers: string[], passwordEnabled: boolean, enterpriseSso = false, opts: SignInOptions = {}): Response {
   const { appearance, issuer } = opts;
-  const primary = primaryMethod(appearance, providers, passwordEnabled);
+  const primary = opts.managementAccount && passwordEnabled ? "email" : primaryMethod(appearance, providers, passwordEnabled);
   const iconButtons = appearance?.layout.socialButtonsVariant === "iconButton";
   const error = signInErrorMessage(opts.error);
 
@@ -118,11 +121,12 @@ export function signInPage(providers: string[], passwordEnabled: boolean, enterp
     <section className="nathan-section" key="password">
       <h2 className="nathan-subtitle">Email and password</h2>
       <form className="nathan-form" method="post" action="/sign-in" data-password="" noValidate>
-        <Input label="Email" name="email" type="email" autoComplete="username" />
+        <Input label="Email" name="email" type="email" autoComplete="username" defaultValue={opts.managementAccount} readOnly={Boolean(opts.managementAccount)} />
         <Input label="Password" name="password" type="password" autoComplete="current-password" />
         <Button type="submit" variant={primary === "email" ? "primary" : "secondary"} size="lg" className="nathan-block"
           {...needsScript}>Sign in</Button>
       </form>
+      {opts.managementPasswordHref && <Link href={opts.managementPasswordHref}>Set or reset your management password</Link>}
       <form className="nathan-form" method="post" action="/sign-in" data-two-factor="" hidden noValidate>
         <Input label="Authenticator code" name="code" autoComplete="one-time-code" inputMode="numeric" />
         {/* The second step, shown only after the password step; then it is the page's one action. */}
@@ -149,7 +153,9 @@ export function signInPage(providers: string[], passwordEnabled: boolean, enterp
   return renderPage(
     <AuthLayout title="Sign in" issuer={issuer} appearance={appearance}>
       <div className="nathan-stack" data-nathan-sign-in="">
-        <p className="nathan-muted">Use your configured identity provider, passkey, or approved enterprise account.</p>
+        <p className="nathan-muted">{opts.managementAccount && passwordEnabled
+          ? "Sign in with your management password or an enrolled passkey."
+          : "Use your configured identity provider, passkey, or approved enterprise account."}</p>
         <noscript>
           <Banner variant="alert" icon={<NathanIcon name="warning" />} description="Signing in needs JavaScript. Turn it on for this site and reload the page." />
         </noscript>

@@ -106,6 +106,26 @@ test("management accepts its own Access-bound passkey session and keeps ordinary
   assert.equal(newKey.status, 403, "adding a passkey to an enrolled administrator requires a recent passkey sign-in");
 });
 
+test("the management choice also admits a passkey-only administrator and honors a stricter enrollment policy", async () => {
+  const install = await authWorker(host, { ...vars, NATHAN_MANAGEMENT_AUTHENTICATORS: "passkey-or-totp" },
+    { outboundService: () => Response.json({ keys: [jwk] }) });
+  try {
+    const database = await install.getD1Database("DB");
+    await enrollAdmin(database, secret);
+    const key = softwarePasskey();
+    await database.prepare("UPDATE passkey SET publicKey=?, credentialID=? WHERE userId='admin-1'").bind(key.publicKey,key.credentialId).run();
+    await database.prepare("DELETE FROM twoFactor WHERE userId='admin-1'").run();
+    const client = { dispatchFetch(url,init) {
+      return install.dispatchFetch(url,{...init,headers:{...init?.headers,...assertion(ownerJwt)}});
+    } };
+    const session = await passkeySignIn(client,origin,key,"admin-1");
+    const status = () => client.dispatchFetch(origin+"/studio/api/users",{headers:{Cookie:session.cookie}});
+    assert.equal((await status()).status,200);
+    await database.prepare("INSERT INTO nathan_security_overrides(id,require_both_admin_authenticators,modified_by) VALUES ('primary',1,'admin-1')").run();
+    assert.equal((await status()).status,403);
+  } finally { await install.dispose(); }
+});
+
 test("only the invited bootstrap owner can choose a management password and verify the real mailbox link", async () => {
   let verification;
   const install = await authWorker(host, { ...vars, ENABLE_PASSWORD: "true", EMAIL_FROM: "operator@example.test", RESEND_API_KEY: randomKey() },

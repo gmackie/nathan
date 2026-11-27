@@ -34,7 +34,7 @@ function page(title: string, body: string, script = ""): Response {
 
 // NATH-38: signInPage and consentPage moved to ./hosted-pages.tsx (stock Kumo, islands, no inline script).
 export function studioPage(userEmail: string): Response {
-  return page("Identity Studio", `<nav><a href="/security">My security settings</a> · <a href="/sign-in">Switch identity</a></nav><div id="studio-tabs" role="tablist"></div><div id="studio-root"><p>Signed in as <strong>${htmlEscape(userEmail)}</strong>.</p><h2>Register OIDC client</h2><p>Workers, external HTTPS apps, and gateway clients can use the same issuer.</p>
+  return page("Identity Studio", `<nav><a href="/studio/users">Manage users</a> · <a href="/security">My security settings</a> · <a href="/sign-in">Switch identity</a></nav><div id="studio-tabs" role="tablist"></div><div id="studio-root"><p>Signed in as <strong>${htmlEscape(userEmail)}</strong>.</p><h2>Register OIDC client</h2><p>Workers, external HTTPS apps, and gateway clients can use the same issuer.</p>
   <label>Client name<input id="name" placeholder="My application"></label>
   <label>Client type<select id="kind"><option value="external">External web app</option><option value="worker">Cloudflare Worker</option><option value="gateway">Nathan gateway</option><option value="mcp">MCP administrator</option><option value="native">Native mobile app (public, PKCE S256)</option></select></label>
   <label><span id="redirect-label">Exact HTTPS redirect URI</span><input id="redirect" placeholder="https://app.example.com/oauth/callback"></label><label id="public-client-option"><input type="checkbox" id="public-client"> Public OIDC client (PKCE, no secret)</label>
@@ -48,7 +48,7 @@ export function studioPage(userEmail: string): Response {
   ${providerStudioSection}
   <h2>Identity providers and security posture</h2><button class="secondary" id="status-btn">View active capabilities</button><pre id="capabilities"></pre><h2>Available plugins</h2><p>Catalog entries are read-only until their packages and database migrations are reviewed and deployed.</p><select id="plugin-tier"><option value="all">All tiers</option><option value="verified">Verified candidates</option><option value="community">Community</option><option value="custom">Private/custom</option></select><button class="secondary" id="plugins-btn">List integrations</button><pre id="plugins"></pre><h2>Security audit events</h2><button class="secondary" id="audit-btn">Refresh security audit</button><pre id="audit"></pre>
   <h2>Administrators and recovery</h2>
-  <p>The first administrator is bound to the Cloudflare installer's verified email and can never be revoked from this screen. Additional admins require an existing email-verified Nathan account, explicit approval, enrolled authenticators, and recent passkey reauthentication.</p>
+  <p>The first administrator is bound to the Cloudflare installer's verified email and can never be revoked from this screen. Additional admins require an existing email-verified Nathan account, explicit approval and the configured administrator authentication methods.</p>
   <button class="secondary" id="admin-grants-refresh">Show admin grants</button><pre id="admin-grants-list"></pre>
   <label>Grant admin to verified email<input id="admin-grant-email" type="email" placeholder="admin@example.com"></label>
   <button id="admin-grant">Grant administrator</button>
@@ -56,7 +56,7 @@ export function studioPage(userEmail: string): Response {
   <button class="secondary" id="admin-revoke">Revoke administrator and sessions</button>
   <p id="admin-grant-status" role="status"></p>
   ${ADMISSION_STUDIO_HTML}
-  <h2>Users</h2><p>Read-only directory of recent accounts. Passwords, credentials and session values are never returned.</p>
+  <h2>Users</h2><p><a href="/studio/users">Find users, manage invitations and administrator access</a></p>
   <button class="secondary" id="users-list">Refresh users</button><pre id="users-results"></pre>
   <h2>Domain-wide SSO</h2>
   <p>One issuer at <strong>login.&lt;domain&gt;</strong> serves the root and every approved subdomain. Each client gets an exact callback URL and its own session. No wildcard redirects or shared parent-domain login cookies.</p>

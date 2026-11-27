@@ -10,7 +10,7 @@
  * - The QR is inline SVG drawn from /security/api/totp-qr's module matrix, so img-src stays 'none'.
  * - All server-supplied text (status, passkey names, recovery codes) is rendered as React text.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Banner } from "@cloudflare/kumo/components/banner";
 import { Button, LinkButton } from "@cloudflare/kumo/components/button";
 import { Input } from "@cloudflare/kumo/components/input";
@@ -102,19 +102,6 @@ function Status({ id, message }: { id: string; message: Message | null }) {
   );
 }
 
-const yesNo = (v: unknown) => v ? "yes" : "no";
-
-function bootstrapSummary(s: BootstrapStatus): string[] {
-  return [
-    "Setup state: " + (s.state ?? "unknown"),
-    "Passkeys enrolled: " + (s.passkeys ?? 0),
-    "Authenticator app verified: " + yesNo(s.totpVerified),
-    "Both authenticators required: " + yesNo(s.requirements?.passkey && s.requirements?.totp),
-    "Ready to complete setup: " + yesNo(s.ready),
-    "This session may administer: " + yesNo(s.sessionReady)
-  ];
-}
-
 function QrCode({ matrix }: { matrix: QrMatrix }) {
   const { full, d } = qrPath(matrix);
   return (
@@ -129,12 +116,12 @@ export function SecurityPanel(_props: SecurityPanelProps) {
   const [hydrated, setHydrated] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
 
-  // Administrator onboarding: shown only to the verified initial administrator.
-  const [isInitialAdmin, setIsInitialAdmin] = useState(false);
+  const [admin, setAdmin] = useState<BootstrapStatus | null>(null);
   const [adminMessage, setAdminMessage] = useState<Message | null>(null);
+  const [stepCode, setStepCode] = useState("");
 
   // TOTP
-  const [password, setPassword] = useState("");
+  const passwordInput = useRef<HTMLInputElement>(null);
   const [totpUri, setTotpUri] = useState<string | null>(null);
   const [qr, setQr] = useState<QrMatrix | null | "unavailable">(null);
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
@@ -145,14 +132,12 @@ export function SecurityPanel(_props: SecurityPanelProps) {
   const [passkeyMessage, setPasskeyMessage] = useState<Message | null>(null);
   const [passkeys, setPasskeys] = useState<PasskeySummary[] | null>(null);
 
-  const showBootstrap = (s: BootstrapStatus) => {
-    setIsInitialAdmin(Boolean(s.isInitialAdmin));
-    setAdminMessage({ tone: s.ready ? "success" : "info", text: s.warning || "Administrator setup requirements", lines: bootstrapSummary(s) });
-  };
-
   useEffect(() => {
     setHydrated(true);
-    void bootstrapStatus().then(showBootstrap).catch(() => setIsInitialAdmin(false));
+    void bootstrapStatus().then(setAdmin).catch(() => {
+      if (new URLSearchParams(location.search).get("setup") === "admin")
+        setAdminMessage({tone:"error",text:"Could not load your setup requirements. Try again."});
+    });
   }, []);
 
   const run = (name: string, work: () => Promise<void>) => async () => {
@@ -162,29 +147,42 @@ export function SecurityPanel(_props: SecurityPanelProps) {
   const disabled = (name: string) => !hydrated || busy === name;
 
   const checkStatus = run("admin-status", async () => {
-    try { showBootstrap(await bootstrapStatus()); }
+    try { setAdmin(await bootstrapStatus()); setAdminMessage(null); }
     catch (e) { setAdminMessage({ tone: "error", text: errorText(e) }); }
   });
 
   const finishSetup = run("admin-finish", async () => {
-    if (!confirm("I securely saved my recovery codes and tested my passkey/TOTP enrollment. Complete admin setup?")) return;
     try {
-      const body = await completeBootstrap();
-      setAdminMessage({ tone: "success", text: body.note || "Initial admin setup is complete." });
+      await completeBootstrap();
+      const status = await bootstrapStatus();
+      if (status.sessionReady) location.assign("/studio/users");
+      else { setAdmin(status); setAdminMessage({tone:"success",text:"Setup complete. Verify your session to open Studio."}); }
     } catch (e) { setAdminMessage({ tone: "error", text: errorText(e) }); }
   });
 
   const stepUp = run("admin-stepup", async () => {
     try {
       await passkeyStepUp();
-      setAdminMessage({ tone: "success", text: "Fresh passkey authentication completed. Redirecting to Identity Studio." });
-      location.assign("/studio");
+      const status = await bootstrapStatus();
+      if (status.sessionReady) location.assign("/studio/users");
+      else { setAdmin(status); setAdminMessage({tone:"success",text:"Passkey verified."}); }
     } catch (e) { setAdminMessage({ tone: "error", text: errorText(e) }); }
+  });
+
+  const verifyForStudio = run("admin-code", async () => {
+    try {
+      await verifyTotp(stepCode);
+      setStepCode("");
+      const status = await bootstrapStatus();
+      if (status.sessionReady) location.assign("/studio/users");
+      else { setAdmin(status); setAdminMessage({tone:"info",text:"Code verified. Check the remaining setup requirements."}); }
+    } catch (e) { setAdminMessage({tone:"error",text:errorText(e)}); }
   });
 
   const startTotp = run("totp-start", async () => {
     try {
-      const result = await enableTotp(password);
+      // Autofill or typing can populate the server-rendered field before hydration.
+      const result = await enableTotp(passwordInput.current?.value ?? "");
       const uri = String(result.totpURI || "");
       setTotpUri(uri);
       setQr(null);
@@ -206,7 +204,9 @@ export function SecurityPanel(_props: SecurityPanelProps) {
   const verify = run("totp-verify", async () => {
     try {
       await verifyTotp(code);
+      setCode("");
       setTotpMessage({ tone: "success", text: "TOTP enrollment verified." });
+      setAdmin(await bootstrapStatus());
     } catch (e) { setTotpMessage({ tone: "error", text: errorText(e) }); }
   });
 
@@ -214,6 +214,7 @@ export function SecurityPanel(_props: SecurityPanelProps) {
     try {
       await addPasskey(attachment, label);
       setPasskeyMessage({ tone: "success", text: label + " successfully enrolled." });
+      setAdmin(await bootstrapStatus());
     } catch (e) { setPasskeyMessage({ tone: "error", text: errorText(e) }); }
   });
 
@@ -227,36 +228,42 @@ export function SecurityPanel(_props: SecurityPanelProps) {
 
   return (
     <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 16 }}>
-      <Section id="admin-setup" title="Initial administrator onboarding" icon={ShieldCheck} hidden={!isInitialAdmin}>
-        <p style={S.muted}>
-          Only the verified, Cloudflare-authorized initial administrator can complete this step. Enroll your authenticators below,
-          save recovery codes, and return here to confirm setup.
-        </p>
-        <div style={S.actions}>
-          <Button id="admin-finish" variant="primary" disabled={disabled("admin-finish")} onClick={finishSetup}>Complete initial setup</Button>
-          <Button id="admin-status" variant="secondary" disabled={disabled("admin-status")} onClick={checkStatus}>Check setup requirements</Button>
-        </div>
-        <p style={S.muted}>
-          For business-profile installations, signing in through a social/enterprise provider is not enough to administer Nathan.
-          After enrolling a passkey, use a fresh passkey authentication ceremony to unlock sensitive operations for 15 minutes.
-        </p>
-        <div style={S.actions}>
+      <Section id="admin-setup" title={admin?.state === "complete" ? "Administrator access" : "Administrator setup"}
+        icon={ShieldCheck} hidden={!admin?.isAdministrator && !adminMessage}>
+        {admin && !admin.ready && <p style={S.muted}>{admin.requirements?.totp && admin.requirements.passkey
+          ? "Enroll a passkey and verify an authenticator app below."
+          : admin.requirements?.passkey ? "Enroll a passkey below." : "Choose either an authenticator app or a passkey below."}</p>}
+        {admin?.isInitialAdmin && admin.state !== "complete" &&
+          <Button id="admin-finish" variant="primary" disabled={!admin.ready || disabled("admin-finish")} onClick={finishSetup}>Complete initial setup</Button>}
+        {admin?.sessionReady && <Link href="/studio/users">Open user management</Link>}
+        {!admin?.sessionReady && admin?.totpVerified && admin.managementTotp &&
+          (admin.requirements?.stepUp === "passkey-or-totp" || !admin.passkeys) &&
+          <form className="nathan-stack" onSubmit={event => { event.preventDefault(); void verifyForStudio(); }}>
+            {admin.requirements?.stepUp === "passkey" && <p>Verify your code, then add your first passkey below.</p>}
+            <TextField id="admin-code" label="Authenticator code for Studio">
+              <Input id="admin-code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} disabled={!hydrated}
+                required value={stepCode} onChange={event => setStepCode(event.currentTarget.value)} />
+            </TextField>
+            <Button type="submit" disabled={disabled("admin-code")}>Verify code</Button>
+          </form>}
+        {Boolean(admin?.passkeys) && !admin?.sessionReady && <div style={S.actions}>
           <Button id="admin-stepup" variant="secondary" style={S.wrapButton} icon={icon(Fingerprint)} disabled={disabled("admin-stepup")} onClick={stepUp}>
             Reauthenticate with passkey for administration
           </Button>
-        </div>
+        </div>}
         <Status id="admin-setup-status" message={adminMessage} />
-        <p style={{ margin: 0 }}><Link href="/studio">Continue to Identity Studio once complete</Link></p>
+        <Button id="admin-status" variant="ghost" disabled={disabled("admin-status")} onClick={checkStatus}>Refresh setup status</Button>
       </Section>
 
       <Section id="totp" title="Authenticator application (TOTP)" icon={DeviceMobile}>
-        <p style={S.muted}>
+        {admin?.managementHost ? <p style={S.muted}>
+          Use an authenticator app for six-digit codes. If you lose your only Studio authenticator, contact your Cloudflare account operator for recovery.
+        </p> : <p style={S.muted}>
           Enroll and confirm an authenticator app, then store backup codes offline. Nathan only asserts MFA assurance after an actual
           verified authentication ceremony; enabling TOTP alone does not force MFA on social logins.
-        </p>
+        </p>}
         <TextField id="password" label="Password (if this account uses password login)">
-          <Input id="password" aria-label="Password" type="password" autoComplete="current-password"
-            value={password} onChange={e => setPassword(e.currentTarget.value)} />
+          <Input id="password" aria-label="Password" type="password" autoComplete="current-password" ref={passwordInput} />
         </TextField>
         <div style={S.actions}>
           <Button id="totp-start" variant="primary" disabled={disabled("totp-start")} onClick={startTotp}>Start TOTP enrollment</Button>
@@ -296,7 +303,7 @@ export function SecurityPanel(_props: SecurityPanelProps) {
             <code id="totp-secret" style={S.mono}>{grouped}</code>
           </div>
 
-          <div id="totp-setup" style={{ display: recoveryCodes ? "grid" : "none", gap: 8 }}>
+          <div id="totp-setup" style={{ display: recoveryCodes && !admin?.managementHost ? "grid" : "none", gap: 8 }}>
             <Banner variant="alert" icon={icon(Key)} title="Recovery codes"
               description="Shown once. Copy them to a secure offline manager now; each code works one time." />
             {recoveryCodes && recoveryCodes.length ? (
@@ -312,7 +319,7 @@ export function SecurityPanel(_props: SecurityPanelProps) {
         </div>
 
         <TextField id="totp-code" label="Six-digit code">
-          <Input id="totp-code" aria-label="Six-digit code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}"
+          <Input id="totp-code" aria-label="Six-digit code" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" disabled={!hydrated}
             maxLength={6} value={code} onChange={e => setCode(e.currentTarget.value)} />
         </TextField>
         <div style={S.actions}>

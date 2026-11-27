@@ -12,7 +12,10 @@ import type { SocialCredentials } from "./provider-store";
 import { recordProviderSignIn } from "./provider-store";
 import { ACCOUNT_LINKING, buildSocialProviders } from "../shared/providers.mjs";
 import {mayAdminister, mayEnrollManagementFactor} from "./bootstrap";
-import {isAdminPrincipal} from "./admin-service";
+import {audit, isAdminPrincipal} from "./admin-service";
+import { managementAllowsTotp } from "./security-policy";
+import { mailManagementPassword } from "./management-password";
+import { recordManagementTotp, reserveManagementTotp, type ManagementTotpProof } from "./management-totp";
 import { nathanAccessTokenExtension, guardAuthorizationScopes, MAX_ACCESS_TOKEN_SECONDS, API_SCOPE } from "./tokens";
 
 // NATH-15: the provider's scopes, also Better Auth's default for an authorization request without `scope`.
@@ -43,6 +46,7 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
       ? { github: { clientId: env.GITHUB_CLIENT_ID, clientSecret: env.GITHUB_CLIENT_SECRET } } : {})
   });
 
+  const managementProofs = new WeakMap<Request, ManagementTotpProof>();
   return betterAuth({
     // NATH-43: the name users see (TOTP issuer fallback, emails); "gmacko" at id.gmac.io.
     appName: instanceName(env),
@@ -81,6 +85,10 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
               (await isEmailSession(env.DB, current.session.id) ||
                 (operator && !await mayEnrollManagementFactor(env, current.user.id, current.session.id, ctx.path))))
             throw new APIError("FORBIDDEN", { message: "Sign in with an existing authenticator to manage administrator credentials." });
+          if (ctx.path === "/two-factor/verify-totp" && managementAllowsTotp(env) && ctx.request) {
+            const proof = await reserveManagementTotp(env, ctx.body?.code, current?.session.id, ctx.context.secretConfig);
+            if (proof) managementProofs.set(ctx.request, proof);
+          }
         }
       }),
       after: createAuthMiddleware(async (ctx) => {
@@ -90,6 +98,17 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
           const created=ctx.context.newSession;
           if(created?.session?.id && created.user?.id && typeof ctx.params?.id==="string")
             await recordProviderSignIn(env,{providerId:ctx.params.id,sessionId:created.session.id,userId:created.user.id});
+          return;
+        }
+        if (ctx.path === "/two-factor/verify-totp" && managementAllowsTotp(env)) {
+          // Better Auth returns the verified user and token only on success. Initial enrollment and
+          // password + TOTP sign-in issue a new session; an in-session challenge keeps the current one.
+          const proof = ctx.context.returned as { token?: string; user?: { id?: string } } | null;
+          const verified = ctx.context.newSession ?? ctx.context.session;
+          if (typeof proof?.token !== "string") return;
+          if (!verified || proof.user?.id !== verified.user.id || verified.user.email.toLowerCase() !== env[managementEmail])
+            throw new APIError("UNAUTHORIZED", { message: "Verify the current management account." });
+          await recordManagementTotp(env, ctx.request && managementProofs.get(ctx.request), verified.user.id, verified.session.id);
           return;
         }
         // Passkey enrollment never grants admin assurance. Only a newly
@@ -120,8 +139,12 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
     emailAndPassword: {
       enabled: env.ENABLE_PASSWORD === "true",
       requireEmailVerification: true,
-      sendResetPassword: async ({ user, url }) =>
-        sendAuthEmail(env, user.email, "Reset your Nathan password", url)
+      sendResetPassword: async ({ user, url, token }) => managementAllowsTotp(env)
+        ? mailManagementPassword(env,user,token) : sendAuthEmail(env, user.email, "Reset your Nathan password", url),
+      ...(managementAllowsTotp(env) ? {
+        revokeSessionsOnPasswordReset: true,
+        onPasswordReset: async ({user}: {user:{id:string}}) => audit(env,user.id,"management_password_set",user.id,"succeeded")
+      } : {})
     },
     emailVerification: {
       // A pending owner can resend verification by presenting the original management password.

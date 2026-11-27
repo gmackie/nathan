@@ -1,6 +1,7 @@
 import { resolveAppearance } from "../ui/appearance.ts";
 import { isReverseDomainPrivateUseRedirectUri } from "@better-auth/core/utils/redirect-uri";
 import type { AuthEnv } from "./env";
+import { userBanned } from "../shared/token-claims.mjs";
 
 export type AdminActor = { id:string; email:string; role:"admin"; emailVerified:true };
 export function isAdminUser(user: unknown, env:AuthEnv): user is AdminActor {
@@ -169,12 +170,20 @@ export async function setOAuthClientDisabledWithMcp(env:AuthEnv,clientId:string,
   return {clientId,disabled,note:"Existing bearer access tokens may remain valid until expiration; revoke tokens separately if required."};
 }
 
-/** Read-only administrative user directory. Never expose credentials or sessions. */
-export async function listUsers(env:AuthEnv) {
+export type DirectoryUser = {id:string;name:string;email:string;emailVerified:number;role:string|null;banned:number|null;
+  banExpires:string|number|null;createdAt:string;owner:number;adminGrant:number;deprovisioned:number};
+
+/** Search the full directory, including accounts older than the recent-users list. */
+export async function listUsers(env:AuthEnv, query = "", offset = 0, limit = 100) {
   const rows=await env.DB.prepare(
-    'SELECT "id","name","email","emailVerified","role","banned","createdAt" FROM "user" ORDER BY "createdAt" DESC LIMIT 100'
-  ).all();
-  return rows.results;
+    `SELECT u.id,u.name,u.email,u.emailVerified,u.role,u.banned,u.banExpires,u.createdAt,
+      EXISTS(SELECT 1 FROM nathan_bootstrap_status b WHERE b.id='primary' AND b.admin_user_id=u.id) AS owner,
+      EXISTS(SELECT 1 FROM nathan_admin_grants g WHERE g.user_id=u.id AND g.email=lower(u.email) AND g.enabled=1) AS adminGrant,
+      EXISTS(SELECT 1 FROM nathan_scim_users d WHERE d.user_id=u.id AND d.link_state='deprovisioned' AND d.override_cause IS NULL) AS deprovisioned
+     FROM "user" u WHERE ?1='' OR instr(lower(u.email),lower(?1))>0 OR instr(lower(u.name),lower(?1))>0
+     ORDER BY u.createdAt DESC,u.id LIMIT ?2 OFFSET ?3`
+  ).bind(query,limit,offset).all<DirectoryUser>();
+  return rows.results.map(({banExpires,...u}) => ({...u,blocked:userBanned({...u,banExpires})}));
 }
 
 function validatedProviderId(value:any):string{
@@ -277,11 +286,13 @@ export async function grantAdmin(env:AuthEnv,input:any,actor:string){
   if(input?.confirm!=="CONFIRM GRANT ADMIN "+email)
     throw Error("Explicit admin grant confirmation required");
   const users=await env.DB.prepare(
-    'SELECT "id" AS id,"emailVerified" AS verified,"banned" AS banned FROM "user" WHERE lower("email")=? LIMIT 2'
-  ).bind(email).all<{id:string;verified:number;banned:number}>();
-  if(users.results.length!==1||users.results[0].verified!==1||users.results[0].banned===1)
+    'SELECT id,emailVerified AS verified,banned,banExpires FROM "user" WHERE lower(email)=? LIMIT 2'
+  ).bind(email).all<{id:string;verified:number;banned:number|null;banExpires:string|number|null}>();
+  const [selected] = users.results;
+  if(users.results.length!==1 || selected.verified!==1 || userBanned(selected))
     throw Error("User must exist, have a verified email and not be suspended");
-  const id=users.results[0].id;
+  const id=selected.id;
+  if (input.id !== undefined && input.id !== id) throw Error("The selected account has changed");
   const original=await env.DB.prepare(
     "SELECT admin_user_id FROM nathan_bootstrap_status WHERE id='primary' LIMIT 1"
   ).first<{admin_user_id:string|null}>();
@@ -289,17 +300,21 @@ export async function grantAdmin(env:AuthEnv,input:any,actor:string){
   await audit(env,actor,"admin_grant",id,"attempted");
   try {
     await env.DB.batch([
-      env.DB.prepare('UPDATE "user" SET "role"=? WHERE "id"=? AND "emailVerified"=1')
-        .bind("admin",id),
+      env.DB.prepare(`UPDATE "user" SET role='admin' WHERE id=?1 AND lower(email)=?2 AND emailVerified=1
+        AND banned IS ?3 AND banExpires IS ?4 AND (SELECT COUNT(*) FROM "user" WHERE lower(email)=?2)=1
+        AND NOT EXISTS(SELECT 1 FROM nathan_bootstrap_status WHERE id='primary' AND admin_user_id=?1)
+        AND NOT EXISTS(SELECT 1 FROM nathan_scim_users WHERE user_id=?1 AND link_state='deprovisioned' AND override_cause IS NULL)`)
+        .bind(id,email,selected.banned,selected.banExpires),
       env.DB.prepare(
-        "INSERT INTO nathan_admin_grants(user_id,email,granted_by,enabled) VALUES(?,?,?,1) "+
+        "INSERT INTO nathan_admin_grants(user_id,email,granted_by,enabled) SELECT ?,?,?,1 WHERE changes()=1 "+
         "ON CONFLICT(user_id) DO UPDATE SET email=excluded.email,granted_by=excluded.granted_by,"+
         "enabled=1,updated_at=unixepoch()"
-      ).bind(id,email,actor)
+      ).bind(id,email,actor),
+      env.DB.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) " +
+        "VALUES (?,?,'admin_grant',?,CASE WHEN changes()=1 THEN 'succeeded' ELSE NULL END)").bind(crypto.randomUUID(),actor,id)
     ]);
-    await audit(env,actor,"admin_grant",id,"succeeded");
     return {id,email,enabled:true,
-      note:"Administrator added. Their current session must satisfy enrollment and recent passkey step-up before access."};
+      note:"Administrator added. They can open Studio after completing the configured authentication requirements."};
   }catch(e){await audit(env,actor,"admin_grant",id,"failed");throw e;}
 }
 export async function revokeAdminGrant(env:AuthEnv,input:any,actor:string){
@@ -315,12 +330,13 @@ export async function revokeAdminGrant(env:AuthEnv,input:any,actor:string){
     .bind(id).first<{enabled:number}>();
   if(!grant||grant.enabled!==1)throw Error("Active admin grant not found");
   await env.DB.batch([
-    env.DB.prepare("UPDATE nathan_admin_grants SET enabled=0,updated_at=unixepoch() WHERE user_id=?")
+    env.DB.prepare("UPDATE nathan_admin_grants SET enabled=0,grant_generation=grant_generation+1,updated_at=unixepoch() WHERE user_id=?")
       .bind(id),
     env.DB.prepare('UPDATE "user" SET "role"=? WHERE "id"=?')
       .bind("user",id),
     env.DB.prepare('DELETE FROM "session" WHERE "userId"=?').bind(id),
-    env.DB.prepare('DELETE FROM nathan_admin_assurance WHERE user_id=?').bind(id)
+    env.DB.prepare('DELETE FROM nathan_admin_assurance WHERE user_id=?').bind(id),
+    env.DB.prepare("DELETE FROM verification WHERE value=? AND identifier GLOB 'reset-password:*'").bind(id)
   ]);
   await audit(env,actor,"admin_revoke",id,"succeeded");
   return {id,enabled:false,note:"Better Auth sessions were revoked; existing external JWTs need expiry/online introspection."};
