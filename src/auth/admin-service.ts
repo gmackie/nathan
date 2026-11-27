@@ -1,6 +1,6 @@
 import { resolveAppearance } from "../ui/appearance.ts";
 import { isReverseDomainPrivateUseRedirectUri } from "@better-auth/core/utils/redirect-uri";
-import { allowsAdminTotp, type AuthEnv } from "./env";
+import { allowsAdminTotp, type AuthEnv } from "./env.ts";
 
 export type AdminActor = { id:string; email:string; role:"admin"; emailVerified:true };
 export function isAdminUser(user: unknown, env:AuthEnv): user is AdminActor {
@@ -290,6 +290,7 @@ export async function grantAdmin(env:AuthEnv,input:any,actor:string){
   await audit(env,actor,"admin_grant",id,"attempted");
   try {
     // Check policy and insert the grant atomically with respect to tightening or factor removal.
+    const sharedPolicy = Number(allowsAdminTotp(env));
     const [grant] = await env.DB.batch([
       env.DB.prepare(
         "INSERT INTO nathan_admin_grants(user_id,email,granted_by,enabled) "+
@@ -298,8 +299,11 @@ export async function grantAdmin(env:AuthEnv,input:any,actor:string){
         "OR EXISTS(SELECT 1 FROM passkey WHERE userId=user.id)) "+
         "ON CONFLICT(user_id) DO UPDATE SET email=excluded.email,granted_by=excluded.granted_by,enabled=1,updated_at=unixepoch() "+
         "RETURNING user_id"
-      ).bind(actor,id,email,Number(allowsAdminTotp(env))),
-      env.DB.prepare("UPDATE user SET role='admin' WHERE id=? AND changes()=1").bind(id)
+      ).bind(actor,id,email,sharedPolicy),
+      env.DB.prepare("UPDATE user SET role='admin' WHERE id=? AND changes()=1").bind(id),
+      // A deletion started as an ordinary user must see last-key protection once promotion commits.
+      env.DB.prepare("UPDATE nathan_security_overrides SET protect_last_passkey=1 WHERE id='primary' " +
+        "AND ?=1 AND changes()=1 AND require_recent_admin_passkey=1 AND protect_last_passkey=0").bind(sharedPolicy)
     ]);
     if (!grant.results.length) throw Error("Check the verified user and their required passkey enrollment");
     await audit(env,actor,"admin_grant",id,"succeeded");

@@ -217,7 +217,10 @@ test("passkey-only tightening and subsequent grants require passkeys for all ena
   assert.equal(t.db.prepare("SELECT enabled FROM nathan_admin_grants WHERE user_id='u-bob'").get().enabled, 0);
   assert.equal(t.db.prepare("SELECT role FROM user WHERE id='u-bob'").get().role, "user");
   t.run("INSERT INTO passkey(id,publicKey,userId,credentialID,counter,deviceType,backedUp) VALUES('pk-b','k','u-bob','cred-b',0,'singleDevice',0)");
+  // A pre-0029 strict override starts with its last-key guard unarmed.
+  t.run("UPDATE nathan_security_overrides SET protect_last_passkey=0");
   await grant();
+  assert.equal(t.db.prepare("SELECT protect_last_passkey FROM nathan_security_overrides").get().protect_last_passkey, 1);
   assert.equal(t.db.prepare("SELECT role FROM user WHERE id='u-bob'").get().role, "admin");
   assert.throws(() => t.run("DELETE FROM passkey WHERE id='pk-b'"), /last administrator passkey/);
 });
