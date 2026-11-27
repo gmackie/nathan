@@ -344,7 +344,7 @@ async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Pr
     try{
       const result=await tightenAdminPolicy(env,body,session!.user.id,session!.session.id);
       return Response.json(result,{headers:{"Cache-Control":"no-store"}});
-    }catch{return reject(409,"Verify the required authenticator first. A passkey-only policy requires the owner and every enabled administrator to have a passkey.");}
+    }catch{return reject(409,"Verify the required authenticator first. On shared issuers using passkey-or-TOTP, the owner and all enabled administrators must enroll a passkey before requiring it.");}
   }
 
   if(["/studio/api/admins/grant","/studio/api/admins/revoke"].includes(url.pathname)&&request.method==="POST"){

@@ -222,6 +222,23 @@ test("passkey-only tightening and subsequent grants require passkeys for all ena
   assert.throws(() => t.run("DELETE FROM passkey WHERE id='pk-b'"), /last administrator passkey/);
 });
 
+test("dedicated Access hosts can grant and enroll a new administrator under the passkey override", async () => {
+  const t = setup();
+  Object.assign(t.env, { NATHAN_APP_ID: "customer", NATHAN_APP_ORIGIN: "https://customer.example.test" });
+  const { mayEnrollManagementFactor, adminAssurance } = await import("../src/auth/bootstrap.ts");
+  const { allowsAdminTotp } = await import("../src/auth/env.ts");
+  t.run("INSERT INTO nathan_security_overrides(id,require_recent_admin_passkey,modified_by) VALUES('primary',1,?)", ADMIN.id);
+  const result = await grantAdmin(t.env, { email: "bob@example.test", confirm: "CONFIRM GRANT ADMIN bob@example.test" }, ADMIN.id);
+  assert.equal(result.enabled, true);
+  const sid = "dedicated-first-session";
+  t.run("INSERT INTO session(id,token,userId,expiresAt,createdAt,updatedAt) VALUES(?,?,'u-bob',unixepoch()+3600,0,0)", sid, sid);
+  assert.equal(await mayEnrollManagementFactor(t.env, "u-bob", sid, "/passkey/generate-register-options"), true);
+  assert.equal(await mayEnrollManagementFactor(t.env, "u-bob", sid, "/passkey/verify-registration"), true);
+  assert.equal((await adminAssurance(t.env, "u-bob", sid)).ok, false);
+  Object.assign(t.env, { NATHAN_SECURITY_PROFILE: "standard", NATHAN_ADMIN_STEPUP_METHOD: "passkey-or-totp" });
+  assert.equal(allowsAdminTotp(t.env), false, "the alternative is only offered on a shared issuer");
+});
+
 test("reverifying a changed or reset TOTP row cannot restore an earlier session's proof", async () => {
   const t = setup();
   Object.assign(t.env, { NATHAN_SECURITY_PROFILE: "standard", NATHAN_ADMIN_STEPUP_METHOD: "passkey-or-totp" });

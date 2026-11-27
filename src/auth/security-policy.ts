@@ -1,14 +1,10 @@
-import type {AuthEnv} from "./env";
+import {allowsAdminTotp, type AuthEnv} from "./env";
 import {audit} from "./admin-service";
 
 export type EffectiveAdminPolicy={
   profile:string;requireBothAuthenticators:boolean;requireRecentPasskey:boolean;requireRecentVerification:boolean;
   source:{deployment:string;runtimeTightened:boolean};
 };
-export function allowsAdminTotp(env: AuthEnv) {
-  return env.NATHAN_SECURITY_PROFILE === "standard" && env.NATHAN_ADMIN_STEPUP_REQUIRED === "true" &&
-    env.NATHAN_ADMIN_STEPUP_METHOD === "passkey-or-totp";
-}
 export async function effectiveAdminPolicy(env:AuthEnv):Promise<EffectiveAdminPolicy>{
   const row=await env.DB.prepare(
     "SELECT require_both_admin_authenticators AS both,require_recent_admin_passkey AS recent "+
@@ -46,15 +42,16 @@ export async function tightenAdminPolicy(env:AuthEnv,input:any,actor:string,sess
     throw Error("Perform a recent passkey sign-in before enabling privileged-action step-up");
   const both=name==="both-authenticators"?1:0;
   const stepup=name==="recent-passkey"?1:0;
+  const protectLast = Number(name === "recent-passkey" && allowsAdminTotp(env));
   const change = await env.DB.prepare(
-    "INSERT INTO nathan_security_overrides(id,require_both_admin_authenticators,require_recent_admin_passkey,modified_by) "+
-    "SELECT 'primary',?,?,? WHERE ?=0 OR NOT EXISTS("+
+    "INSERT INTO nathan_security_overrides(id,require_both_admin_authenticators,require_recent_admin_passkey,modified_by,protect_last_passkey) "+
+    "SELECT 'primary',?,?,?,? WHERE ?=0 OR NOT EXISTS("+
     "SELECT 1 FROM nathan_enabled_admin_subjects a WHERE NOT EXISTS(SELECT 1 FROM passkey p WHERE p.userId=a.user_id)) "+
     "ON CONFLICT(id) DO UPDATE SET "+
     "require_both_admin_authenticators=MAX(require_both_admin_authenticators,excluded.require_both_admin_authenticators),"+
     "require_recent_admin_passkey=MAX(require_recent_admin_passkey,excluded.require_recent_admin_passkey),"+
-    "modified_by=excluded.modified_by,updated_at=unixepoch()"
-  ).bind(both,stepup,actor,stepup).run();
+    "protect_last_passkey=MAX(protect_last_passkey,excluded.protect_last_passkey),modified_by=excluded.modified_by,updated_at=unixepoch()"
+  ).bind(both,stepup,actor,protectLast,protectLast).run();
   if (!change.meta.changes) throw Error("The initial owner and all enabled administrators must enroll a passkey first");
   await audit(env,actor,"security_policy_tighten",name,"succeeded");
   return {policy:await effectiveAdminPolicy(env),note:"Security requirement increased. Web UI cannot weaken its deployment baseline."};

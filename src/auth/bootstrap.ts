@@ -1,8 +1,8 @@
 import { liveAdminSession } from "./email-sign-in-policy";
-import type { AuthEnv } from "./env";
+import {allowsAdminTotp, type AuthEnv} from "./env";
 import { audit } from "./admin-service";
 import { recentAdminTotp } from "./admin-totp";
-import {allowsAdminTotp, effectiveAdminPolicy} from "./security-policy";
+import {effectiveAdminPolicy} from "./security-policy";
 
 type BootstrapRow={
   cloudflare_user_id:string;admin_email:string;admin_user_id:string|null;
@@ -86,7 +86,12 @@ export async function mayEnrollManagementFactor(env: AuthEnv, userId: string, se
   if (policy.requireRecentPasskey && !existing.passkeys) return false;
   if (!existing.passkeys && !existing.totpVerified)
     return path === "/two-factor/enable" || path === "/passkey/generate-register-options" || path === "/passkey/verify-registration";
-  if (existing.passkeys && await recentPasskey(env, userId, sessionId)) return true;
+  if (existing.passkeys && await recentPasskey(env, userId, sessionId)) {
+    // Also arm the SQL guard for shared installations that tightened before migration 0029.
+    if (policy.requireRecentPasskey && path === "/passkey/delete-passkey")
+      await env.DB.prepare("UPDATE nathan_security_overrides SET protect_last_passkey=1 WHERE id='primary' AND require_recent_admin_passkey=1 AND protect_last_passkey=0").run();
+    return true;
+  }
   return !policy.requireRecentPasskey && existing.totpVerified && await recentAdminTotp(env, userId, sessionId);
 }
 
