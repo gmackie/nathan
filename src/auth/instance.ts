@@ -1,6 +1,6 @@
 import { betterAuth } from "better-auth";
 import { passkeyRpName, instanceName } from "./passkey-config.mjs";
-import {APIError, createAuthMiddleware, getSessionFromCtx} from "better-auth/api";
+import {APIError, createAuthMiddleware, getOAuthState, getSessionFromCtx} from "better-auth/api";
 import { admin, jwt, organization } from "better-auth/plugins";
 import { passkey } from "@better-auth/passkey";
 import { oauthProvider } from "@better-auth/oauth-provider";
@@ -216,6 +216,22 @@ export function createAuth(env: AuthEnv, resolvedSocialProviders?: SocialCredent
         },
         ...(env.NATHAN_PAIRWISE_SECRET ? { pairwiseSecret: env.NATHAN_PAIRWISE_SECRET } : {})
       }),
+      {
+        id: "nathan-social-authorization-redirect",
+        hooks: { after: [{
+          matcher: ctx => ctx.path === "/callback/:id",
+          handler: createAuthMiddleware(async ctx => {
+            // oauthProvider resumes the signed authorization and returns its navigation decision.
+            // Better Auth 1.7.14 otherwise sends the social callback's earlier Location header.
+            const next = ctx.context.returned;
+            if (!ctx.context.newSession || !next || typeof next !== "object" ||
+                !("redirect" in next) || next.redirect !== true ||
+                !("url" in next) || typeof next.url !== "string") return;
+            if (typeof (await getOAuthState())?.serverContext?.query === "string")
+              throw ctx.redirect(next.url);
+          })
+        }] }
+      },
       // Hardened SAML/OIDC enterprise SSO options: see src/auth/saml-policy.mjs.
       ...(env.ENTERPRISE_SSO === "true" ? [sso(ssoPluginOptions())] : [])
     ]

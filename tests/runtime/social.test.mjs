@@ -508,12 +508,10 @@ test("a signed-in browser landing on / or /sign-in goes to its account page, not
 
 // "Sign in with gmacko": an app sends the browser to /oauth2/authorize; Nathan sends it to /sign-in with a
 // signed query; after the social round trip Better Auth must resume that authorization, not land on "/".
-// NATH-44: the signed query reaches the OAuth state (serverContext), but the callback still lands on "/";
-// Better Auth's post-login authorize hook does not resume yet. Tracked until fixed; blocks the app pilot.
-test("an app's authorization resumes after a social sign-in that carries the signed oauth_query", { todo: "NATH-44" }, async () => {
+async function socialAuthorization(skipConsent) {
   const CLIENT = "app-" + randomKey().slice(0, 8), REDIRECT = "https://app.example.test/api/auth/callback/nathan";
-  await db.prepare('INSERT INTO "oauthClient"("id","clientId","redirectUris","disabled","skipConsent","tokenEndpointAuthMethod","requirePKCE","subjectType","createdAt","updatedAt") VALUES (?,?,?,0,1,\'none\',1,\'public\',?,?)')
-    .bind("oc-" + CLIENT, CLIENT, JSON.stringify([REDIRECT]), Date.now(), Date.now()).run();
+  await db.prepare('INSERT INTO "oauthClient"("id","clientId","redirectUris","disabled","skipConsent","tokenEndpointAuthMethod","requirePKCE","subjectType","createdAt","updatedAt") VALUES (?,?,?,0,?,\'none\',1,\'public\',?,?)')
+    .bind("oc-" + CLIENT, CLIENT, JSON.stringify([REDIRECT]), Number(skipConsent), Date.now(), Date.now()).run();
   const state = randomKey();
   const query = new URLSearchParams({ response_type: "code", client_id: CLIENT, redirect_uri: REDIRECT, scope: "openid profile email",
     state, code_challenge: createHash("sha256").update(randomKey()).digest("base64url"), code_challenge_method: "S256" });
@@ -535,8 +533,22 @@ test("an app's authorization resumes after a social sign-in that carries the sig
   const back = await callback("discord", "dc-app", started.authorize.searchParams.get("state"), jar,
     { Accept: "text/html", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "cross-site" });
   assert.equal(back.status, 302, await back.clone().text());
-  const resumed = new URL(back.headers.get("Location"), ORIGIN);
-  assert.equal(resumed.origin + resumed.pathname, REDIRECT, "the browser returns to the app, not to Nathan's /: " + resumed.href);
+  let resumed = new URL(back.headers.get("Location"), ORIGIN);
+  if (!skipConsent) {
+    assert.equal(resumed.origin + resumed.pathname, ORIGIN + "/consent");
+    assert.equal(resumed.searchParams.has("code"), false);
+    const consent = await mf.dispatchFetch(ORIGIN + "/api/auth/oauth2/consent", {
+      method: "POST", redirect: "manual",
+      headers: { Origin: ORIGIN, "Content-Type": "application/json", Cookie: cookieHeader(jar) },
+      body: JSON.stringify({ accept: true, oauth_query: resumed.search.slice(1) })
+    });
+    assert.equal(consent.status, 200);
+    resumed = new URL((await consent.json()).url);
+  }
+  assert.equal(resumed.origin + resumed.pathname, REDIRECT, "the browser returns to the registered app");
   assert.ok(resumed.searchParams.get("code"), "with an authorization code");
   assert.equal(resumed.searchParams.get("state"), state);
-});
+}
+
+test("an app's authorization resumes after a social sign-in that carries the signed oauth_query", () => socialAuthorization(true));
+test("a social callback preserves the app's consent requirement", () => socialAuthorization(false));
