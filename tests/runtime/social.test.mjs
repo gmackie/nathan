@@ -11,6 +11,7 @@ import { mkdir } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { createHash } from "node:crypto";
+import { get as httpGet } from "node:http";
 import { SignJWT, jwtVerify, generateKeyPair, exportJWK } from "jose";
 import { authWorker, bundle, migrate, start, randomKey } from "./helpers.mjs";
 import { sealProviderCredentials } from "../../src/auth/config-crypto.mjs";
@@ -132,10 +133,28 @@ async function begin(provider, jar = jarOf(), callbackURL = "/", extra = {}) {
   const { url } = await response.json();
   return { authorize: new URL(url), jar };
 }
-/** The provider redirects the browser back: a cross-site top-level GET navigation. */
+// dispatchFetch replaces Sec-Fetch-Mode with "cors". Use local HTTP for top-level navigations.
+async function navigateCallback(url, headers) {
+  const target = new URL(url);
+  const local = new URL(target.pathname + target.search, await mf.ready);
+  return new Promise((resolve, reject) => {
+    const request = httpGet(local, { headers: { ...headers, Host: target.host, "MF-Original-URL": url } }, response => {
+      const result = new Headers();
+      for (const [key, values] of Object.entries(response.headersDistinct)) {
+        for (const value of values) result.append(key, value);
+      }
+      response.resume();
+      resolve(new Response(null, { status: response.statusCode, headers: result }));
+    });
+    request.on("error", reject);
+  });
+}
+
 async function callback(provider, code, state, jar, headers = {}) {
-  const response = await mf.dispatchFetch(ORIGIN + "/api/auth/callback/" + provider + "?code=" + code + "&state=" + encodeURIComponent(state),
-    { redirect: "manual", headers: { Cookie: cookieHeader(jar, "cross-site-get"), ...headers } });
+  const url = ORIGIN + "/api/auth/callback/" + provider + "?code=" + code + "&state=" + encodeURIComponent(state);
+  const requestHeaders = { Cookie: cookieHeader(jar, "cross-site-get"), ...headers };
+  const response = headers["Sec-Fetch-Mode"] === "navigate" ? await navigateCallback(url, requestHeaders) :
+    await mf.dispatchFetch(url, { redirect: "manual", headers: requestHeaders });
   merge(jar, response);
   return response;
 }
@@ -508,7 +527,7 @@ test("a signed-in browser landing on / or /sign-in goes to its account page, not
 
 // "Sign in with gmacko": an app sends the browser to /oauth2/authorize; Nathan sends it to /sign-in with a
 // signed query; after the social round trip Better Auth must resume that authorization, not land on "/".
-async function socialAuthorization(skipConsent) {
+async function socialAuthorization(skipConsent, fetchMode) {
   const CLIENT = "app-" + randomKey().slice(0, 8), REDIRECT = "https://app.example.test/api/auth/callback/nathan";
   await db.prepare('INSERT INTO "oauthClient"("id","clientId","redirectUris","disabled","skipConsent","tokenEndpointAuthMethod","requirePKCE","subjectType","createdAt","updatedAt") VALUES (?,?,?,0,?,\'none\',1,\'public\',?,?)')
     .bind("oc-" + CLIENT, CLIENT, JSON.stringify([REDIRECT]), Number(skipConsent), Date.now(), Date.now()).run();
@@ -529,9 +548,8 @@ async function socialAuthorization(skipConsent) {
   assert.ok(oauthQuery, "the page URL carries a signed query");
   const started = await begin("discord", jar, "/", { oauth_query: oauthQuery });
   codes.set("dc-app", { id: "100000000000000010", email: "app-user@example.test", verified: true });
-  // A real browser follows the provider's redirect as a top-level navigation.
   const back = await callback("discord", "dc-app", started.authorize.searchParams.get("state"), jar,
-    { Accept: "text/html", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "cross-site" });
+    { Accept: "text/html", "Sec-Fetch-Mode": fetchMode, "Sec-Fetch-Site": "cross-site" });
   assert.equal(back.status, 302, await back.clone().text());
   let resumed = new URL(back.headers.get("Location"), ORIGIN);
   if (!skipConsent) {
@@ -550,5 +568,7 @@ async function socialAuthorization(skipConsent) {
   assert.equal(resumed.searchParams.get("state"), state);
 }
 
-test("an app's authorization resumes after a social sign-in that carries the signed oauth_query", () => socialAuthorization(true));
-test("a social callback preserves the app's consent requirement", () => socialAuthorization(false));
+for (const mode of ["cors", "navigate"]) {
+  test("social sign-in resumes the signed app authorization in " + mode + " mode", () => socialAuthorization(true, mode));
+  test("the social callback preserves the app's consent requirement in " + mode + " mode", () => socialAuthorization(false, mode));
+}
