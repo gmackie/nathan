@@ -8,7 +8,7 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { authWorker, randomKey, base64url } from "./helpers.mjs";
+import { authWorker, randomKey, base64url, studioShell } from "./helpers.mjs";
 import { providerEntryFromDocs, gatekeeper, invalidCredentials, vendoredHashes } from "./gatekeeper-verifier.mjs";
 import { softwarePasskey, passkeySignIn } from "./passkey-authenticator.mjs";
 
@@ -456,12 +456,15 @@ test("every access token Nathan issues is capped at 900 seconds", async () => {
   }
 });
 
-test("Identity Studio renders the Access tokens section with a script that parses", async () => {
-  const html = await (await mf.dispatchFetch(ORIGIN + "/studio", { headers: { Cookie: admin.cookie } })).text();
-  assert.match(html, /<h2>Access tokens for Gatekeeper and APIs<\/h2>/);
-  const script = html.match(/<script nonce="[^"]+">([\s\S]*)<\/script>/)[1];
-  assert.doesNotThrow(() => new Function(script));
-  assert.match(script, /\/studio\/api\/tokens/);
+// NATH-39: Studio is a Kumo SPA; its code is the SRI-pinned island bundle the Worker serves.
+test("Identity Studio renders the Access tokens panel from its SRI-pinned island bundle", async () => {
+  const studio = await mf.dispatchFetch(ORIGIN + "/studio", { headers: { Cookie: admin.cookie } });
+  const { html, code } = await studioShell((u, i) => mf.dispatchFetch(u, i), ORIGIN, studio);
+  assert.ok(html.includes('href="#/tokens"'), "the Access tokens panel is in the navigation");
+  assert.match(code, /Access tokens/);
+  assert.match(code, /Machine and agent clients/);
+  assert.match(code, /\/studio\/api\/v1/);
+  assert.match(code, /"\/tokens"/);
 });
 
 test("unlinking a client stops new tokens for it", async () => {

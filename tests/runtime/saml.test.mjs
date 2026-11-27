@@ -6,7 +6,7 @@
 import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { authWorker, cookiesOf, randomKey } from "./helpers.mjs";
+import { authWorker, cookiesOf, randomKey, studioShell } from "./helpers.mjs";
 import { makeCertificate } from "../fixtures/x509.mjs";
 import { idpMetadata, authnRequestId, samlResponse } from "../fixtures/saml-idp.mjs";
 
@@ -95,10 +95,10 @@ async function ok(response) {
 // Better Auth rate-limits /sign-in/* per client IP; give each simulated browser its own.
 let client = 0;
 const ip = () => "198.51.100." + (++client % 250);
-async function startLogin(email = "jane@" + DOMAIN) {
+async function startLogin(email = "jane@" + DOMAIN, intent = {}) {
   const response = await mf.dispatchFetch(ORIGIN + "/sign-in/sso/start", {
     method: "POST", headers: { "Content-Type": "application/json", Origin: ORIGIN, "cf-connecting-ip": ip() },
-    body: JSON.stringify({ email })
+    body: JSON.stringify({ email, ...intent })
   });
   const body = await response.json();
   assert.equal(response.status, 200, JSON.stringify(body));
@@ -172,7 +172,7 @@ test("Studio SAML API requires a stepped-up administrator", async () => {
     assert.equal((await studio("/studio/api/saml", undefined, cookie)).status, 403, label + " reads");
     const write = await studio("/studio/api/saml/connections", create, cookie);
     assert.equal(write.status, 403, label + " writes");
-    assert.match((await write.json()).error, /recent passkey/, label);
+    assert.match((await write.json()).error, /recent authenticator verification/, label);
     assert.equal((await studio("/studio/api/saml/preview", { metadataXml }, cookie)).status, 403, label + " previews");
   }
   assert.equal(await db.prepare("SELECT count(*) AS n FROM nathan_saml_connections").first().then(x => x.n), 0, "nothing was created");
@@ -280,6 +280,15 @@ test("SP-initiated SAML login creates a session in workerd", async () => {
   assert.equal(user.v, 1, "just-in-time users inside the verified domain have a verified email");
   const account = await db.prepare('SELECT "providerId" AS p FROM "account" WHERE "providerId"=?').bind(PID).first();
   assert.ok(account, "SAML account linked to the connection");
+});
+
+test("shared enterprise sign-in honors the Studio destination and keeps passkey setup on the management host", async () => {
+  for (const [intent, destination] of [[{ studio: true }, "/studio"], [{ setup: "passkey" }, "/"]]) {
+    const { id, relayState } = await startLogin("jane@" + DOMAIN, intent);
+    const response = await post(samlResponse(good({ inResponseTo: id })), relayState);
+    assert.ok(sessionCookie(response));
+    assert.equal(new URL(response.headers.get("location"), ORIGIN).href, ORIGIN + destination);
+  }
 });
 
 test("tampered signed response is rejected", async () => {
@@ -576,14 +585,15 @@ test("disabling closes the ACS and SSO routing again", async () => {
   assert.equal(await auditCount("saml_connection_disable", "succeeded"), 1);
 });
 
-test("Studio and sign-in pages carry the SAML UI with valid inline scripts", async () => {
-  const scriptOf = html => /<script nonce="[^"]+">([\s\S]*)<\/script>/.exec(html)[1];
+test("Studio and sign-in pages carry the SAML UI with valid scripts", async () => {
   const studioPage = await studio("/studio");
   assert.equal(studioPage.status, 200);
-  const html = await studioPage.text();
-  for (const id of ["saml-create", "saml-enable", "saml-add-cert", "saml-retire-cert", "saml-sp-acs"])
-    assert.ok(html.includes('id="' + id + '"'), id);
-  assert.doesNotThrow(() => new Function(scriptOf(html)), "Studio script parses");
+  // NATH-39: the Kumo Studio's SAML panel, from the SRI-pinned island bundle.
+  const { html, code: studioCode } = await studioShell((u, i) => mf.dispatchFetch(u, i), ORIGIN, studioPage);
+  assert.ok(html.includes('href="#/saml"'));
+  for (const control of ["Create disabled connection", "Enable connection", "Trust next certificate", "Retire certificate", "/api/auth/sso/saml2/sp/acs/",
+    "CONFIRM ENABLE SAML ", "CONFIRM RETIRE CERTIFICATE "])
+    assert.ok(studioCode.includes(control), control);
   const signIn = await (await mf.dispatchFetch(ORIGIN + "/sign-in")).text();
   assert.ok(signIn.includes("Sign in with SSO"));
   assert.ok(signIn.includes('<form class="nathan-form" data-sso=""'), "the SSO form");

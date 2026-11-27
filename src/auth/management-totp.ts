@@ -7,10 +7,14 @@ import { parseUserOutput } from "better-auth/db";
 import type { twoFactor } from "better-auth/plugins";
 import { mayEnrollManagementFactor } from "./bootstrap";
 import { managementEmail, type AuthEnv } from "./env";
+import { activeManagementUser, epochSeconds } from "./management-storage";
+import { allowRequests } from "./request-limit";
 
 type VerifyTotp = ReturnType<typeof twoFactor>["endpoints"]["verifyTOTP"];
-type Factor = { id: string; userId: string; secret: string; verified: number | null };
+type Factor = { id: string; userId: string; secret: string; verified: number | null; enabled: number };
 const nextCode = () => new APIError("UNAUTHORIZED", { message: "Enter the next code from your authenticator app." });
+const restartSignIn = () => new APIError("UNAUTHORIZED", { code: "MANAGEMENT_SIGN_IN_RESTART",
+  message: "Sign in with your password again, then enter a new authenticator code." });
 const enrollmentChanged = () => new APIError("FORBIDDEN", { message: "Check your authenticator setup and verify any enrolled passkey before continuing." });
 
 async function matchingStep(factor: Factor, key: string | SecretConfig, code: string) {
@@ -32,18 +36,14 @@ async function acceptCode(env: AuthEnv, factor: Factor, step: number, targetToke
     SELECT f.id,?1 FROM twoFactor f JOIN user u ON u.id=f.userId
       JOIN session target ON target.userId=u.id AND target.token=?2
       JOIN session source ON source.userId=u.id AND source.id=COALESCE(?3,target.id)
-    WHERE f.id=?4 AND f.secret=?5 AND f.userId=?6 AND lower(u.email)=?7 AND u.emailVerified=1 AND u.role='admin'
+    WHERE f.id=?4 AND f.secret=?5 AND f.userId=?6 AND lower(u.email)=?7 AND ${activeManagementUser}
       AND (SELECT count(*) FROM twoFactor WHERE userId=u.id)=1
-      AND (COALESCE(u.banned,0)=0 OR CASE WHEN typeof(u.banExpires)='text' THEN unixepoch(u.banExpires)
-          WHEN u.banExpires<100000000000 THEN u.banExpires ELSE u.banExpires/1000 END<=unixepoch())
-      AND NOT EXISTS(SELECT 1 FROM nathan_scim_users WHERE user_id=u.id AND link_state='deprovisioned' AND override_cause IS NULL)
       AND NOT EXISTS(SELECT 1 FROM nathan_email_otp_sessions WHERE session_id IN (source.id,target.id))
-      AND NOT EXISTS(SELECT 1 FROM session s WHERE s.id IN (source.id,target.id) AND COALESCE(
-        CASE WHEN typeof(s.expiresAt)='text' THEN unixepoch(s.expiresAt) WHEN s.expiresAt<100000000000 THEN s.expiresAt
-          ELSE s.expiresAt/1000 END,0)<=unixepoch())
+      AND NOT EXISTS(SELECT 1 FROM session s WHERE s.id IN (source.id,target.id)
+        AND COALESCE(${epochSeconds("s.expiresAt")},0)<=unixepoch())
       AND ?1 BETWEEN unixepoch()/30-1 AND unixepoch()/30+1
       AND ((?3 IS NULL AND f.verified=1 AND u.twoFactorEnabled=1)
-        OR (?3 IS NOT NULL AND source.id<>target.id AND f.verified=0 AND (
+        OR (?3 IS NOT NULL AND source.id<>target.id AND u.twoFactorEnabled IS NOT 1 AND f.verified IS NOT 1 AND (
           NOT EXISTS(SELECT 1 FROM passkey WHERE userId=u.id)
           OR EXISTS(SELECT 1 FROM nathan_admin_assurance WHERE user_id=u.id AND session_id=source.id
             AND method='passkey' AND verified_at BETWEEN unixepoch()-900 AND unixepoch()))))
@@ -63,33 +63,37 @@ async function acceptCode(env: AuthEnv, factor: Factor, step: number, targetToke
   if (originalSession) batch.push(db.prepare("DELETE FROM session WHERE id=? AND changes()=1").bind(originalSession));
   batch.push(db.prepare("DELETE FROM nathan_management_totp_steps WHERE factor_id=? AND step<unixepoch()/30-1").bind(factor.id));
   const [accepted] = await db.batch(batch);
-  if (!accepted.meta.changes) throw originalSession ? enrollmentChanged() : nextCode();
+  return accepted.meta.changes === 1;
 }
 
 export function managementTotpEndpoint(env: AuthEnv, provider: VerifyTotp): VerifyTotp {
   return createAuthEndpoint(provider.path, provider.options, async ctx => {
     const current = await getSessionFromCtx(ctx);
-    const { results } = await env.DB.prepare(`SELECT f.id,f.userId,f.secret,f.verified FROM twoFactor f
+    const { results } = await env.DB.prepare(`SELECT f.id,f.userId,f.secret,f.verified,COALESCE(u.twoFactorEnabled,0) AS enabled FROM twoFactor f
       JOIN user u ON u.id=f.userId WHERE lower(u.email)=? AND u.emailVerified=1 AND u.role='admin' LIMIT 2`)
       .bind(env[managementEmail]).all<Factor>();
     if (!results.length) throw nextCode();
     const [factor] = results;
-    if (results.length !== 1 || factor.verified === null)
+    if (results.length !== 1 || (factor.verified === 1) !== Boolean(factor.enabled))
       throw new APIError("FORBIDDEN", { message: "Contact your Cloudflare account operator to recover this authenticator enrollment." });
+    if (current) {
+      if (current.user.id !== factor.userId) throw enrollmentChanged();
+      if (!await allowRequests(env, "management-totp", factor.userId, 5))
+        throw new APIError("TOO_MANY_REQUESTS", { message: "Wait a minute before trying another authenticator code." });
+    }
     const step = await matchingStep(factor, ctx.context.secretConfig, ctx.body.code);
     const adapter = ctx.context.internalAdapter;
 
     if (current) {
-      if (current.user.id !== factor.userId) throw enrollmentChanged();
       if (step === null) throw nextCode();
       if (factor.verified === 1) {
-        await acceptCode(env, factor, step, current.session.token);
+        if (!await acceptCode(env, factor, step, current.session.token)) throw nextCode();
         return { token: current.session.token, user: parseUserOutput(ctx.context.options, current.user) };
       }
       if (!await mayEnrollManagementFactor(env, factor.userId, current.session.id, "/two-factor/enable")) throw enrollmentChanged();
       const replacement = await adapter.createSession(factor.userId, false, current.session);
       try {
-        await acceptCode(env, factor, step, replacement.token, current.session.id);
+        if (!await acceptCode(env, factor, step, replacement.token, current.session.id)) throw enrollmentChanged();
       } catch (error) {
         await adapter.deleteSession(replacement.token);
         throw error;
@@ -105,8 +109,8 @@ export function managementTotpEndpoint(env: AuthEnv, provider: VerifyTotp): Veri
     const { response, headers } = await provider({ ...ctx, body: { code: ctx.body.code, trustDevice: false },
       asResponse: false, returnHeaders: true, returnStatus: false });
     try {
-      if (step === null || response.user.id !== factor.userId) throw nextCode();
-      await acceptCode(env, factor, step, response.token);
+      if (step === null || response.user.id !== factor.userId || !await acceptCode(env, factor, step, response.token))
+        throw restartSignIn();
     } catch (error) {
       await adapter.deleteSession(response.token);
       throw error;

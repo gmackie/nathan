@@ -8,6 +8,7 @@
  */
 import type { ComponentType } from "react";
 import { hydrateRoot } from "react-dom/client";
+import { CSPProvider } from "@cloudflare/kumo/primitives/csp-provider";
 import { INLINE_CLASS_PREFIX, INLINE_STYLE_MARKER } from "../csp-styles.ts";
 import type { IslandId } from "../island-ids.ts";
 
@@ -42,6 +43,8 @@ export function hydrateIslands<P extends object>(id: IslandId, Component: Compon
     const props = JSON.parse(element.getAttribute("data-props") || "{}") as P;
     // The island container itself is Nathan markup, not React's; restore only its children.
     for (const child of Array.from(element.children)) restoreInlineStyles(child);
-    hydrateRoot(element, <Component {...props} />);
+    // Same CSP context as the server (src/ui/render.tsx): base-ui renders no inline <style> elements,
+    // which the page CSP would block; their rules are in layout.css.
+    hydrateRoot(element, <CSPProvider disableStyleElements><Component {...props} /></CSPProvider>);
   }
 }

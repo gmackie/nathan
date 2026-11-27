@@ -15,7 +15,11 @@ export interface BootstrapStatus {
   totpVerified?: boolean;
   ready?: boolean;
   sessionReady?: boolean;
-  requirements?: { passkey?: boolean; totp?: boolean; stepUp?: "none" | "passkey" | "passkey-or-totp" };
+  requiresSignIn?: boolean;
+  requiresPasskeyRecovery?: boolean;
+  requiresFactorRecovery?: boolean;
+  pendingLegacyTotp?: boolean;
+  requirements?: { passkey?: boolean; totp?: boolean; recentPasskey?: boolean; stepUp?: "none" | "passkey" | "passkey-or-totp" };
   warning?: string;
 }
 

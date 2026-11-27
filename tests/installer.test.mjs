@@ -15,6 +15,8 @@ test("installer rejects malicious account names and origins",()=>{
 test("installer validates hostname, profile and account",()=>{
   const data=validateInstallPlan({accountId:"a".repeat(32),hostname:"auth.example.com",name:"nathan-auth",securityProfile:"business"});
   assert.equal(data.name,"nathan-auth");
+  assert.equal(data.securityProfile,"business");
+  assert.equal(validateInstallPlan({...data,securityProfile:undefined}).securityProfile,"standard");
   assert.throws(()=>validateInstallPlan({...data,hostname:"//evil.com"}));
   assert.throws(()=>validateInstallPlan({...data,securityProfile:"insecure"}));
 });

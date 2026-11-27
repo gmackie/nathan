@@ -291,9 +291,10 @@ async function applyOperation(env: AuthEnv, body: any, actor: string): Promise<R
     if (typeof body.id !== "string" || body.id.length > 200) throw Error("Invalid grant id");
     const grant = await env.DB.prepare("SELECT id, app_id AS app, role_key AS role, principal_type AS principalType, principal_id AS principalId FROM nathan_rbac_grants WHERE id=?")
       .bind(body.id).first<{ id: string; app: string; role: string; principalType: "user" | "group"; principalId: string }>();
-    if (!grant) throw Error("Unknown grant");
+    // Studio v1 requires the selected app. The legacy endpoint also accepts a grant ID alone.
+    if (!grant || (body.app !== undefined && body.app !== grant.app)) throw Error("Unknown grant");
     await commit(env, actor, "rbac_grant_revoke", grant.app + ":" + grant.role + ":" + grant.principalType + ":" + grant.principalId, [{
-      sql: "DELETE FROM nathan_rbac_grants WHERE id=?", params: [grant.id]
+      sql: "DELETE FROM nathan_rbac_grants WHERE id=? AND app_id=?", params: [grant.id, grant.app]
     }], { kind: "grant.revoked", appId: grant.app, principalType: grant.principalType, principalId: grant.principalId, detail: { role: grant.role } });
     return { ...grant, revoked: true, note: "Nathan gateways stop honoring the grant within their access cache window (at most 60 s)" };
   }

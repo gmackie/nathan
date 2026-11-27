@@ -13,6 +13,7 @@
  * that would emit a <style> element fails renderPage's check (closed) instead of shipping it.
  */
 import type { ComponentType } from "react";
+import { CSPProvider } from "@cloudflare/kumo/primitives/csp-provider";
 import { renderToString } from "react-dom/server";
 import type { IslandId } from "./island-ids.ts";
 
@@ -24,6 +25,6 @@ export interface IslandProps<P extends object> {
 }
 
 export function Island<P extends object>({ id, component: Component, props }: IslandProps<P>) {
-  const markup = renderToString(<Component {...props} />);
+  const markup = renderToString(<CSPProvider disableStyleElements><Component {...props} /></CSPProvider>);
   return <div data-nathan-island={id} data-props={JSON.stringify(props)} dangerouslySetInnerHTML={{ __html: markup }} />;
 }

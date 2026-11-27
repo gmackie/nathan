@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { base32 } from "@better-auth/utils/base32";
 import { createOTP } from "@better-auth/utils/otp";
 import { exportJWK, generateKeyPair, SignJWT } from "jose";
 import { authWorker, cookiesOf, insertSession, randomKey } from "./helpers.mjs";
+import "../fixtures/ts-modules.mjs";
+
+const { storeManagementPasskey } = await import("../../src/auth/management-passkey.ts");
+const { managementEmail } = await import("../../src/auth/env.ts");
 
 test("the directory recognizes a legacy allowlisted administrator without a grant row", async () => {
   const secret = randomKey(), origin = "https://id.legacy.test";
@@ -42,8 +47,8 @@ test("an invited owner completes setup and manages people using only an authenti
     return Response.json({ id: "sent" });
   } });
   const ownerJar = new Map();
-  async function visit(path, body, assertion = token, jar = ownerJar) {
-    const headers = { "Cf-Access-Jwt-Assertion": assertion, "CF-Connecting-IP": assertion===token ? "192.0.2.10" : "192.0.2.11",
+  async function visit(path, body, assertion = token, jar = ownerJar, ip = assertion===token ? "192.0.2.10" : "192.0.2.11") {
+    const headers = { "Cf-Access-Jwt-Assertion": assertion, "CF-Connecting-IP": ip,
       Cookie: [...jar].map(([key,v]) => key + "=" + v).join("; ") };
     const form = body instanceof URLSearchParams;
     const response = await mf.dispatchFetch(new URL(path, origin).href, { redirect: "manual", headers: {
@@ -85,7 +90,7 @@ test("an invited owner completes setup and manages people using only an authenti
     const key = base32.decode(new URL((await start.json()).totpURI).searchParams.get("secret"));
     const code = offset => createOTP(key).hotp(Math.floor(Date.now()/30000) + offset);
     const verify = value => visit("/api/auth/two-factor/verify-totp", { code: value, trustDevice: false });
-    const firstCode = await code(-1);
+    const firstCode = await code(0);
     assert.equal((await verify(firstCode)).status, 200);
     assert.equal((await visit("/security/api/bootstrap/complete", {})).status, 200);
     assert.equal((await visit("/")).headers.get("Location"), origin + "/studio/users");
@@ -98,7 +103,8 @@ test("an invited owner completes setup and manages people using only an authenti
     assert.equal((await visit("/studio/api/users")).status, 403);
     assert.ok((await verify(firstCode)).status >= 400);
     assert.equal((await visit("/studio/api/users")).status, 403);
-    assert.equal((await verify(await code(0))).status, 200);
+    const stepUpCode = await code(1);
+    assert.equal((await verify(stepUpCode)).status, 200);
     assert.equal((await visit("/studio/api/users")).status, 200);
     await visit("/api/auth/sign-out", {});
     assert.equal((await visit("/studio/api/users")).status, 403);
@@ -106,7 +112,15 @@ test("an invited owner completes setup and manages people using only an authenti
     const login = await visit("/api/auth/sign-in/email", { email, password });
     assert.equal((await login.json()).twoFactorRedirect, true);
     assert.equal((await visit("/studio/api/users")).status, 403);
-    const loginCode = await code(1);
+    // A second browser can submit a code from the same authenticator time step.
+    const replay = await verify(stepUpCode);
+    assert.equal(replay.status, 401);
+    assert.equal((await replay.json()).code, "MANAGEMENT_SIGN_IN_RESTART");
+    assert.equal((await visit("/studio/api/users")).status, 403);
+    assert.equal((await (await visit("/api/auth/sign-in/email", { email, password })).json()).twoFactorRedirect, true);
+    // Model the previous sign-in falling outside the authenticator's window.
+    await db.prepare("UPDATE nathan_management_totp_steps SET step=step-30").run();
+    const loginCode = await code(0);
     await db.prepare("UPDATE verification SET expiresAt=? WHERE identifier LIKE '2fa-%'").bind(new Date(0).toISOString()).run();
     assert.ok((await verify(loginCode)).status >= 400);
     assert.equal((await (await visit("/api/auth/sign-in/email", { email, password })).json()).twoFactorRedirect, true);
@@ -145,6 +159,14 @@ test("an invited owner completes setup and manages people using only an authenti
     })).status, 200);
     const foreign = await visit(setupPassword, setPassword, await accessFor(otherEmail), new Map());
     assert.equal(foreign.status, 400, "a different eligible administrator cannot use the link");
+    const resetTokenCount = () => db.prepare("SELECT count(*) AS n FROM verification WHERE value='staff' AND identifier GLOB 'reset-password:*'").first("n");
+    const credentialCount = () => db.prepare("SELECT count(*) AS n FROM account WHERE userId='staff' AND providerId='credential'").first("n");
+    assert.equal(await resetTokenCount(), 1);
+    await db.prepare("CREATE TRIGGER fixture_password_audit_failure BEFORE INSERT ON nathan_security_audit WHEN NEW.action='management_password_set' BEGIN SELECT RAISE(ABORT,'fixture unavailable'); END").run();
+    assert.equal((await asStaff(setupPassword, setPassword)).status, 500);
+    assert.equal(await credentialCount(), 0);
+    assert.equal(await resetTokenCount(), 1);
+    await db.prepare("DROP TRIGGER fixture_password_audit_failure").run();
     assert.equal((await asStaff(setupPassword, setPassword)).status, 303);
     assert.equal((await asStaff(setupPassword, setPassword)).status, 400, "the link was consumed");
     assert.equal((await asStaff("/api/auth/sign-in/email", { email: selected.email, password })).status, 200);
@@ -164,9 +186,28 @@ test("an invited owner completes setup and manages people using only an authenti
     assert.equal(await db.prepare("SELECT COALESCE(twoFactorEnabled,0) AS enabled FROM user WHERE id='staff'").first("enabled"), 0);
     assert.equal(await db.prepare("SELECT verified FROM twoFactor WHERE userId='staff'").first("verified"), 0);
     await db.prepare("DROP TRIGGER fixture_storage_failure").run();
+    // A pre-migration, unfinished setup keeps the original key in the authenticator.
+    await db.prepare("UPDATE twoFactor SET verified=NULL WHERE userId='staff'").run();
+    const otherBrowser = new Map();
+    assert.equal((await visit("/api/auth/sign-in/email", { email: selected.email, password }, staffAccess, otherBrowser)).status, 200);
+    const options = await visit("/api/auth/passkey/generate-register-options", undefined, staffAccess, otherBrowser);
+    assert.equal(options.status, 200);
+    const otherSession = await (await visit("/api/auth/get-session", undefined, staffAccess, otherBrowser)).json();
+    const legacySetup = await (await asStaff("/security/api/bootstrap")).json();
+    assert.equal(legacySetup.pendingLegacyTotp, true);
+    assert.equal(legacySetup.requiresFactorRecovery, false);
     assert.equal((await asStaff("/api/auth/two-factor/verify-totp", { code: await createOTP(staffKey).totp(), trustDevice:false })).status, 200);
+    assert.equal(await db.prepare("SELECT verified FROM twoFactor WHERE userId='staff'").first("verified"), 1);
+    // Simulate a provider that verified the registration before the activation committed.
+    // The final storage step must see the newly established factor and refuse the other session.
+    await assert.rejects(storeManagementPasskey({ DB: db, [managementEmail]: selected.email }, otherSession.session.id,
+      { userId: "staff", publicKey: "fixture", credentialID: "fixture", deviceType: "singleDevice", backedUp: false,
+        counter: 0, createdAt: new Date() }), /Verify an enrolled sign-in method/);
+    assert.equal(await db.prepare("SELECT COUNT(*) AS n FROM passkey WHERE userId='staff'").first("n"), 0);
     assert.equal((await asStaff("/studio/users")).status, 200);
-    // Two password challenges finish with distinct accepted steps, in reverse time order.
+    // Model a later visit. With the enrollment step outside the window, the
+    // two challenges can use next then current, both valid across a tick.
+    await db.prepare("UPDATE nathan_management_totp_steps SET step=step-30 WHERE factor_id IN (SELECT id FROM twoFactor WHERE userId='staff')").run();
     await nextRequestWindow();
     const jars = [new Map(), new Map()];
     for (const jar of jars) {
@@ -174,8 +215,7 @@ test("an invited owner completes setup and manages people using only an authenti
       assert.equal((await challenge.json()).twoFactorRedirect, true);
     }
     const nowStep = Math.floor(Date.now()/30000);
-    const claimed = await db.prepare("SELECT step FROM nathan_management_totp_steps JOIN twoFactor ON id=factor_id WHERE userId='staff'").all();
-    const available = [nowStep+1, nowStep, nowStep-1].filter(step => !claimed.results.some(r => r.step === step));
+    const available = [nowStep+1, nowStep];
     for (const [i, jar] of jars.entries()) {
       const response = await visit("/api/auth/two-factor/verify-totp", {code: await createOTP(staffKey).hotp(available[i])}, staffAccess, jar);
       assert.equal(response.status, 200, "each challenge records its own code");
@@ -193,6 +233,16 @@ test("an invited owner completes setup and manages people using only an authenti
     assert.equal((await visit("/studio/api/admission", { op: "revoke", id: inviteId, confirm: "CONFIRM REVOKE INVITATION " + inviteId })).status, 200);
     await db.prepare("INSERT INTO nathan_security_overrides(id,require_recent_admin_passkey,modified_by) VALUES ('primary',1,'owner')").run();
     assert.equal((await visit("/studio/api/users")).status, 403);
+    // Provider limits are per IP. This seed represents five attempts for the account in this minute.
+    const limitKey = "management-totp:" + createHash("sha256").update(
+      await db.prepare("SELECT admin_user_id FROM nathan_bootstrap_status").first("admin_user_id")
+    ).digest("base64url").slice(0,22);
+    const minute = Math.floor(Date.now()/60000);
+    for (const bucket of [minute, minute + 1]) {
+      await db.prepare("INSERT INTO nathan_mcp_limits(id,request_count,expires_at) VALUES (?,5,?) ON CONFLICT(id) DO UPDATE SET request_count=5")
+        .bind(limitKey + ":" + bucket, (bucket+2)*60).run();
+    }
+    assert.equal((await visit("/api/auth/two-factor/verify-totp", { code: "invalid" }, token, ownerJar, "198.51.100.1")).status, 429);
     assert.equal((await visit("/api/auth/sign-out", {})).status, 200);
     const freshLogin = await visit("/sign-in?setup=passkey");
     assert.ok((await freshLogin.text()).includes("data-passkey-setup"));

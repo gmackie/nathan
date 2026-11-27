@@ -1,4 +1,4 @@
-export {};
+import { apiPost } from "../pages/studio/api";
 
 const root = document.querySelector<HTMLElement>("[data-user-directory]");
 if (root) {
@@ -13,12 +13,7 @@ if (root) {
   async function save(path: string, body: object) {
     enable(false);
     try {
-      const response = await fetch("/studio/api/" + path, {method:"POST",credentials:"same-origin",
-        headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-      if (!response.ok) {
-        const error = await response.json() as {error?: string};
-        throw Error(response.status === 403 ? "Verify your session in Account security, then try again." : error.error || "Change could not be saved.");
-      }
+      await apiPost("/" + path, body);
       location.reload();
     } catch (error) { status.textContent = error instanceof Error ? error.message : "Change could not be saved."; enable(true); }
   }

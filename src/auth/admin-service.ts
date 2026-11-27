@@ -1,6 +1,6 @@
 import { resolveAppearance } from "../ui/appearance.ts";
 import { isReverseDomainPrivateUseRedirectUri } from "@better-auth/core/utils/redirect-uri";
-import type { AuthEnv } from "./env";
+import { allowsAdminTotp, type AuthEnv } from "./env.ts";
 import { userBanned } from "../shared/token-claims.mjs";
 
 export type AdminActor = { id:string; email:string; role:"admin"; emailVerified:true };
@@ -83,7 +83,8 @@ export async function createOAuthClient(auth:any,env:AuthEnv,headers:Headers,inp
     if((redirect.protocol !== "https:" && !privateUse) || input.redirectUri !== redirect.href ||
         input.redirectUri.length > 2048 || /[\s\\*#]|%2a/i.test(input.redirectUri) || redirect.username || redirect.password)
       throw Error("Native clients require an exact app-claimed HTTPS or reverse-domain private-use callback");
-  } else if(redirect.protocol!=="https:" || redirect.username || redirect.password || redirect.hash || redirect.origin==="null") {
+  } else if(typeof input.redirectUri !== "string" || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/i.test(redirect.hostname) ||
+      redirect.protocol!=="https:" || redirect.username || redirect.password || redirect.hash || redirect.origin==="null") {
     throw Error("Clients require an exact HTTPS redirect URL");
   }
   if(input.kind==="gateway" && redirect.pathname!=="/__nathan/callback")throw Error("Gateway callback must use /__nathan/callback");
@@ -307,22 +308,28 @@ export async function grantAdmin(env:AuthEnv,input:any,actor:string){
   if(id===original?.admin_user_id)throw Error("Initial bootstrap owner already has administrator authority");
   await audit(env,actor,"admin_grant",id,"attempted");
   try {
-    await env.DB.batch([
-      env.DB.prepare(`UPDATE "user" SET role='admin' WHERE id=?1 AND lower(email)=?2 AND emailVerified=1
-        AND banned IS ?3 AND banExpires IS ?4 AND (SELECT COUNT(*) FROM "user" WHERE lower(email)=?2)=1
-        AND NOT EXISTS(SELECT 1 FROM nathan_bootstrap_status WHERE id='primary' AND admin_user_id=?1)
-        AND NOT EXISTS(SELECT 1 FROM nathan_scim_users WHERE user_id=?1 AND link_state='deprovisioned' AND override_cause IS NULL)`)
-        .bind(id,email,selected.banned,selected.banExpires),
-      env.DB.prepare(
-        "INSERT INTO nathan_admin_grants(user_id,email,granted_by,enabled) SELECT ?,?,?,1 WHERE changes()=1 "+
-        "ON CONFLICT(user_id) DO UPDATE SET email=excluded.email,granted_by=excluded.granted_by,"+
-        "enabled=1,updated_at=unixepoch()"
-      ).bind(id,email,actor),
+    // Recheck the selected account and shared-issuer passkey policy in the same transaction as the grant.
+    const sharedPolicy = Number(allowsAdminTotp(env));
+    const [grant] = await env.DB.batch([
+      env.DB.prepare(`INSERT INTO nathan_admin_grants(user_id,email,granted_by,enabled)
+        SELECT u.id,lower(u.email),?1,1 FROM user u WHERE u.id=?2 AND lower(u.email)=?3 AND u.emailVerified=1
+        AND u.banned IS ?4 AND u.banExpires IS ?5 AND (SELECT count(*) FROM user WHERE lower(email)=?3)=1
+        AND NOT EXISTS(SELECT 1 FROM nathan_bootstrap_status WHERE id='primary' AND admin_user_id=u.id)
+        AND NOT EXISTS(SELECT 1 FROM nathan_scim_users WHERE user_id=u.id AND link_state='deprovisioned' AND override_cause IS NULL)
+        AND (?6=0 OR NOT EXISTS(SELECT 1 FROM nathan_security_overrides WHERE id='primary' AND require_recent_admin_passkey=1)
+          OR EXISTS(SELECT 1 FROM passkey WHERE userId=u.id))
+        ON CONFLICT(user_id) DO UPDATE SET email=excluded.email,granted_by=excluded.granted_by,enabled=1,updated_at=unixepoch()
+        RETURNING user_id`).bind(actor,id,email,selected.banned,selected.banExpires,sharedPolicy),
+      env.DB.prepare("UPDATE user SET role='admin' WHERE id=? AND changes()=1").bind(id),
       env.DB.prepare("INSERT INTO nathan_security_audit(id,actor,action,target,outcome) " +
-        "VALUES (?,?,'admin_grant',?,CASE WHEN changes()=1 THEN 'succeeded' ELSE NULL END)").bind(crypto.randomUUID(),actor,id)
+        "SELECT ?,?,'admin_grant',?,'succeeded' WHERE changes()=1").bind(crypto.randomUUID(),actor,id),
+      // A deletion started as an ordinary user must see last-key protection once promotion commits.
+      env.DB.prepare("UPDATE nathan_security_overrides SET protect_last_passkey=1 WHERE id='primary' " +
+        "AND ?=1 AND changes()=1 AND require_recent_admin_passkey=1 AND protect_last_passkey=0").bind(sharedPolicy)
     ]);
+    if (!grant.results.length) throw Error("Check the verified user and their required passkey enrollment");
     return {id,email,enabled:true,
-      note:"Administrator added. They can open Studio after completing the configured authentication requirements."};
+      note:"Administrator added. Their session must meet the installation's enrollment and verification requirements."};
   }catch(e){await audit(env,actor,"admin_grant",id,"failed");throw e;}
 }
 export async function revokeAdminGrant(env:AuthEnv,input:any,actor:string){

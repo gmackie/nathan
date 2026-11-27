@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test, { after, before } from "node:test";
 import { SignJWT, generateKeyPair, exportJWK } from "jose";
 import { authWorker, bundle, enrollAdmin, randomKey, start } from "./helpers.mjs";
+import { makeCertificate } from "../fixtures/x509.mjs";
+import { authnRequestId, idpMetadata, samlResponse } from "../fixtures/saml-idp.mjs";
+import { attributeMapping } from "../../src/auth/saml-policy.mjs";
 import { passkeySignIn, softwarePasskey } from "./passkey-authenticator.mjs";
 
 const host = "id.management.test";
@@ -104,6 +107,41 @@ test("management accepts its own Access-bound passkey session and keeps ordinary
   const newKey = await fetcher.dispatchFetch(origin + "/api/auth/passkey/generate-register-options",
     { headers: { Cookie: management.cookie, Origin: origin } });
   assert.equal(newKey.status, 403, "adding a passkey to an enrolled administrator requires a recent passkey sign-in");
+});
+
+test("management SSO returns a first-passkey sign-in to the Passkeys section", async t => {
+  const install = await authWorker(host, { ...vars, ENTERPRISE_SSO: "true" },
+    { outboundService: () => Response.json({ keys: [jwk] }) });
+  t.after(() => install.dispose());
+  const database = await install.getD1Database("DB");
+  await enrollAdmin(database, secret);
+  const idp = makeCertificate({ cn: "Management IdP" });
+  const issuer = "https://idp.example.test/saml", entryPoint = "https://idp.example.test/sso";
+  const entityID = origin + "/api/auth/sso/saml2/sp/metadata?providerId=staff-idp";
+  const acs = origin + "/api/auth/sso/saml2/sp/acs/staff-idp";
+  const config = { entryPoint, audience: entityID, callbackUrl: origin + "/",
+    idpMetadata: { metadata: idpMetadata({ entityID: issuer, ssoUrl: entryPoint, certB64s: [idp.certB64] }) },
+    spMetadata: { entityID }, wantAssertionsSigned: true, authnRequestsSigned: false, mapping: attributeMapping("generic") };
+  await database.prepare(`INSERT INTO ssoProvider(id,issuer,samlConfig,userId,providerId,domain,domainVerified)
+    VALUES('staff-idp',?,?,'admin-1','staff-idp','example.test',1)`).bind(entityID,JSON.stringify(config)).run();
+  await database.prepare(`INSERT INTO nathan_saml_connections(provider_id,domain,idp_entity_id,sso_url,certificates,attribute_preset,enabled,created_by)
+    VALUES('staff-idp','example.test',?,?,'[]','generic',1,'admin-1')`).bind(issuer,entryPoint).run();
+  const email = "admin@example.test";
+  for (const [intent, expected] of [[{}, "/"], [{ setup: "passkey" }, "/security?setup=admin#passkeys-section"]]) {
+    const start = await install.dispatchFetch(origin + "/sign-in/sso/start", { method: "POST",
+      headers: { ...assertion(ownerJwt), Origin: origin, "Content-Type": "application/json" },
+      body: JSON.stringify({ email, ...intent }) });
+    assert.equal(start.status, 200);
+    const { url } = await start.json();
+    const form = new URLSearchParams({ RelayState: new URL(url).searchParams.get("RelayState"),
+      SAMLResponse: samlResponse({ issuer, audience: entityID, acs, inResponseTo: authnRequestId(url), email,
+        privateKey: idp.privateKey, certB64: idp.certB64 }) });
+    const callback = await install.dispatchFetch(acs, { method: "POST", redirect: "manual", body: form.toString(),
+      headers: { ...assertion(ownerJwt), "Content-Type": "application/x-www-form-urlencoded" } });
+    assert.equal(callback.status, 302);
+    assert.equal(new URL(callback.headers.get("Location"), origin).href, origin + expected);
+    assert.ok(callback.headers.getSetCookie().some(cookie => cookie.includes("session_token=")));
+  }
 });
 
 test("the management choice also admits a passkey-only administrator and honors a stricter enrollment policy", async () => {

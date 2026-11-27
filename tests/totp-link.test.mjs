@@ -68,8 +68,9 @@ test("the security island takes the link's href only from authenticatorLink()", 
   const link = /<LinkButton id="totp-open"[^>]*>/.exec(panel);
   assert.ok(link, "the link is a Kumo LinkButton");
   assert.match(link[0], /href=\{openHref \?\? undefined\}/, "its href is the guard's result, nothing else");
-  assert.equal((panel.match(/href=/g) || []).length, 2, "only the guarded link and the static user management link set an href");
-  assert.match(panel, /<Link href="\/studio\/users">/);
+  assert.equal((panel.match(/href=\{/g) || []).length, 1, "only the guarded authenticator link has a dynamic href");
+  assert.match(panel, /href="\/studio\/users"/);
+  assert.match(panel, /href="\/studio"/);
   // The guard itself reaches the island bundle unchanged.
   const manifest = JSON.parse(readFileSync("src/ui/generated/ui-manifest.json", "utf8"));
   const island = readFileSync(".nathan/ui-assets" + manifest.islands.security.src, "utf8");

@@ -3,6 +3,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import "./fixtures/ts-modules.mjs";
+import { d1 } from "./fixtures/d1-sqlite.mjs";
 import { installStatements, readStage, receiptId } from "../deploy/classcheck-id/bootstrap.mjs";
 
 function database(lastMigration = "9999") {
@@ -25,9 +27,9 @@ function apply(db, batch) {
 }
 
 test("upgrading pins a unique original owner invitation and leaves replacement histories for operator review", () => {
-  const migration = readFileSync(new URL("../migrations/0027_management_totp.sql", import.meta.url), "utf8");
+  const migration = readFileSync(new URL("../migrations/0030_management_totp.sql", import.meta.url), "utf8");
   for (const reissued of [false, true]) {
-    const db = database("0026");
+    const db = database("0029");
     db.exec(`INSERT INTO nathan_bootstrap_status(id,cloudflare_user_id,admin_email,state)
       VALUES ('primary','installer','owner@example.test','pending');
       INSERT INTO nathan_invitations(id,email,created_by,expires_at)
@@ -41,8 +43,8 @@ test("upgrading pins a unique original owner invitation and leaves replacement h
   }
 });
 
-test("upgrading keeps enrolled authenticators and lets unfinished duplicate enrollments start again", () => {
-  const db = database("0026");
+test("upgrading keeps enrolled authenticators and lets unfinished duplicate enrollments start again", async () => {
+  const db = database("0029");
   const user = db.prepare("INSERT INTO user(id,name,email,emailVerified,twoFactorEnabled,createdAt,updatedAt) VALUES (?1,'',?1||'@example.test',1,?2,0,0)");
   const factor = db.prepare("INSERT INTO twoFactor(id,userId,secret,backupCodes,verified) VALUES (?1,?2,'fixture','fixture',?3)");
   for (const [id, enabled, factors] of [
@@ -52,15 +54,30 @@ test("upgrading keeps enrolled authenticators and lets unfinished duplicate enro
     user.run(id, enabled);
     factors.forEach((verified, i) => factor.run(id + i, id, verified));
   }
-  db.exec(readFileSync(new URL("../migrations/0027_management_totp.sql", import.meta.url), "utf8"));
+  db.exec(`INSERT INTO nathan_admin_totp_assurance(factor_id,code_tag,user_id,session_id)
+    VALUES ('enrolled0',X'01','enrolled','existing-session')`);
+  db.exec(readFileSync(new URL("../migrations/0030_management_totp.sql", import.meta.url), "utf8"));
   const states = id => db.prepare("SELECT verified FROM twoFactor WHERE userId=? ORDER BY id").all(id).map(f => f.verified);
   assert.deepEqual(states("legacy"), [1]);
   assert.deepEqual(states("mixed"), [1]);
   assert.deepEqual(states("pending"), [null]);
   assert.deepEqual(states("restart"), []);
   assert.deepEqual(states("enrolled"), [1]);
+  assert.equal(db.prepare("SELECT invalidated FROM nathan_admin_totp_assurance WHERE session_id='existing-session'").get().invalidated, 0);
   assert.deepEqual(states("ambiguous"), [null,null]);
   assert.deepEqual(states("inconsistent"), [0,0]);
+  const { bootstrapStatus, mayEnrollManagementFactor } = await import("../src/auth/bootstrap.ts");
+  const { managementEmail } = await import("../src/auth/env.ts");
+  db.exec("INSERT INTO nathan_bootstrap_status(id,cloudflare_user_id,admin_email,state) VALUES ('primary','installer','operator@example.test','complete')");
+  const env = { DB: d1(db), [managementEmail]: "operator@example.test", NATHAN_MANAGEMENT_AUTHENTICATORS: "passkey-or-totp" };
+  for (const id of ["ambiguous", "inconsistent"]) {
+    const status = await bootstrapStatus(env, id);
+    assert.equal(status.requiresFactorRecovery, true);
+    assert.equal(status.ready, false);
+    for (const path of ["/passkey/generate-register-options", "/passkey/verify-registration", "/two-factor/enable"])
+      assert.equal(await mayEnrollManagementFactor(env, id, "session", path), false, path);
+  }
+  assert.equal((await bootstrapStatus(env, "pending")).pendingLegacyTotp, true);
   factor.run("new", "restart", 0);
   assert.throws(() => factor.run("duplicate", "restart", 0));
   assert.throws(() => db.exec("UPDATE twoFactor SET verified=0,secret='replacement' WHERE id='legacy0'"));

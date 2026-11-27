@@ -33,9 +33,11 @@ BEGIN
 END;
 CREATE TRIGGER nathan_totp_protect_enrollment BEFORE UPDATE OF verified,secret,userId ON "twoFactor"
 BEGIN
+  -- A pending provider write may not replace a secret that was confirmed in the meantime.
+  -- A verification-only reset invalidates the previous sessions' evidence.
   SELECT RAISE(ABORT,'Authenticator enrollment changed')
-    WHERE OLD.userId<>NEW.userId OR (OLD.verified=1 AND NEW.verified IS NOT 1);
-  DELETE FROM nathan_management_totp WHERE factor_id=OLD.id AND NEW.secret<>OLD.secret;
+    WHERE OLD.userId<>NEW.userId OR (OLD.verified=1 AND NEW.verified IS NOT 1 AND NEW.secret<>OLD.secret);
+  DELETE FROM nathan_management_totp WHERE factor_id=OLD.id AND (NEW.secret<>OLD.secret OR NEW.verified IS NOT 1);
 END;
 
 ALTER TABLE nathan_admin_grants ADD COLUMN grant_generation INTEGER NOT NULL DEFAULT 0;

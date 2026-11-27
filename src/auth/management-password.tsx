@@ -11,24 +11,56 @@ import { sendAuthEmail } from "./email";
 import { managementEmail, type AuthEnv } from "./env";
 import type { createAuth } from "./instance";
 import { managementAllowsTotp } from "./security-policy";
+import { activeManagementUser, epochSeconds } from "./management-storage";
 
 export const managementPasswordPath = "/security/management-password";
+type PasswordGrant = {id:string;email:string;generation:number};
+const currentPasswordGrant = `FROM nathan_admin_grants g JOIN user u ON u.id=g.user_id
+  JOIN nathan_bootstrap_status b ON b.id='primary' AND b.state='complete' AND b.admin_user_id<>u.id
+  WHERE g.enabled=1 AND g.email=?1 AND lower(u.email)=g.email AND ${activeManagementUser}`;
 
 // ClassCheck users may have signed in exclusively by email before being granted Studio access.
 // Only a live, explicit additional administrator on their own Access host can use this flow.
 export async function passwordGrant(env: AuthEnv) {
   if (!managementAllowsTotp(env) || env.ENABLE_PASSWORD !== "true") return null;
-  return env.DB.prepare(`SELECT u.id,u.email,g.grant_generation AS generation FROM nathan_admin_grants g JOIN "user" u ON u.id=g.user_id
-    JOIN nathan_bootstrap_status b ON b.id='primary' AND b.state='complete' AND b.admin_user_id<>u.id
-    WHERE g.enabled=1 AND g.email=? AND lower(u.email)=g.email AND u.role='admin' AND u.emailVerified=1`)
-    .bind(env[managementEmail]).first<{id:string;email:string;generation:number}>();
+  return env.DB.prepare(`SELECT u.id,u.email,g.grant_generation AS generation ${currentPasswordGrant}`)
+    .bind(env[managementEmail]).first<PasswordGrant>();
 }
 
 async function purpose(env: AuthEnv, grant: {id: string; generation: number}) {
   return "management-password:v1:" + await sha256(JSON.stringify([env.NATHAN_ISSUER, env[managementEmail], grant.id, grant.generation]));
 }
 
-/** Better Auth owns token generation, expiry, consumption and password hashing. Bind its
+async function savePassword(env: AuthEnv, auth: ReturnType<typeof createAuth>, grant: PasswordGrant, token: string, password: string) {
+  const identifier = "reset-password:" + token;
+  const context = await auth.$context;
+  const verification = await context.internalAdapter.findVerificationValue(identifier);
+  if (verification?.value !== grant.id || verification.expiresAt.getTime() <= Date.now()) return false;
+  const hash = await context.password.hash(password);
+  const db = env.DB, receipt = crypto.randomUUID(), now = new Date().toISOString();
+  const committed = "EXISTS(SELECT 1 FROM nathan_security_audit WHERE id=?)";
+  const credential = "userId=? AND accountId=? AND providerId='credential'";
+  // The receipt is created only while this exact grant and unspent token are live.
+  // D1 rolls back the receipt along with the token, sessions, and credential on failure.
+  const [saved] = await db.batch([
+    db.prepare(`INSERT INTO nathan_security_audit(id,actor,action,target,outcome)
+      SELECT ?2,u.id,'management_password_set',u.id,'succeeded' ${currentPasswordGrant}
+        AND u.id=?3 AND g.grant_generation=?4 AND EXISTS(SELECT 1 FROM verification v
+          WHERE v.id=?5 AND v.identifier=?6 AND v.value=u.id AND ${epochSeconds("v.expiresAt")}>unixepoch())`)
+      .bind(grant.email, receipt, grant.id, grant.generation, verification.id, identifier),
+    db.prepare(`DELETE FROM verification WHERE identifier=? AND value=? AND ${committed}`).bind(identifier, grant.id, receipt),
+    db.prepare(`DELETE FROM session WHERE userId=? AND ${committed}`).bind(grant.id, receipt),
+    db.prepare(`DELETE FROM nathan_admin_assurance WHERE user_id=? AND ${committed}`).bind(grant.id, receipt),
+    db.prepare(`UPDATE account SET password=?,updatedAt=? WHERE ${credential} AND ${committed}`)
+      .bind(hash, now, grant.id, grant.id, receipt),
+    db.prepare(`INSERT INTO account(id,accountId,providerId,userId,password,createdAt,updatedAt)
+      SELECT ?,?,'credential',?,?,?,? WHERE ${committed} AND NOT EXISTS(SELECT 1 FROM account WHERE ${credential})`)
+      .bind(crypto.randomUUID(), grant.id, grant.id, hash, now, now, receipt, grant.id, grant.id)
+  ]);
+  return saved.meta.changes === 1;
+}
+
+/** Better Auth issues the token and owns password hashing. Bind its
  * mailed token to this grant holder; the URL fragment stays out of HTTP requests. */
 export async function mailManagementPassword(env: AuthEnv, user: {id:string;email:string}, token: string) {
   const grant = await passwordGrant(env);
@@ -84,7 +116,11 @@ export async function managementPassword(request: Request, env: AuthEnv, auth: R
   let token: string;
   try { token = await openConfigSecret(await purpose(env,grant),form.get("proof"),env.NATHAN_CONFIG_KEY); }
   catch { return page(grant.email,"Request a new setup link for this account.",400); }
-  const saved = await provider("reset-password",{token,newPassword:password});
-  if (!saved.ok) return page(grant.email,"Request a fresh setup link and try again.",saved.status);
+  try {
+    if (!await savePassword(env,auth,grant,token,password))
+      return page(grant.email,"Request a fresh setup link and try again.",400);
+  } catch {
+    return page(grant.email,"Could not save your password. Try again.",500);
+  }
   return Response.redirect(env.NATHAN_ISSUER+"/sign-in",303);
 }
