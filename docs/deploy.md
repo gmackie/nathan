@@ -81,6 +81,16 @@ The IdP must have its secrets set before its public custom domain is enabled. Re
 
 Create an ordinary verified account through the configured IdP, then promote it with `node scripts/nathan.mjs admin promote --apply` using a scoped Cloudflare token and explicit confirmation. This reads and updates a verified user record in D1. The identity studio checks **both** verified email + admin role + `NATHAN_ADMIN_EMAILS` allowlist. Changing the allowlist alone does not grant admin privileges.
 
+### ForgeGraph installations
+
+Use the configuration for the target stage and specify the identifier written by its deployment seed. For example, to claim the staging installation, run:
+
+```sh
+node scripts/nathan.mjs admin promote nathan.staging.config.json --seed forgegraph:nathan:staging --apply
+```
+
+The command uses the configured Cloudflare account, D1 database and administrator allowlist. Check the email, database name and seed in the confirmation. The database must contain that exact seed and one eligible verified account matching its original owner email. A successful claim records the deployment identity in the security audit log. Running the command again preserves completed enrollment. Finish administrator verification at `/security`.
+
 ## 6. Register clients
 
 Navigate to `https://login.example.com/studio`. Register an HTTPS redirect URI for each OIDC client. The client secret is displayed once and must be stored safely.

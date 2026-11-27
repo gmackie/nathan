@@ -51,5 +51,19 @@ test("CLI owner promotion resumes an interrupted setup and preserves completed e
     await assert.rejects(promoteBootstrapOwner(api, id, "test", email, userId));
     assert.equal(db.prepare("SELECT count(*) AS n FROM user WHERE role='admin'").get().n,0);
     assert.equal(db.prepare("SELECT count(*) AS n FROM nathan_security_audit").get().n,2);
+    // With one verified account again, only the exact ForgeGraph deployment can claim this seed.
+    db.exec("DELETE FROM user WHERE id='duplicate'");
+    db.exec("UPDATE nathan_bootstrap_status SET cloudflare_user_id='forgegraph:nathan:staging', state='pending', admin_user_id=NULL");
+    await assert.rejects(promoteBootstrapOwner(api, id, "test", email, userId));
+    await assert.rejects(promoteBootstrapOwner(api, id, "test", email, userId, "forgegraph:nathan:production"));
+    await assert.rejects(promoteBootstrapOwner(api, id, "test", email, userId, "cli:another-account"));
+    assert.equal(db.prepare("SELECT role FROM user").get().role, "user");
+    assert.equal(db.prepare("SELECT state FROM nathan_bootstrap_status").get().state, "pending");
+    for (let attempt = 0; attempt < 2; attempt++)
+      await promoteBootstrapOwner(api, id, "test", email, userId, "forgegraph:nathan:staging");
+    assert.deepEqual({...db.prepare("SELECT admin_user_id,state FROM nathan_bootstrap_status").get()},
+      {admin_user_id: userId, state: "identity_verified"});
+    assert.equal(db.prepare("SELECT role FROM user").get().role, "admin");
+    assert.equal(db.prepare("SELECT count(*) AS n FROM nathan_security_audit WHERE actor='operator:forgegraph:nathan:staging'").get().n, 1);
   } finally { db.close(); }
 });
