@@ -27,6 +27,6 @@ export async function recordAdminTotp(env: AuthEnv, factor: TotpFactor, sessionI
 export async function recentAdminTotp(env: AuthEnv, userId: string, sessionId: string) {
   return Boolean(await env.DB.prepare(
     "SELECT 1 FROM nathan_admin_totp_assurance a JOIN twoFactor f ON f.id=a.factor_id AND f.userId=a.user_id " +
-    "WHERE a.user_id=? AND a.session_id=? AND f.verified=1 AND a.verified_at BETWEEN unixepoch()-900 AND unixepoch() LIMIT 1"
+    "WHERE a.user_id=? AND a.session_id=? AND f.verified=1 AND a.invalidated=0 AND a.verified_at BETWEEN unixepoch()-900 AND unixepoch() LIMIT 1"
   ).bind(userId, sessionId).first());
 }

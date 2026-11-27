@@ -14,6 +14,7 @@ export interface BootstrapStatus {
   sessionReady?: boolean;
   isAdministrator?: boolean;
   requiresSignIn?: boolean;
+  requiresPasskeyRecovery?: boolean;
   requirements?: { passkey?: boolean; totp?: boolean; recentPasskey?: boolean };
   warning?: string;
 }

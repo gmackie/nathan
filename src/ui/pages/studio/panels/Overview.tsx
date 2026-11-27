@@ -55,7 +55,7 @@ function SecurityPolicy() {
   return (
     <Section title="Authentication and MFA policy" description={<Prose>
       Nathan's effective security posture combines the selected installer profile with any stricter policy configured here. Administrators may
-      increase requirements without redeploying, but weakening a baseline requires a separately reviewed Cloudflare operator change. Federated
+      require a recent passkey after the initial owner and every enabled administrator have enrolled one, but weakening a baseline requires a separately reviewed Cloudflare operator change. Federated
       NIST AAL claims remain unsupported until validated.</Prose>}>
       <Loaded state={policy}>{p => <JsonView value={p} label="Effective policy" />}</Loaded>
       <Row>

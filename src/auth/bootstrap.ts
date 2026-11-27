@@ -11,7 +11,7 @@ type BootstrapRow={
 };
 export type AdminEnrollment={
   configured:boolean;state:string;isInitialAdmin:boolean;
-  passkeys:number;totpVerified:boolean;ready:boolean;
+  passkeys:number;totpVerified:boolean;ready:boolean;requiresPasskeyRecovery:boolean;
   requirements:{passkey:boolean;totp:boolean;recentPasskey:boolean};
   warning:string;
 };
@@ -29,7 +29,7 @@ async function enrollment(env:AuthEnv,userId:string) {
 export async function bootstrapStatus(env:AuthEnv,userId:string):Promise<AdminEnrollment>{
   const b=await row(env);
   if(!b)return {configured:false,state:"missing",isInitialAdmin:false,
-    passkeys:0,totpVerified:false,ready:false,
+    passkeys:0,totpVerified:false,ready:false,requiresPasskeyRecovery:false,
     requirements:{passkey:true,totp:true,recentPasskey:true},
     warning:"Admin bootstrap has not been initialized; use the Cloudflare-authorized wizard or recovery CLI."};
   const methods=await enrollment(env,userId);
@@ -38,7 +38,7 @@ export async function bootstrapStatus(env:AuthEnv,userId:string):Promise<AdminEn
   const ready=business?(methods.passkeys>0 && methods.totpVerified)
     :(methods.passkeys>0 || methods.totpVerified);
   return {configured:true,state:b.state,isInitialAdmin:b.admin_user_id===userId,
-    ...methods,ready,
+    ...methods,ready,requiresPasskeyRecovery:allowsAdminTotp(env) && policy.requireRecentPasskey && methods.passkeys===0,
     requirements:{passkey:business,totp:business,recentPasskey:policy.requireRecentPasskey},
     warning:"Authenticator enrollment is a setup prerequisite, not proof that the current federated login satisfied a NIST AAL or step-up challenge."};
 }
@@ -82,10 +82,11 @@ export async function mayEnrollManagementFactor(env: AuthEnv, userId: string, se
     const replacing = registerKey ? existing.passkeys > 0 : path === "/two-factor/enable" && existing.totpVerified;
     return !replacing || await recentPasskey(env, userId, sessionId);
   }
+  const policy = await effectiveAdminPolicy(env);
+  if (policy.requireRecentPasskey && !existing.passkeys) return false;
   if (!existing.passkeys && !existing.totpVerified)
     return path === "/two-factor/enable" || path === "/passkey/generate-register-options" || path === "/passkey/verify-registration";
   if (existing.passkeys && await recentPasskey(env, userId, sessionId)) return true;
-  const policy = await effectiveAdminPolicy(env);
   return !policy.requireRecentPasskey && existing.totpVerified && await recentAdminTotp(env, userId, sessionId);
 }
 

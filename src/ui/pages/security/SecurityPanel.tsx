@@ -104,6 +104,9 @@ function Status({ id, message }: { id: string; message: Message | null }) {
 
 function adminInstruction(status: BootstrapStatus) {
   if (status.requiresSignIn) return "Sign in with your administrator identity provider, password, or passkey to continue.";
+  if (status.requiresPasskeyRecovery) return status.isInitialAdmin
+    ? "Contact your Cloudflare account operator for initial owner recovery. This installation requires a registered passkey."
+    : "Ask an administrator to revoke your administrator grant. Then enroll a passkey on your Security page and ask them to restore your grant.";
   if (status.sessionReady) return "Your administrator session is verified.";
   if (!status.ready && status.requirements?.totp && !status.totpVerified) return "This installation requires both a passkey and an authenticator app. Set up your authenticator app below.";
   if ((!status.ready && status.requirements?.passkey) || (status.requirements?.recentPasskey && !status.passkeys))
@@ -122,7 +125,7 @@ function AdminSetup({ admin, busy, message, signIn, finishSetup, stepUp, checkSt
     <Section id="admin-setup" title="Administrator setup" icon={ShieldCheck} hidden={!admin}>
       {admin && <p style={S.muted}>{adminInstruction(admin)}</p>}
       <div style={S.actions}>
-        {admin?.requiresSignIn ? <Button variant="primary" disabled={busy} onClick={signIn}>Sign in for Studio</Button> : <>
+        {admin?.requiresSignIn ? <Button variant="primary" disabled={busy} onClick={signIn}>Sign in for Studio</Button> : !admin?.requiresPasskeyRecovery && <>
           {admin?.isInitialAdmin && admin.state !== "complete" && <Button id="admin-finish" variant="primary"
             disabled={busy || !admin.ready} onClick={finishSetup}>Complete initial setup</Button>}
           {admin?.sessionReady ? <LinkButton href="/studio" variant="primary">Open Identity Studio</LinkButton> : <>
@@ -243,6 +246,7 @@ export function SecurityPanel(_props: SecurityPanelProps) {
     try { await work(); } finally { setBusy(false); }
   };
   const disabled = !hydrated || busy;
+  const factorsDisabled = disabled || admin?.requiresPasskeyRecovery || admin?.requiresSignIn;
 
   const signIn = run(async () => {
     try { await api("/sign-out", "POST", {}); location.assign("/sign-in?setup=admin"); }
@@ -329,7 +333,7 @@ export function SecurityPanel(_props: SecurityPanelProps) {
               value={password} onChange={e => setPassword(e.currentTarget.value)} />
           </TextField>
           <div style={S.actions}>
-            <Button id="totp-start" variant="primary" disabled={disabled} onClick={startTotp}>Set up authenticator app</Button>
+            <Button id="totp-start" variant="primary" disabled={factorsDisabled} onClick={startTotp}>Set up authenticator app</Button>
           </div>
         </>}
 
@@ -340,7 +344,7 @@ export function SecurityPanel(_props: SecurityPanelProps) {
             maxLength={6} value={code} onChange={e => setCode(e.currentTarget.value)} />
         </TextField>
         <div style={S.actions}>
-          <Button id="totp-verify" variant="primary" disabled={disabled || !/^[0-9]{6}$/.test(code)} onClick={verify}>Verify code</Button>
+          <Button id="totp-verify" variant="primary" disabled={factorsDisabled || !/^[0-9]{6}$/.test(code)} onClick={verify}>Verify code</Button>
         </div>
         <Status id="totp-status" message={totpMessage} />
       </Section>
@@ -348,11 +352,11 @@ export function SecurityPanel(_props: SecurityPanelProps) {
       <Section id="passkeys-section" title="Passkeys" icon={Fingerprint}>
         <p style={S.muted}>We recommend a passkey for phishing-resistant sign-in. Use your device’s screen lock or a hardware security key.</p>
         <div style={S.actions}>
-          <Button id="passkey-add" variant="primary" icon={icon(Fingerprint)} disabled={disabled}
+          <Button id="passkey-add" variant="primary" icon={icon(Fingerprint)} disabled={factorsDisabled}
             onClick={enrol("", "Passkey")}>Add passkey</Button>
-          <Button id="security-key-add" variant="secondary" icon={icon(Usb)} disabled={disabled}
+          <Button id="security-key-add" variant="secondary" icon={icon(Usb)} disabled={factorsDisabled}
             onClick={enrol("cross-platform", "Security key")}>Add security key (YubiKey)</Button>
-          <Button id="passkey-list" variant="ghost" icon={icon(ListBullets)} disabled={disabled}
+          <Button id="passkey-list" variant="ghost" icon={icon(ListBullets)} disabled={factorsDisabled}
             onClick={list}>List my passkeys</Button>
         </div>
         <Status id="passkeys" message={passkeyMessage} />

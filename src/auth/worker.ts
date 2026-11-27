@@ -344,7 +344,7 @@ async function handle(request: Request, env: AuthEnv, ctx: ExecutionContext): Pr
     try{
       const result=await tightenAdminPolicy(env,body,session!.user.id,session!.session.id);
       return Response.json(result,{headers:{"Cache-Control":"no-store"}});
-    }catch{return reject(409,"Cannot tighten policy until the required authenticators and recent verification are available");}
+    }catch{return reject(409,"Verify the required authenticator first. A passkey-only policy requires the owner and every enabled administrator to have a passkey.");}
   }
 
   if(["/studio/api/admins/grant","/studio/api/admins/revoke"].includes(url.pathname)&&request.method==="POST"){

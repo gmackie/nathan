@@ -201,6 +201,44 @@ test("only opted-in Standard accepts authenticator-app proof and only for its li
   assert.equal(await status(), 403, "removed authenticator");
 });
 
+test("passkey-only tightening and subsequent grants require passkeys for all enabled administrators", async () => {
+  const t = setup();
+  Object.assign(t.env, { NATHAN_SECURITY_PROFILE: "standard", NATHAN_ADMIN_STEPUP_METHOD: "passkey-or-totp" });
+  const grant = () => grantAdmin(t.env, { email: "bob@example.test", confirm: "CONFIRM GRANT ADMIN bob@example.test" }, ADMIN.id);
+  const tighten = () => call(t, "/security-policy/tighten", { method: "POST", session: "admin",
+    body: { setting: "recent-passkey", confirm: "CONFIRM REQUIRE recent-passkey" } });
+  await grant();
+  assert.equal((await tighten()).status, 409);
+  assert.equal(t.db.prepare("SELECT * FROM nathan_security_overrides").get(), undefined);
+  t.run("UPDATE nathan_admin_grants SET enabled=0 WHERE user_id='u-bob'");
+  t.run("UPDATE user SET role='user' WHERE id='u-bob'");
+  assert.equal((await tighten()).status, 200);
+  await assert.rejects(grant(), /required passkey/);
+  assert.equal(t.db.prepare("SELECT enabled FROM nathan_admin_grants WHERE user_id='u-bob'").get().enabled, 0);
+  assert.equal(t.db.prepare("SELECT role FROM user WHERE id='u-bob'").get().role, "user");
+  t.run("INSERT INTO passkey(id,publicKey,userId,credentialID,counter,deviceType,backedUp) VALUES('pk-b','k','u-bob','cred-b',0,'singleDevice',0)");
+  await grant();
+  assert.equal(t.db.prepare("SELECT role FROM user WHERE id='u-bob'").get().role, "admin");
+  assert.throws(() => t.run("DELETE FROM passkey WHERE id='pk-b'"), /last administrator passkey/);
+});
+
+test("reverifying a changed or reset TOTP row cannot restore an earlier session's proof", async () => {
+  const t = setup();
+  Object.assign(t.env, { NATHAN_SECURITY_PROFILE: "standard", NATHAN_ADMIN_STEPUP_METHOD: "passkey-or-totp" });
+  const status = async () => (await call(t, "/clients", { session: "nostep" })).status;
+  const proof = tag => t.run("INSERT INTO nathan_admin_totp_assurance(factor_id,code_tag,user_id,session_id) VALUES('tf1',?,?,'s-nostep')", Buffer.from(tag), ADMIN.id);
+  proof("first");
+  assert.equal(await status(), 200);
+  t.run("UPDATE twoFactor SET secret='replacement' WHERE id='tf1'");
+  assert.equal(await status(), 403);
+  proof("second");
+  assert.equal(await status(), 200);
+  t.run("UPDATE twoFactor SET verified=0 WHERE id='tf1'");
+  t.run("UPDATE twoFactor SET verified=1 WHERE id='tf1'");
+  assert.equal(await status(), 403);
+  assert.throws(() => proof("second"), /UNIQUE constraint/, "the code remains consumed");
+});
+
 test("a stepped-up administrator reads every GET route with the ok envelope", async () => {
   const t = setup();
   const query = { "/rbac": "?app=demo", "/rbac/group": "?id=team", "/scim/connection": "?id=acme", "/scim/outbox": "?id=acme" };
