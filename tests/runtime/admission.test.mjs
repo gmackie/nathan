@@ -360,7 +360,7 @@ test("the sign-in page explains a refused sign-in", async () => {
   // The sign-in behaviour is the SRI-pinned sign-in island; its social sign-in returns here on errors.
   const island = /<script type="module" src="(\/__nathan\/ui\/sign-in-[A-Za-z0-9]+\.js)"/.exec(html)?.[1];
   assert.ok(island, "the sign-in island is loaded");
-  assert.match(await (await mf.dispatchFetch(ORIGIN + island)).text(), /errorCallbackURL:"\/sign-in"/, "social sign-in returns to the sign-in page on errors");
+  assert.match(await (await mf.dispatchFetch(ORIGIN + island)).text(), /errorCallbackURL:\w+\?"\/sign-in\?setup=admin":"\/sign-in"/, "social sign-in returns to the sign-in page on errors");
 });
 
 test("enterprise OIDC SSO: an invitation is claimed only for an address inside the connection's verified domain", async () => {

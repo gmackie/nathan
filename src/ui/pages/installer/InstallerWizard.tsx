@@ -83,7 +83,7 @@ export function InstallerWizard({ initialHostname = "", initialProvider }: Insta
   const [realmApex, setRealmApex] = useState("");
   const [worker, setWorker] = useState("nathan-auth");
   const [adminEmail, setAdminEmail] = useState("");
-  const [profile, setProfile] = useState("business");
+  const [profile, setProfile] = useState("standard");
   const [providerId, setProviderId] = useState(PROVIDERS.some(p => p.id === initialProvider) ? initialProvider! : PROVIDERS[0].id);
   const [fields, setFields] = useState<Record<string, string>>({});
   const [enterprise, setEnterprise] = useState(false);
@@ -280,7 +280,7 @@ export function InstallerWizard({ initialHostname = "", initialProvider }: Insta
             onChange={e => setAdminEmail(e.target.value)}
             description="For secure first-time bootstrap, this must match the email on your Cloudflare OAuth identity." />
           <Select label="Security profile" value={profile} onValueChange={v => setProfile(String(v))} disabled={off}
-            items={[{ value: "business", label: "Business — recommended" }, { value: "standard", label: "Standard — consumer / developer" }]} />
+            items={[{ value: "standard", label: "Standard · passkey or authenticator app" }, { value: "business", label: "Business · passkey and authenticator app" }]} />
         </Section>
 
         <Section title="3. Configure first sign-in">

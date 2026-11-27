@@ -214,7 +214,8 @@ test("the admin policy and admission dialogs say what changes", () => {
 test("/studio stays admin-only in the Worker and the legacy string-built Studio is gone", () => {
   const worker = readFileSync("src/auth/worker.ts", "utf8");
   const route = /if \(url\.pathname === "\/studio" && request\.method === "GET"\) \{([\s\S]*?)\n  \}/.exec(worker)[1];
-  assert.match(route, /if \(!await isAdmin\(session, env\)\) return reject\(403, "Admin session required"\);/);
+  assert.match(route, /if \(!await isAdmin\(session, env\)\) \{/);
+  assert.match(route, /return reject\(403, "Admin session required"\);/);
   assert.match(route, /if \(!await mayAdminister\(env,session!\.user\.id,session!\.session\.id\)\) return Response\.redirect\(issuer\.origin\+"\/security\?setup=admin",302\);/);
   assert.match(route, /return studioPage\(session!\.user\.email\);/);
   assert.match(worker, /import \{ studioPage \} from "\.\.\/ui\/pages\/studio\/StudioPage\.tsx";/);

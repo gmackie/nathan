@@ -19,7 +19,7 @@ export function Admins() {
   return (
     <Panel title="Administrators and recovery" description={<Prose>
       The first administrator is bound to the Cloudflare installer's verified email and can never be revoked from this screen. Additional admins
-      require an existing email-verified Nathan account, explicit approval, enrolled authenticators, and recent passkey reauthentication.</Prose>}>
+      require an existing email-verified Nathan account, explicit approval, enrolled authenticators, and verification under this installation’s security policy. If a shared issuer has switched from passkey-or-TOTP to passkey-only, have the user enroll a passkey before granting access.</Prose>}>
       <Section title="Admin grants">
         <Loaded state={admins}>{(d: any) => (
           <div className="nathan-stack">

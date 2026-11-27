@@ -172,7 +172,7 @@ test("Studio SAML API requires a stepped-up administrator", async () => {
     assert.equal((await studio("/studio/api/saml", undefined, cookie)).status, 403, label + " reads");
     const write = await studio("/studio/api/saml/connections", create, cookie);
     assert.equal(write.status, 403, label + " writes");
-    assert.match((await write.json()).error, /recent passkey/, label);
+    assert.match((await write.json()).error, /recent authenticator verification/, label);
     assert.equal((await studio("/studio/api/saml/preview", { metadataXml }, cookie)).status, 403, label + " previews");
   }
   assert.equal(await db.prepare("SELECT count(*) AS n FROM nathan_saml_connections").first().then(x => x.n), 0, "nothing was created");

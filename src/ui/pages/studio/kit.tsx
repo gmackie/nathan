@@ -186,7 +186,7 @@ export type Outcome =
 
 function recovery(error: ApiError | Error): ReactNode {
   if (!(error instanceof ApiError)) return null;
-  if (error.code === "step_up_required") return <LinkButton href="/security" variant="secondary" size="sm">Verify with your passkey</LinkButton>;
+  if (error.code === "step_up_required") return <LinkButton href="/security?setup=admin" variant="secondary" size="sm">Verify your authenticator</LinkButton>;
   if (error.code === "enrollment_incomplete") return <LinkButton href="/security?setup=admin" variant="secondary" size="sm">Finish admin setup</LinkButton>;
   if (error.code === "unauthenticated") return <LinkButton href="/sign-in" variant="secondary" size="sm">Sign in</LinkButton>;
   return null;

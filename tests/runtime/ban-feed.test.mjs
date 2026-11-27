@@ -53,6 +53,7 @@ test("D1 has the admission, email, app provisioning, change-feed and SCIM trigge
   assert.deepEqual(triggers.filter(t => t.name.startsWith("nathan_")).map(t => t.name + " ON " + t.tbl),
     ["nathan_app_membership_changes ON nathan_app_provisions", "nathan_capture_ending_session ON session", "nathan_claim_email_invitation ON user",
       "nathan_email_delivery_before_insert ON nathan_email_sign_ins", "nathan_erase_app_credentials ON user",
+      "nathan_invalidate_changed_totp ON twoFactor", "nathan_keep_required_admin_passkey ON passkey",
       "nathan_rbac_feed_user_ban ON user", "nathan_rbac_feed_user_delete ON user",
       "nathan_reconcile_app_grants ON nathan_app_provisions", "nathan_retire_app_provision ON nathan_app_provisions",
       "nathan_scim_ban_changed ON user"]);

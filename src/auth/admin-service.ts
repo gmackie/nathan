@@ -1,6 +1,6 @@
 import { resolveAppearance } from "../ui/appearance.ts";
 import { isReverseDomainPrivateUseRedirectUri } from "@better-auth/core/utils/redirect-uri";
-import type { AuthEnv } from "./env";
+import { allowsAdminTotp, type AuthEnv } from "./env.ts";
 
 export type AdminActor = { id:string; email:string; role:"admin"; emailVerified:true };
 export function isAdminUser(user: unknown, env:AuthEnv): user is AdminActor {
@@ -289,18 +289,26 @@ export async function grantAdmin(env:AuthEnv,input:any,actor:string){
   if(id===original?.admin_user_id)throw Error("Initial bootstrap owner already has administrator authority");
   await audit(env,actor,"admin_grant",id,"attempted");
   try {
-    await env.DB.batch([
-      env.DB.prepare('UPDATE "user" SET "role"=? WHERE "id"=? AND "emailVerified"=1')
-        .bind("admin",id),
+    // Check policy and insert the grant atomically with respect to tightening or factor removal.
+    const sharedPolicy = Number(allowsAdminTotp(env));
+    const [grant] = await env.DB.batch([
       env.DB.prepare(
-        "INSERT INTO nathan_admin_grants(user_id,email,granted_by,enabled) VALUES(?,?,?,1) "+
-        "ON CONFLICT(user_id) DO UPDATE SET email=excluded.email,granted_by=excluded.granted_by,"+
-        "enabled=1,updated_at=unixepoch()"
-      ).bind(id,email,actor)
+        "INSERT INTO nathan_admin_grants(user_id,email,granted_by,enabled) "+
+        "SELECT id,lower(email),?,1 FROM user WHERE id=? AND lower(email)=? AND emailVerified=1 AND COALESCE(banned,0)=0 "+
+        "AND (?=0 OR NOT EXISTS(SELECT 1 FROM nathan_security_overrides WHERE id='primary' AND require_recent_admin_passkey=1) "+
+        "OR EXISTS(SELECT 1 FROM passkey WHERE userId=user.id)) "+
+        "ON CONFLICT(user_id) DO UPDATE SET email=excluded.email,granted_by=excluded.granted_by,enabled=1,updated_at=unixepoch() "+
+        "RETURNING user_id"
+      ).bind(actor,id,email,sharedPolicy),
+      env.DB.prepare("UPDATE user SET role='admin' WHERE id=? AND changes()=1").bind(id),
+      // A deletion started as an ordinary user must see last-key protection once promotion commits.
+      env.DB.prepare("UPDATE nathan_security_overrides SET protect_last_passkey=1 WHERE id='primary' " +
+        "AND ?=1 AND changes()=1 AND require_recent_admin_passkey=1 AND protect_last_passkey=0").bind(sharedPolicy)
     ]);
+    if (!grant.results.length) throw Error("Check the verified user and their required passkey enrollment");
     await audit(env,actor,"admin_grant",id,"succeeded");
     return {id,email,enabled:true,
-      note:"Administrator added. Their current session must satisfy enrollment and recent passkey step-up before access."};
+      note:"Administrator added. Their session must meet the installation's enrollment and verification requirements."};
   }catch(e){await audit(env,actor,"admin_grant",id,"failed");throw e;}
 }
 export async function revokeAdminGrant(env:AuthEnv,input:any,actor:string){

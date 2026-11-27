@@ -33,9 +33,12 @@ function init(root: HTMLElement) {
   // An app's /oauth2/authorize sent the browser here with a signed query; every sign-in request
   // carries it so Better Auth resumes that authorization (back to the app) instead of landing on "/".
   const oauthQuery = signedOAuthQuery(location.search);
+  const params = new URLSearchParams(location.search);
+  const studio = !params.has("sig") && params.get("setup") === "admin";
+  const destination = studio ? "/studio" : "/";
   const withOAuth = (b: Json): Json => (oauthQuery ? { ...b, oauth_query: oauthQuery } : b);
   // After a sign-in, follow the resumed authorization when Better Auth returns one.
-  const land = (d: Json | null | undefined) => location.assign(d && typeof d.url === "string" && d.url ? d.url : "/");
+  const land = (d: Json | null | undefined) => location.assign(d && typeof d.url === "string" && d.url ? d.url : destination);
   const unwrap = (x: Json) => (x && x.data) || x;
 
   async function request(path: string, payload: Json): Promise<Json> {
@@ -63,7 +66,7 @@ function init(root: HTMLElement) {
   for (const button of Array.from(root.querySelectorAll<HTMLButtonElement>("button[data-provider]"))) {
     button.addEventListener("click", () => {
       (async () => {
-        const d = await request("/sign-in/social", withOAuth({ provider: button.dataset.provider, callbackURL: "/", errorCallbackURL: "/sign-in" }));
+        const d = await request("/sign-in/social", withOAuth({ provider: button.dataset.provider, callbackURL: destination, errorCallbackURL: studio ? "/sign-in?setup=admin" : "/sign-in" }));
         if (!d.url) throw Error("No OAuth redirect URL");
         location.assign(d.url);
       })().catch(fail);
@@ -90,7 +93,7 @@ function init(root: HTMLElement) {
     // Nathan routes the email domain to its enabled SAML or verified OIDC connection.
     const res = await fetch("/sign-in/sso/start", {
       method: "POST", headers: { "Content-Type": "application/json" }, credentials: "same-origin",
-      body: JSON.stringify(withOAuth({ email: field(form, "email") }))
+      body: JSON.stringify(withOAuth({ email: field(form, "email"), studio }))
     });
     const d = unwrap(await res.json().catch(() => ({})) as Json);
     if (!res.ok) throw Error(d.error || d.message || "SSO provider unavailable");

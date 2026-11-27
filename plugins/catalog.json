@@ -111,6 +111,32 @@
       "securityReviewed": false
     },
     {
+      "id": "email-otp",
+      "name": "Email sign-in code (passwordless)",
+      "tier": "verified",
+      "packageName": "better-auth/plugins",
+      "activation": "compiled",
+      "installed": true,
+      "compatibleWithWorkers": true,
+      "securityReviewed": false,
+      "config": {
+        "flag": "ENABLE_EMAIL_OTP",
+        "default": "false",
+        "requires": [
+          "RESEND_API_KEY",
+          "EMAIL_FROM"
+        ],
+        "routes": [
+          "/api/auth/email-otp/send-verification-otp",
+          "/api/auth/sign-in/email-otp"
+        ],
+        "migrations": [
+          "0019_email_otp.sql"
+        ],
+        "docs": "docs/providers.md#passwordless-email-sign-in-email-code"
+      }
+    },
+    {
       "id": "captcha",
       "name": "CAPTCHA",
       "tier": "verified",

@@ -49,6 +49,8 @@ export function creationMethod(ctx) {
   if (path === "/sign-up/email") return "password";
   if (path === "/callback/:id" || path === "/oauth2/callback/:id") return "social:" + id("id");
   if (path === "/sign-in/social") return "social:id-token";
+  // NATH-49: the emailed code proved the address (Better Auth creates the account emailVerified).
+  if (path === "/sign-in/email-otp") return "email-otp";
   if (path === "/sso/saml2/sp/acs/:providerId") return "saml:" + id("providerId");
   if (path.startsWith("/sso/")) return "enterprise-sso:" + id("providerId");
   return "other";
@@ -139,9 +141,11 @@ const PENDING = "SELECT email, method FROM nathan_admission_pending WHERE user_i
  * provisional password sign-up, the admission decision now that the address is proven:
  * `{ pending: true, admitted: true, via }` (the open invitation is claimed for this account, or the
  * installation is self-service, or it is the installer's first administrator), else
- * `{ pending: true, admitted: false }` and the caller must refuse the verification.
+ * `{ pending: true, admitted: false }` and the caller must refuse the verification. `method` names
+ * what proved the address when it is not the sign-up's own verification link (NATH-49: "email-otp").
  */
-export async function admitOnVerification(db, env, { userId, email }) {
+/** @param {any} db @param {any} env @param {{userId: any, email: any, method?: string}} input */
+export async function admitOnVerification(db, env, { userId, email, method }) {
   const address = normalizeEmail(email);
   const pending = await db.prepare(PENDING).bind(userId, address ?? "").first();
   if (!pending) return { pending: false };
@@ -150,7 +154,8 @@ export async function admitOnVerification(db, env, { userId, email }) {
   if (await isBootstrapAdmission(db, env, address, true)) decision = { pending: true, admitted: true, via: "bootstrap" };
   else if (await admissionMode(db) === "self-service") decision = { pending: true, admitted: true, via: "self-service" };
   else {
-    const invitation = await claimInvitation(db, address, pending.method, userId);
+    // The invitation records the method that proved the address (an email code), else the sign-up's.
+    const invitation = await claimInvitation(db, address, method ?? pending.method, userId);
     decision = invitation ? { pending: true, admitted: true, via: "invitation", invitationId: invitation } : { pending: true, admitted: false };
   }
   if (decision.admitted) await db.prepare("DELETE FROM nathan_admission_pending WHERE email=?").bind(pending.email).run();
